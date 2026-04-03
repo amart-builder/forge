@@ -90,17 +90,21 @@ openclaw cron add \
    - Goal: every draft sounds written by the user, not an AI
    - Exception: skip humanizing if the draft is 1-2 sentences (too short to have patterns)
 
-   Then POST to Forge:
-   curl -X POST http://localhost:3200/api/emails/triage -H 'Content-Type: application/json' -d '{
-     \"thread_id\": \"<thread_id>\",
-     \"sender_name\": \"<name>\",
-     \"sender_email\": \"<email>\",
-     \"subject\": \"<subject>\",
-     \"summary\": \"<your summary of why this matters>\",
-     \"context\": \"<relationship context from CRM>\",
-     \"recommended_action\": \"reply|archive|follow_up|delegate|flag\",
-     \"draft_response\": \"<humanized draft response>\",
-     \"priority\": 1-3
+   Collect all Tier 2 emails, then POST them as a batch to Forge (the endpoint expects an array):
+   curl -X POST http://localhost:3200/api/cron/email-triage -H 'Content-Type: application/json' -d '{
+     \"emails\": [
+       {
+         \"sender_name\": \"<name>\",
+         \"sender_email\": \"<email>\",
+         \"subject\": \"<subject>\",
+         \"summary\": \"<your summary of why this matters>\",
+         \"context\": \"<relationship context from CRM>\",
+         \"recommended_action\": \"reply|archive|follow_up|delegate|flag\",
+         \"draft_response\": \"<humanized draft response>\",
+         \"priority\": 1-3
+       }
+     ],
+     \"summary\": \"Processed X emails: Y need attention, Z archived, W auto-archived.\"
    }'
 
 4. For Tier 0, archive directly: gog gmail archive <id>
@@ -243,7 +247,7 @@ The user can also do this directly in the CRM tab by clicking on a contact and c
    - The draft should feel natural and human — not a form letter
 4. Post the draft as an email triage item in Forge:
    ```bash
-   curl -X POST http://localhost:3200/api/emails/triage \
+   curl -X POST http://localhost:3200/api/cron/email-triage \
      -H 'Content-Type: application/json' \
      -d '{
        "sender_name": "<contact name>",
@@ -333,7 +337,7 @@ Default to **Convex** if the user isn't sure or doesn't want to decide. It's the
 - `GET /api/emails` — List email items (query params: status, priority)
 - `PATCH /api/emails/:id` — Update email item
 - `POST /api/emails/:id/send` — Send draft response
-- `POST /api/emails/triage` — Push new triage items (for cron)
+- `POST /api/cron/email-triage` — Push new triage items (for cron)
 - `GET /api/email-actions` — List action log
 
 ### Contacts
