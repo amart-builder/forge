@@ -8,6 +8,13 @@ const http = httpRouter();
 // Convex Auth routes (sign-in, sign-up, sign-out, etc.)
 auth.addHttpRoutes(http);
 
+// Convert string priority to numeric
+function priorityToNumber(p: unknown): number {
+  if (typeof p === "number") return p;
+  const map: Record<string, number> = { high: 1, medium: 2, low: 3, flag: 1, reply: 1, follow_up: 2, archive: 3, review: 2 };
+  return map[String(p).toLowerCase()] ?? 2;
+}
+
 // Helper to check bearer token auth
 function checkAuth(req: Request): boolean {
   const authHeader = req.headers.get("Authorization");
@@ -44,7 +51,7 @@ http.route({
         context: email.context ?? undefined,
         recommendedAction: email.recommended_action ?? "review",
         draftResponse: email.draft_response ?? undefined,
-        priority: email.priority ?? 2,
+        priority: priorityToNumber(email.priority),
         createdAt: now,
       });
 
