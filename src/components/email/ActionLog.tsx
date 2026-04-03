@@ -1,13 +1,14 @@
 'use client';
 
 import { useState } from 'react';
+import { Id } from '../../../convex/_generated/dataModel';
 
 export interface EmailAction {
-  id: string;
-  email_item_id: string | null;
-  action_type: string;
-  description: string;
-  created_at: string;
+  _id: Id<'emailActions'>;
+  emailItemId: Id<'emailItems'>;
+  actionType: string;
+  description?: string;
+  createdAt: number;
 }
 
 interface ActionLogProps {
@@ -22,8 +23,8 @@ const ACTION_TYPE_BADGES: Record<string, { label: string; className: string }> =
   dismiss: { label: 'Dismissed', className: 'bg-muted text-muted-foreground' },
 };
 
-function formatTimestamp(dateStr: string): string {
-  const date = new Date(dateStr);
+function formatTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
   return date.toLocaleString(undefined, {
     month: 'short',
     day: 'numeric',
@@ -36,8 +37,8 @@ export default function ActionLog({ actions }: ActionLogProps) {
   const [expanded, setExpanded] = useState(false);
   const [filter, setFilter] = useState<string | null>(null);
 
-  const actionTypes = Array.from(new Set(actions.map((a) => a.action_type)));
-  const filtered = filter ? actions.filter((a) => a.action_type === filter) : actions;
+  const actionTypes = Array.from(new Set(actions.map((a) => a.actionType)));
+  const filtered = filter ? actions.filter((a) => a.actionType === filter) : actions;
 
   return (
     <div className="bg-muted rounded-xl border border-border overflow-hidden transition-colors duration-200">
@@ -91,13 +92,13 @@ export default function ActionLog({ actions }: ActionLogProps) {
           ) : (
             <div className="space-y-2">
               {filtered.map((action) => {
-                const badge = ACTION_TYPE_BADGES[action.action_type] ?? {
-                  label: action.action_type,
+                const badge = ACTION_TYPE_BADGES[action.actionType] ?? {
+                  label: action.actionType,
                   className: 'bg-muted text-muted-foreground',
                 };
                 return (
                   <div
-                    key={action.id}
+                    key={action._id}
                     className="flex items-start gap-3 bg-card rounded-lg p-3 border border-border transition-colors duration-200"
                   >
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium shrink-0 ${badge.className}`}>
@@ -105,7 +106,7 @@ export default function ActionLog({ actions }: ActionLogProps) {
                     </span>
                     <p className="text-sm text-foreground flex-1">{action.description}</p>
                     <span className="text-xs text-muted-foreground shrink-0">
-                      {formatTimestamp(action.created_at)}
+                      {formatTimestamp(action.createdAt)}
                     </span>
                   </div>
                 );

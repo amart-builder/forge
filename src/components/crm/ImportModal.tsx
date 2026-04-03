@@ -1,17 +1,54 @@
 'use client';
 
 import { useState } from 'react';
+import { useMutation } from 'convex/react';
+import { api } from '../../../convex/_generated/api';
 
 interface ImportModalProps {
   onClose: () => void;
-  onImported: () => void;
 }
 
-export default function ImportModal({ onClose, onImported }: ImportModalProps) {
+function parseCSV(text: string): { name: string; email?: string; phone?: string; company?: string; role?: string; location?: string }[] {
+  const lines = text.trim().split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return [];
+
+  const headers = lines[0].split(',').map((h) => h.trim().toLowerCase());
+  const nameIdx = headers.indexOf('name');
+  if (nameIdx === -1) return [];
+
+  const emailIdx = headers.indexOf('email');
+  const phoneIdx = headers.indexOf('phone');
+  const companyIdx = headers.indexOf('company');
+  const roleIdx = headers.indexOf('role');
+  const locationIdx = headers.indexOf('location');
+
+  const contacts: { name: string; email?: string; phone?: string; company?: string; role?: string; location?: string }[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',').map((c) => c.trim());
+    const name = cols[nameIdx];
+    if (!name) continue;
+
+    contacts.push({
+      name,
+      email: emailIdx >= 0 ? cols[emailIdx] || undefined : undefined,
+      phone: phoneIdx >= 0 ? cols[phoneIdx] || undefined : undefined,
+      company: companyIdx >= 0 ? cols[companyIdx] || undefined : undefined,
+      role: roleIdx >= 0 ? cols[roleIdx] || undefined : undefined,
+      location: locationIdx >= 0 ? cols[locationIdx] || undefined : undefined,
+    });
+  }
+
+  return contacts;
+}
+
+export default function ImportModal({ onClose }: ImportModalProps) {
   const [csv, setCsv] = useState('');
   const [importing, setImporting] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; imported: number } | null>(null);
+  const [result, setResult] = useState<{ imported: number } | null>(null);
   const [error, setError] = useState('');
+
+  const importCSV = useMutation(api.contacts.importCSV);
 
   async function handleImport() {
     if (!csv.trim()) return;
@@ -20,22 +57,17 @@ export default function ImportModal({ onClose, onImported }: ImportModalProps) {
     setResult(null);
 
     try {
-      const res = await fetch('/api/contacts/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csv }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || 'Import failed');
-      } else {
-        setResult(data);
-        onImported();
+      const contacts = parseCSV(csv);
+      if (contacts.length === 0) {
+        setError('No valid contacts found. Make sure the CSV has a "name" column header.');
+        setImporting(false);
+        return;
       }
+
+      const data = await importCSV({ contacts });
+      setResult(data);
     } catch {
-      setError('Network error');
+      setError('Import failed');
     } finally {
       setImporting(false);
     }

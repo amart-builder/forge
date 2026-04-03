@@ -1,24 +1,26 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useMutation } from 'convex/react';
+import { api } from '../../../convex/_generated/api';
 
 interface ColumnData {
-  id: string;
+  _id: string;
   name: string;
   position: number;
 }
 
 interface TaskData {
-  id: string;
-  column_id: string;
+  _id: string;
+  columnId: string;
   title: string;
   description: string;
   priority: 'low' | 'medium' | 'high';
-  due_date: string | null;
-  tags: string;
+  dueDate?: string;
+  tags: string[];
   position: number;
-  created_at: string;
-  updated_at: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 interface TaskDetailProps {
@@ -26,21 +28,11 @@ interface TaskDetailProps {
   task: TaskData;
   columns: ColumnData[];
   onClose: () => void;
-  onUpdated: (task: TaskData) => void;
   onDeleted: (id: string) => void;
 }
 
-function parseTags(raw: string): string[] {
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function formatTimestamp(iso: string): string {
-  return new Date(iso).toLocaleString('en-US', {
+function formatTimestamp(epoch: number): string {
+  return new Date(epoch).toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -54,27 +46,29 @@ export default function TaskDetail({
   task,
   columns,
   onClose,
-  onUpdated,
   onDeleted,
 }: TaskDetailProps) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? '');
   const [priority, setPriority] = useState(task.priority);
-  const [dueDate, setDueDate] = useState(task.due_date ?? '');
-  const [tagsStr, setTagsStr] = useState(parseTags(task.tags).join(', '));
-  const [columnId, setColumnId] = useState(task.column_id);
+  const [dueDate, setDueDate] = useState(task.dueDate ?? '');
+  const [tagsStr, setTagsStr] = useState(task.tags.join(', '));
+  const [columnId, setColumnId] = useState(task.columnId);
   const [saving, setSaving] = useState(false);
+
+  const updateTask = useMutation(api.tasks.update);
+  const removeTask = useMutation(api.tasks.remove);
 
   const backdropRef = useRef<HTMLDivElement>(null);
 
-  // Sync state when task prop changes
+  // Sync state when task prop changes (reactive from useQuery)
   useEffect(() => {
     setTitle(task.title);
     setDescription(task.description ?? '');
     setPriority(task.priority);
-    setDueDate(task.due_date ?? '');
-    setTagsStr(parseTags(task.tags).join(', '));
-    setColumnId(task.column_id);
+    setDueDate(task.dueDate ?? '');
+    setTagsStr(task.tags.join(', '));
+    setColumnId(task.columnId);
   }, [task]);
 
   function handleBackdropClick(e: React.MouseEvent) {
@@ -91,24 +85,17 @@ export default function TaskDetail({
         .map((s) => s.trim())
         .filter(Boolean);
 
-      const res = await fetch(`/api/tasks/${taskId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title,
-          description,
-          priority,
-          due_date: dueDate || null,
-          tags,
-          column_id: columnId,
-        }),
+      await updateTask({
+        id: taskId as any,
+        title,
+        description,
+        priority,
+        dueDate: dueDate || null,
+        tags,
+        columnId: columnId as any,
       });
 
-      if (res.ok) {
-        const updated = await res.json();
-        onUpdated(updated);
-        onClose();
-      }
+      onClose();
     } catch (err) {
       console.error('Failed to save task:', err);
     } finally {
@@ -120,10 +107,8 @@ export default function TaskDetail({
     if (!confirm('Delete this task? This cannot be undone.')) return;
 
     try {
-      const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
-      if (res.ok) {
-        onDeleted(taskId);
-      }
+      await removeTask({ id: taskId as any });
+      onDeleted(taskId);
     } catch (err) {
       console.error('Failed to delete task:', err);
     }
@@ -202,7 +187,7 @@ export default function TaskDetail({
                 className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue bg-background text-foreground"
               >
                 {columns.map((col) => (
-                  <option key={col.id} value={col.id}>
+                  <option key={col._id} value={col._id}>
                     {col.name}
                   </option>
                 ))}
@@ -239,8 +224,8 @@ export default function TaskDetail({
 
           {/* Timestamps */}
           <div className="flex gap-4 text-[11px] text-muted-foreground pt-1">
-            <span>Created: {formatTimestamp(task.created_at)}</span>
-            <span>Updated: {formatTimestamp(task.updated_at)}</span>
+            <span>Created: {formatTimestamp(task.createdAt)}</span>
+            <span>Updated: {formatTimestamp(task.updatedAt)}</span>
           </div>
         </div>
 

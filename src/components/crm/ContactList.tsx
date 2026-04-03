@@ -3,13 +3,13 @@
 import { useState } from 'react';
 
 interface Contact {
-  id: string;
+  _id: string;
   name: string;
-  email: string | null;
-  company: string | null;
+  email?: string;
+  company?: string;
   tier: string;
-  tags: string;
-  last_contact_date: string | null;
+  tags: string[];
+  lastContactDate?: string;
 }
 
 interface ContactListProps {
@@ -43,15 +43,7 @@ function getInitialsColor(name: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
-function parseTags(tags: string): string[] {
-  try {
-    return JSON.parse(tags);
-  } catch {
-    return [];
-  }
-}
-
-function formatDate(dateStr: string | null): string {
+function formatDate(dateStr: string | undefined): string {
   if (!dateStr) return '--';
   const d = new Date(dateStr);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -152,12 +144,11 @@ export default function ContactList({
             </thead>
             <tbody>
               {contacts.map((contact) => {
-                const tags = parseTags(contact.tags);
-                const isSelected = contact.id === selectedId;
+                const isSelected = contact._id === selectedId;
                 return (
                   <tr
-                    key={contact.id}
-                    onClick={() => onSelectContact(contact.id)}
+                    key={contact._id}
+                    onClick={() => onSelectContact(contact._id)}
                     className={`cursor-pointer border-b border-border transition-colors duration-150 ${
                       isSelected
                         ? 'bg-accent-blue/10'
@@ -178,11 +169,11 @@ export default function ContactList({
                       {contact.company || '--'}
                     </td>
                     <td className="px-4 py-2.5 text-muted-foreground hidden md:table-cell">
-                      {formatDate(contact.last_contact_date)}
+                      {formatDate(contact.lastContactDate)}
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex flex-wrap gap-1">
-                        {tags.slice(0, 2).map((tag) => (
+                        {contact.tags.slice(0, 2).map((tag) => (
                           <span
                             key={tag}
                             className="px-1.5 py-0.5 text-xs rounded bg-muted text-muted-foreground"
@@ -190,8 +181,8 @@ export default function ContactList({
                             {tag}
                           </span>
                         ))}
-                        {tags.length > 2 && (
-                          <span className="text-xs text-muted-foreground">+{tags.length - 2}</span>
+                        {contact.tags.length > 2 && (
+                          <span className="text-xs text-muted-foreground">+{contact.tags.length - 2}</span>
                         )}
                       </div>
                     </td>

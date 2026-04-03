@@ -1,86 +1,26 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useQuery, useMutation } from 'convex/react';
+import { api } from '../../../convex/_generated/api';
+import { Id } from '../../../convex/_generated/dataModel';
 import SummaryCard from './SummaryCard';
 import ActionCard, { type EmailItem } from './ActionCard';
 import ActionLog, { type EmailAction } from './ActionLog';
 
-interface AppStateRow {
-  key: string;
-  value: string;
-}
-
 export default function EmailView() {
-  const [emails, setEmails] = useState<EmailItem[]>([]);
-  const [actions, setActions] = useState<EmailAction[]>([]);
-  const [summary, setSummary] = useState('');
-  const [counts, setCounts] = useState({ pending: 0, actioned: 0, dismissed: 0 });
-  const [loading, setLoading] = useState(true);
+  const pendingEmails = useQuery(api.emails.list, { status: 'pending' });
+  const allEmails = useQuery(api.emails.list, {});
+  const actions = useQuery(api.emailActions.list);
+  const summaryValue = useQuery(api.appState.get, { key: 'email_triage_summary' });
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [emailsRes, actionsRes, allEmailsRes] = await Promise.all([
-        fetch('/api/emails?status=pending'),
-        fetch('/api/email-actions'),
-        fetch('/api/emails'),
-      ]);
+  const updateEmail = useMutation(api.emails.update);
+  const sendEmail = useMutation(api.emails.send);
 
-      const [emailsData, actionsData, allEmailsData] = await Promise.all([
-        emailsRes.json(),
-        actionsRes.json(),
-        allEmailsRes.json(),
-      ]);
-
-      setEmails(emailsData.emails ?? []);
-      setActions(actionsData.actions ?? []);
-
-      const all: EmailItem[] = allEmailsData.emails ?? [];
-      setCounts({
-        pending: all.filter((e) => e.status === 'pending').length,
-        actioned: all.filter((e) => e.status === 'actioned').length,
-        dismissed: all.filter((e) => e.status === 'dismissed').length,
-      });
-
-      // Fetch summary from app_state via the status endpoint or inline
-      const statusRes = await fetch('/api/status');
-      const statusData = await statusRes.json();
-      const summaryRow = (statusData.state as AppStateRow[] | undefined)?.find(
-        (s: AppStateRow) => s.key === 'email_triage_summary'
-      );
-      setSummary(summaryRow?.value ?? 'No triage data yet.');
-    } catch (err) {
-      console.error('Failed to fetch email data:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  async function handleAction(id: string, action: string) {
-    await fetch(`/api/emails/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: action }),
-    });
-    // Refetch to update counts and lists
-    await fetchData();
-  }
-
-  async function handleSend(id: string) {
-    await fetch(`/api/emails/${id}/send`, { method: 'POST' });
-    await fetchData();
-  }
-
-  function handleDraftChange(id: string, draft: string) {
-    fetch(`/api/emails/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ draft_response: draft }),
-    });
-  }
+  const loading =
+    pendingEmails === undefined ||
+    allEmails === undefined ||
+    actions === undefined ||
+    summaryValue === undefined;
 
   if (loading) {
     return (
@@ -88,6 +28,27 @@ export default function EmailView() {
         <div className="text-muted-foreground text-sm">Loading email...</div>
       </div>
     );
+  }
+
+  const emails = pendingEmails as EmailItem[];
+  const summary = summaryValue ?? 'No triage data yet.';
+
+  const counts = {
+    pending: allEmails.filter((e) => e.status === 'pending').length,
+    actioned: allEmails.filter((e) => e.status === 'actioned').length,
+    dismissed: allEmails.filter((e) => e.status === 'dismissed').length,
+  };
+
+  async function handleAction(id: Id<'emailItems'>, action: string) {
+    await updateEmail({ id, status: action });
+  }
+
+  async function handleSend(id: Id<'emailItems'>) {
+    await sendEmail({ id });
+  }
+
+  function handleDraftChange(id: Id<'emailItems'>, draft: string) {
+    updateEmail({ id, draftResponse: draft });
   }
 
   return (
@@ -110,7 +71,7 @@ export default function EmailView() {
           <div className="space-y-4">
             {emails.map((email) => (
               <ActionCard
-                key={email.id}
+                key={email._id}
                 email={email}
                 onAction={handleAction}
                 onSend={handleSend}
@@ -120,7 +81,7 @@ export default function EmailView() {
           </div>
         )}
 
-        <ActionLog actions={actions} />
+        <ActionLog actions={actions as EmailAction[]} />
       </div>
     </div>
   );

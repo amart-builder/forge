@@ -1,93 +1,44 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState } from 'react';
+import { useQuery, useMutation } from 'convex/react';
+import { api } from '../../../convex/_generated/api';
 import ContactList from './ContactList';
 import ContactDetail from './ContactDetail';
 import ImportModal from './ImportModal';
 
-interface Contact {
-  id: string;
-  name: string;
-  email: string | null;
-  company: string | null;
-  tier: string;
-  tags: string;
-  last_contact_date: string | null;
-}
-
-async function loadContacts(
-  search: string,
-  tier: string,
-  sort: string
-): Promise<Contact[]> {
-  const params = new URLSearchParams();
-  if (search) params.set('search', search);
-  if (tier) params.set('tier', tier);
-  params.set('sort', sort);
-
-  const res = await fetch(`/api/contacts?${params.toString()}`);
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.contacts;
-}
-
 export default function CRMView() {
-  const [contacts, setContacts] = useState<Contact[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newContact, setNewContact] = useState({ name: '', email: '', company: '' });
-  const [initialized, setInitialized] = useState(false);
 
-  const searchRef = useRef('');
-  const tierRef = useRef('');
-  const sortRef = useRef('name');
+  const [search, setSearch] = useState('');
+  const [tier, setTier] = useState('');
+  const [sort, setSort] = useState('name');
 
-  const fetchContacts = useCallback(async () => {
-    const results = await loadContacts(searchRef.current, tierRef.current, sortRef.current);
-    setContacts(results);
-  }, []);
+  const contacts = useQuery(api.contacts.list, {
+    search: search || undefined,
+    tier: tier || undefined,
+    sort,
+  }) ?? [];
 
-  // Initial data load on first render
-  if (!initialized) {
-    setInitialized(true);
-    loadContacts('', '', 'name').then((results) => setContacts(results));
-  }
-
-  function handleSearch(query: string) {
-    searchRef.current = query;
-    fetchContacts();
-  }
-
-  function handleFilterTier(tier: string) {
-    tierRef.current = tier;
-    fetchContacts();
-  }
-
-  function handleSort(sort: string) {
-    sortRef.current = sort;
-    fetchContacts();
-  }
+  const createContact = useMutation(api.contacts.create);
 
   async function handleAddContact() {
     if (!newContact.name.trim()) return;
-    const res = await fetch('/api/contacts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newContact),
+    const id = await createContact({
+      name: newContact.name,
+      email: newContact.email || undefined,
+      company: newContact.company || undefined,
     });
-    if (res.ok) {
-      const data = await res.json();
-      setNewContact({ name: '', email: '', company: '' });
-      setShowAddForm(false);
-      fetchContacts();
-      setSelectedId(data.contact.id);
-    }
+    setNewContact({ name: '', email: '', company: '' });
+    setShowAddForm(false);
+    setSelectedId(id);
   }
 
   function handleContactDeleted() {
     setSelectedId(null);
-    fetchContacts();
   }
 
   return (
@@ -168,9 +119,9 @@ export default function CRMView() {
             selectedId={selectedId}
             onSelectContact={setSelectedId}
             onAddContact={() => setShowAddForm(true)}
-            onSearch={handleSearch}
-            onFilterTier={handleFilterTier}
-            onSort={handleSort}
+            onSearch={setSearch}
+            onFilterTier={setTier}
+            onSort={setSort}
           />
         </div>
 
@@ -179,7 +130,6 @@ export default function CRMView() {
           <ContactDetail
             key={selectedId ?? '__none'}
             contactId={selectedId}
-            onContactUpdated={fetchContacts}
             onContactDeleted={handleContactDeleted}
           />
         </div>
@@ -187,10 +137,7 @@ export default function CRMView() {
 
       {/* Import Modal */}
       {showImport && (
-        <ImportModal
-          onClose={() => setShowImport(false)}
-          onImported={() => fetchContacts()}
-        />
+        <ImportModal onClose={() => setShowImport(false)} />
       )}
     </div>
   );

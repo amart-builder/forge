@@ -9,22 +9,22 @@ import { useDroppable } from '@dnd-kit/core';
 import TaskCard from './TaskCard';
 
 interface ColumnData {
-  id: string;
+  _id: string;
   name: string;
   position: number;
 }
 
 interface TaskData {
-  id: string;
-  column_id: string;
+  _id: string;
+  columnId: string;
   title: string;
   description: string;
   priority: 'low' | 'medium' | 'high';
-  due_date: string | null;
-  tags: string;
+  dueDate?: string;
+  tags: string[];
   position: number;
-  created_at: string;
-  updated_at: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 interface ColumnProps {
@@ -49,12 +49,12 @@ export default function Column({
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(column.name);
 
-  const { setNodeRef } = useDroppable({ id: column.id });
+  const { setNodeRef } = useDroppable({ id: column._id });
 
   function handleAddSubmit() {
     const trimmed = newTitle.trim();
     if (trimmed) {
-      onAddTask(column.id, trimmed);
+      onAddTask(column._id, trimmed);
     }
     setNewTitle('');
     setIsAdding(false);
@@ -73,7 +73,7 @@ export default function Column({
   function handleNameSubmit() {
     const trimmed = editName.trim();
     if (trimmed && trimmed !== column.name) {
-      onUpdateColumn(column.id, trimmed);
+      onUpdateColumn(column._id, trimmed);
     } else {
       setEditName(column.name);
     }
@@ -130,7 +130,7 @@ export default function Column({
             +
           </button>
           <button
-            onClick={() => onDeleteColumn(column.id)}
+            onClick={() => onDeleteColumn(column._id)}
             className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-accent-red hover:bg-card rounded transition-colors duration-150"
             title="Delete column"
           >
@@ -161,12 +161,12 @@ export default function Column({
         )}
 
         <SortableContext
-          items={tasks.map((t) => t.id)}
+          items={tasks.map((t) => t._id)}
           strategy={verticalListSortingStrategy}
         >
           {tasks.map((task) => (
             <TaskCard
-              key={task.id}
+              key={task._id}
               task={task}
               onOpenDetail={onOpenDetail}
             />

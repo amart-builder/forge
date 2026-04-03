@@ -1,38 +1,12 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-
-interface Contact {
-  id: string;
-  name: string;
-  email: string | null;
-  phone: string | null;
-  company: string | null;
-  role: string | null;
-  linkedin: string | null;
-  location: string | null;
-  tier: string;
-  tags: string;
-  how_we_met: string | null;
-  notes: string;
-  last_contact_date: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface Activity {
-  id: string;
-  contact_id: string;
-  activity_type: string;
-  title: string;
-  content: string | null;
-  metadata: string;
-  created_at: string;
-}
+import { useState } from 'react';
+import { useQuery, useMutation } from 'convex/react';
+import { api } from '../../../convex/_generated/api';
+import { Id } from '../../../convex/_generated/dataModel';
 
 interface ContactDetailProps {
   contactId: string | null;
-  onContactUpdated: () => void;
   onContactDeleted: () => void;
 }
 
@@ -79,16 +53,8 @@ function getInitialsColor(name: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
-function parseTags(tags: string): string[] {
-  try {
-    return JSON.parse(tags);
-  } catch {
-    return [];
-  }
-}
-
-function formatTimestamp(dateStr: string): string {
-  const d = new Date(dateStr);
+function formatTimestamp(ts: number): string {
+  const d = new Date(ts);
   return d.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -98,34 +64,27 @@ function formatTimestamp(dateStr: string): string {
   });
 }
 
-async function loadContactData(
-  id: string,
-  setContact: (c: Contact) => void,
-  setActivities: (a: Activity[]) => void
-) {
-  const [contactRes, activitiesRes] = await Promise.all([
-    fetch(`/api/contacts/${id}`),
-    fetch(`/api/contacts/${id}/activities`),
-  ]);
-  if (contactRes.ok) {
-    const data = await contactRes.json();
-    setContact(data.contact);
-  }
-  if (activitiesRes.ok) {
-    const data = await activitiesRes.json();
-    setActivities(data.activities);
-  }
-}
-
 export default function ContactDetail({
   contactId,
-  onContactUpdated,
   onContactDeleted,
 }: ContactDetailProps) {
-  const [contact, setContact] = useState<Contact | null>(null);
-  const [activities, setActivities] = useState<Activity[]>([]);
+  const typedId = contactId as Id<"contacts"> | null;
+
+  const contact = useQuery(
+    api.contacts.get,
+    typedId ? { id: typedId } : "skip",
+  );
+  const activities = useQuery(
+    api.contactActivities.listByContact,
+    typedId ? { contactId: typedId } : "skip",
+  ) ?? [];
+
+  const updateContact = useMutation(api.contacts.update);
+  const removeContact = useMutation(api.contacts.remove);
+  const createActivity = useMutation(api.contactActivities.create);
+
   const [editing, setEditing] = useState(false);
-  const [editForm, setEditForm] = useState<Partial<Contact>>({});
+  const [editForm, setEditForm] = useState<Record<string, string | undefined>>({});
   const [tagInput, setTagInput] = useState('');
   const [showActivities, setShowActivities] = useState(true);
   const [showNotes, setShowNotes] = useState(true);
@@ -133,126 +92,81 @@ export default function ContactDetail({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showAddActivity, setShowAddActivity] = useState(false);
   const [newActivity, setNewActivity] = useState({
-    activity_type: 'note',
+    activityType: 'note',
     title: '',
     content: '',
   });
-  const [loaded, setLoaded] = useState(false);
-
-  const fetchContact = useCallback(async () => {
-    if (!contactId) return;
-    const res = await fetch(`/api/contacts/${contactId}`);
-    if (res.ok) {
-      const data = await res.json();
-      setContact(data.contact);
-    }
-  }, [contactId]);
-
-  const fetchActivities = useCallback(async () => {
-    if (!contactId) return;
-    const res = await fetch(`/api/contacts/${contactId}/activities`);
-    if (res.ok) {
-      const data = await res.json();
-      setActivities(data.activities);
-    }
-  }, [contactId]);
-
-  // Load data on first render (parent remounts via key={contactId})
-  if (!loaded && contactId) {
-    setLoaded(true);
-    loadContactData(contactId, setContact, setActivities);
-  }
 
   function startEdit() {
     if (!contact) return;
     setEditForm({
       name: contact.name,
-      email: contact.email,
-      phone: contact.phone,
-      company: contact.company,
-      role: contact.role,
-      linkedin: contact.linkedin,
-      location: contact.location,
-      how_we_met: contact.how_we_met,
-      notes: contact.notes,
+      email: contact.email ?? '',
+      phone: contact.phone ?? '',
+      company: contact.company ?? '',
+      role: contact.role ?? '',
+      linkedin: contact.linkedin ?? '',
+      location: contact.location ?? '',
+      howWeMet: contact.howWeMet ?? '',
+      notes: contact.notes ?? '',
       tier: contact.tier,
     });
     setEditing(true);
   }
 
   async function saveEdit() {
-    if (!contactId) return;
-    const res = await fetch(`/api/contacts/${contactId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editForm),
+    if (!typedId) return;
+    await updateContact({
+      id: typedId,
+      name: editForm.name || undefined,
+      email: editForm.email || undefined,
+      phone: editForm.phone || undefined,
+      company: editForm.company || undefined,
+      role: editForm.role || undefined,
+      linkedin: editForm.linkedin || undefined,
+      location: editForm.location || undefined,
+      howWeMet: editForm.howWeMet || undefined,
+      notes: editForm.notes || undefined,
+      tier: editForm.tier || undefined,
     });
-    if (res.ok) {
-      setEditing(false);
-      fetchContact();
-      onContactUpdated();
-    }
+    setEditing(false);
   }
 
   async function updateTier(newTier: string) {
-    if (!contactId) return;
-    await fetch(`/api/contacts/${contactId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tier: newTier }),
-    });
-    fetchContact();
-    onContactUpdated();
+    if (!typedId) return;
+    await updateContact({ id: typedId, tier: newTier });
   }
 
   async function addTag(tag: string) {
-    if (!contact || !contactId || !tag.trim()) return;
-    const currentTags = parseTags(contact.tags);
-    if (currentTags.includes(tag.trim())) return;
-    const newTags = [...currentTags, tag.trim()];
-    await fetch(`/api/contacts/${contactId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tags: newTags }),
-    });
+    if (!contact || !typedId || !tag.trim()) return;
+    if (contact.tags.includes(tag.trim())) return;
+    const newTags = [...contact.tags, tag.trim()];
+    await updateContact({ id: typedId, tags: newTags });
     setTagInput('');
-    fetchContact();
-    onContactUpdated();
   }
 
   async function removeTag(tag: string) {
-    if (!contact || !contactId) return;
-    const currentTags = parseTags(contact.tags);
-    const newTags = currentTags.filter((t) => t !== tag);
-    await fetch(`/api/contacts/${contactId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tags: newTags }),
-    });
-    fetchContact();
-    onContactUpdated();
+    if (!contact || !typedId) return;
+    const newTags = contact.tags.filter((t) => t !== tag);
+    await updateContact({ id: typedId, tags: newTags });
   }
 
   async function deleteContact() {
-    if (!contactId) return;
-    const res = await fetch(`/api/contacts/${contactId}`, { method: 'DELETE' });
-    if (res.ok) {
-      onContactDeleted();
-    }
+    if (!typedId) return;
+    await removeContact({ id: typedId });
+    onContactDeleted();
   }
 
   async function addActivity() {
-    if (!contactId || !newActivity.title.trim()) return;
-    const res = await fetch(`/api/contacts/${contactId}/activities`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newActivity),
+    if (!typedId || !newActivity.title.trim()) return;
+    await createActivity({
+      contactId: typedId,
+      activityType: newActivity.activityType,
+      title: newActivity.title,
+      content: newActivity.content || undefined,
     });
-    if (res.ok) {
-      setNewActivity({ activity_type: 'note', title: '', content: '' });
-      setShowAddActivity(false);
-      fetchActivities();
-    }
+    setNewActivity({ activityType: 'note', title: '', content: '' });
+    setShowAddActivity(false);
   }
 
   if (!contactId) {
@@ -271,7 +185,6 @@ export default function ContactDetail({
     );
   }
 
-  const tags = parseTags(contact.tags);
   const tiers = ['A', 'B', 'C'];
 
   return (
@@ -360,7 +273,7 @@ export default function ContactDetail({
         {/* Tags */}
         <div>
           <div className="flex flex-wrap items-center gap-1.5">
-            {tags.map((tag) => (
+            {contact.tags.map((tag) => (
               <span
                 key={tag}
                 className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-muted text-muted-foreground"
@@ -393,10 +306,10 @@ export default function ContactDetail({
         </div>
 
         {/* How We Met */}
-        {!editing && contact.how_we_met && (
+        {!editing && contact.howWeMet && (
           <div className="text-sm">
             <span className="text-muted-foreground">How we know each other:</span>
-            <p className="text-foreground mt-0.5">{contact.how_we_met}</p>
+            <p className="text-foreground mt-0.5">{contact.howWeMet}</p>
           </div>
         )}
 
@@ -411,13 +324,13 @@ export default function ContactDetail({
               ['role', 'Role'],
               ['linkedin', 'LinkedIn'],
               ['location', 'Location'],
-              ['how_we_met', 'How we met'],
+              ['howWeMet', 'How we met'],
             ] as const).map(([field, label]) => (
               <div key={field}>
                 <label className="text-xs text-muted-foreground">{label}</label>
                 <input
                   type="text"
-                  value={(editForm as Record<string, string | null>)[field] ?? ''}
+                  value={editForm[field] ?? ''}
                   onChange={(e) =>
                     setEditForm((prev) => ({ ...prev, [field]: e.target.value }))
                   }
@@ -473,9 +386,9 @@ export default function ContactDetail({
                 ) : (
                   <div className="space-y-2">
                     <select
-                      value={newActivity.activity_type}
+                      value={newActivity.activityType}
                       onChange={(e) =>
-                        setNewActivity((prev) => ({ ...prev, activity_type: e.target.value }))
+                        setNewActivity((prev) => ({ ...prev, activityType: e.target.value }))
                       }
                       className="px-2 py-1 text-sm rounded border border-border bg-background"
                     >
@@ -511,7 +424,7 @@ export default function ContactDetail({
                       <button
                         onClick={() => {
                           setShowAddActivity(false);
-                          setNewActivity({ activity_type: 'note', title: '', content: '' });
+                          setNewActivity({ activityType: 'note', title: '', content: '' });
                         }}
                         className="px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
                       >
@@ -528,15 +441,15 @@ export default function ContactDetail({
               ) : (
                 <div className="divide-y divide-border">
                   {activities.map((act) => (
-                    <div key={act.id} className="px-4 py-3 flex items-start gap-3">
-                      <span className="text-base shrink-0 mt-0.5" title={activityLabels[act.activity_type] || act.activity_type}>
-                        {activityIcons[act.activity_type] || '\u2022'}
+                    <div key={act._id} className="px-4 py-3 flex items-start gap-3">
+                      <span className="text-base shrink-0 mt-0.5" title={activityLabels[act.activityType] || act.activityType}>
+                        {activityIcons[act.activityType] || '\u2022'}
                       </span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-foreground">{act.title}</span>
                           <span className="text-xs text-muted-foreground whitespace-nowrap">
-                            {formatTimestamp(act.created_at)}
+                            {formatTimestamp(act.createdAt)}
                           </span>
                         </div>
                         {act.content && (
@@ -587,16 +500,16 @@ export default function ContactDetail({
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <span className="text-muted-foreground">Created</span>
-                  <p className="text-foreground">{formatTimestamp(contact.created_at)}</p>
+                  <p className="text-foreground">{formatTimestamp(contact.createdAt)}</p>
                 </div>
                 <div>
                   <span className="text-muted-foreground">Updated</span>
-                  <p className="text-foreground">{formatTimestamp(contact.updated_at)}</p>
+                  <p className="text-foreground">{formatTimestamp(contact.updatedAt)}</p>
                 </div>
-                {contact.last_contact_date && (
+                {contact.lastContactDate && (
                   <div>
                     <span className="text-muted-foreground">Last Contact</span>
-                    <p className="text-foreground">{contact.last_contact_date}</p>
+                    <p className="text-foreground">{contact.lastContactDate}</p>
                   </div>
                 )}
                 {contact.email && (

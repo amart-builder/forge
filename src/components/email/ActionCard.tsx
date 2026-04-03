@@ -1,29 +1,30 @@
 'use client';
 
 import { useState } from 'react';
+import { Id } from '../../../convex/_generated/dataModel';
 
 export interface EmailItem {
-  id: string;
-  thread_id: string | null;
-  message_id: string | null;
-  sender_name: string;
-  sender_email: string;
-  subject: string;
-  summary: string;
-  context: string | null;
-  recommended_action: string;
-  draft_response: string | null;
+  _id: Id<'emailItems'>;
+  threadId?: string;
+  messageId?: string;
+  senderName?: string;
+  senderEmail?: string;
+  subject?: string;
+  summary?: string;
+  context?: string;
+  recommendedAction: string;
+  draftResponse?: string;
   priority: number;
   status: string;
-  actioned_at: string | null;
-  created_at: string;
+  actionedAt?: number;
+  createdAt: number;
 }
 
 interface ActionCardProps {
   email: EmailItem;
-  onAction: (id: string, action: string) => Promise<void>;
-  onSend: (id: string) => Promise<void>;
-  onDraftChange: (id: string, draft: string) => void;
+  onAction: (id: Id<'emailItems'>, action: string) => Promise<void>;
+  onSend: (id: Id<'emailItems'>) => Promise<void>;
+  onDraftChange: (id: Id<'emailItems'>, draft: string) => void;
 }
 
 const ACTION_BADGES: Record<string, { label: string; className: string }> = {
@@ -62,8 +63,8 @@ function initials(name: string): string {
     .slice(0, 2);
 }
 
-function formatTime(dateStr: string): string {
-  const date = new Date(dateStr);
+function formatTime(timestamp: number): string {
+  const date = new Date(timestamp);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMin = Math.floor(diffMs / 60000);
@@ -78,25 +79,27 @@ function formatTime(dateStr: string): string {
 
 export default function ActionCard({ email, onAction, onSend, onDraftChange }: ActionCardProps) {
   const [draftExpanded, setDraftExpanded] = useState(false);
-  const [localDraft, setLocalDraft] = useState(email.draft_response ?? '');
+  const [localDraft, setLocalDraft] = useState(email.draftResponse ?? '');
   const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const badge = ACTION_BADGES[email.recommended_action] ?? ACTION_BADGES.review;
+  const badge = ACTION_BADGES[email.recommendedAction] ?? ACTION_BADGES.review;
   const borderClass = PRIORITY_BORDER[email.priority] ?? PRIORITY_BORDER[3];
-  const hasDraft = email.recommended_action === 'reply' || email.recommended_action === 'follow_up';
+  const hasDraft = email.recommendedAction === 'reply' || email.recommendedAction === 'follow_up';
+  const senderName = email.senderName ?? 'Unknown';
+  const senderEmail = email.senderEmail ?? '';
 
   async function handleAction(action: string) {
     setLoading(true);
-    await onAction(email.id, action);
+    await onAction(email._id, action);
     setDone(true);
     setLoading(false);
   }
 
   async function handleSend() {
     setLoading(true);
-    onDraftChange(email.id, localDraft);
-    await onSend(email.id);
+    onDraftChange(email._id, localDraft);
+    await onSend(email._id);
     setDone(true);
     setLoading(false);
   }
@@ -116,13 +119,13 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
       <div className="p-5">
         {/* Header row */}
         <div className="flex items-start gap-3 mb-3">
-          <div className={`w-9 h-9 rounded-full ${hashColor(email.sender_name)} flex items-center justify-center text-white text-xs font-semibold shrink-0`}>
-            {initials(email.sender_name)}
+          <div className={`w-9 h-9 rounded-full ${hashColor(senderName)} flex items-center justify-center text-white text-xs font-semibold shrink-0`}>
+            {initials(senderName)}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-0.5">
-              <span className="font-semibold text-foreground truncate">{email.sender_name}</span>
-              <span className="text-xs text-muted-foreground truncate">{email.sender_email}</span>
+              <span className="font-semibold text-foreground truncate">{senderName}</span>
+              <span className="text-xs text-muted-foreground truncate">{senderEmail}</span>
             </div>
             <p className="font-semibold text-foreground">{email.subject}</p>
           </div>
@@ -130,7 +133,7 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
             <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${badge.className}`}>
               {badge.label}
             </span>
-            <span className="text-xs text-muted-foreground">{formatTime(email.created_at)}</span>
+            <span className="text-xs text-muted-foreground">{formatTime(email.createdAt)}</span>
           </div>
         </div>
 
@@ -143,7 +146,7 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
         )}
 
         {/* Draft area for reply/follow_up */}
-        {hasDraft && email.draft_response && (
+        {hasDraft && email.draftResponse && (
           <div className="mt-3">
             <button
               onClick={() => setDraftExpanded(!draftExpanded)}
@@ -188,9 +191,9 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
               disabled={loading}
               className="px-4 py-1.5 bg-accent-blue text-white text-sm font-medium rounded-lg hover:bg-accent-blue/90 transition-colors duration-150 disabled:opacity-50"
             >
-              {email.recommended_action === 'archive' ? 'Archive' :
-               email.recommended_action === 'flag' ? 'Flag' :
-               email.recommended_action === 'delegate' ? 'Delegate' : 'Done'}
+              {email.recommendedAction === 'archive' ? 'Archive' :
+               email.recommendedAction === 'flag' ? 'Flag' :
+               email.recommendedAction === 'delegate' ? 'Delegate' : 'Done'}
             </button>
             <button
               onClick={() => handleAction('dismissed')}
@@ -203,14 +206,14 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
         )}
 
         {/* Draft-having items without a draft yet still get action buttons */}
-        {hasDraft && !email.draft_response && (
+        {hasDraft && !email.draftResponse && (
           <div className="flex items-center gap-2 mt-3">
             <button
               onClick={() => handleAction('actioned')}
               disabled={loading}
               className="px-4 py-1.5 bg-accent-blue text-white text-sm font-medium rounded-lg hover:bg-accent-blue/90 transition-colors duration-150 disabled:opacity-50"
             >
-              {email.recommended_action === 'reply' ? 'Reply' : 'Follow Up'}
+              {email.recommendedAction === 'reply' ? 'Reply' : 'Follow Up'}
             </button>
             <button
               onClick={() => handleAction('dismissed')}

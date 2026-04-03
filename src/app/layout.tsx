@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import ConvexClientProvider from "./ConvexClientProvider";
 import TabNav from "@/components/layout/TabNav";
 
 export const metadata: Metadata = {
@@ -18,10 +19,12 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{
           __html: `(function(){try{var t=localStorage.getItem('theme');if(t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark')}catch(e){}})()`,
         }} />
-        <TabNav />
-        <main className="flex-1 overflow-hidden">
-          {children}
-        </main>
+        <ConvexClientProvider>
+          <TabNav />
+          <main className="flex-1 overflow-hidden">
+            {children}
+          </main>
+        </ConvexClientProvider>
       </body>
     </html>
   );

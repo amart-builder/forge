@@ -4,16 +4,16 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
 interface TaskData {
-  id: string;
-  column_id: string;
+  _id: string;
+  columnId: string;
   title: string;
   description: string;
   priority: 'low' | 'medium' | 'high';
-  due_date: string | null;
-  tags: string;
+  dueDate?: string;
+  tags: string[];
   position: number;
-  created_at: string;
-  updated_at: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 interface TaskCardProps {
@@ -27,15 +27,6 @@ const priorityColors: Record<string, string> = {
   medium: 'bg-accent-orange/15 text-accent-orange',
   low: 'bg-accent-green/15 text-accent-green',
 };
-
-function parseTags(raw: string): string[] {
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr + 'T00:00:00');
@@ -54,7 +45,7 @@ export default function TaskCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: task.id });
+  } = useSortable({ id: task._id });
 
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
@@ -62,15 +53,13 @@ export default function TaskCard({
     opacity: isDragging ? 0 : 1,
   };
 
-  const tags = parseTags(task.tags);
-
   return (
     <div
       ref={isOverlay ? undefined : setNodeRef}
       style={isOverlay ? undefined : style}
       {...(isOverlay ? {} : attributes)}
       {...(isOverlay ? {} : listeners)}
-      onClick={() => onOpenDetail(task.id)}
+      onClick={() => onOpenDetail(task._id)}
       className={`bg-card rounded-lg border p-3 cursor-pointer transition-all duration-200 hover:shadow-md ${
         isOverlay
           ? 'shadow-xl scale-[1.02] rotate-[2deg]'
@@ -90,16 +79,16 @@ export default function TaskCard({
           {task.priority}
         </span>
 
-        {task.due_date && (
+        {task.dueDate && (
           <span className="text-[11px] text-muted-foreground">
-            {formatDate(task.due_date)}
+            {formatDate(task.dueDate)}
           </span>
         )}
       </div>
 
-      {tags.length > 0 && (
+      {task.tags.length > 0 && (
         <div className="flex gap-1 mt-2 flex-wrap">
-          {tags.map((tag) => (
+          {task.tags.map((tag) => (
             <span
               key={tag}
               className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded"
