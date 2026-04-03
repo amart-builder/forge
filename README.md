@@ -84,7 +84,13 @@ openclaw cron add \
    - Tier 1 (notify only): FYI emails, CC'd threads, informational updates
    - Tier 2 (needs action): direct emails requiring a response or decision
 
-3. For Tier 2 emails, POST to Forge:
+3. For Tier 2 emails, draft a response. Then **run the Humanizer skill on every draft before saving:**
+   - Load `~/.openclaw/workspace/skills/humanizer/SKILL.md` and apply its rules to the draft
+   - Strip AI-sounding patterns: em dash overuse, "delve", "I hope this finds you well", "Certainly!", filler openers, rule of three, excessive conjunctives, etc.
+   - Goal: every draft sounds written by the user, not an AI
+   - Exception: skip humanizing if the draft is 1-2 sentences (too short to have patterns)
+
+   Then POST to Forge:
    curl -X POST http://localhost:3200/api/emails/triage -H 'Content-Type: application/json' -d '{
      \"thread_id\": \"<thread_id>\",
      \"sender_name\": \"<name>\",
@@ -93,7 +99,7 @@ openclaw cron add \
      \"summary\": \"<your summary of why this matters>\",
      \"context\": \"<relationship context from CRM>\",
      \"recommended_action\": \"reply|archive|follow_up|delegate|flag\",
-     \"draft_response\": \"<your suggested reply if action is reply>\",
+     \"draft_response\": \"<humanized draft response>\",
      \"priority\": 1-3
    }'
 
@@ -145,7 +151,63 @@ curl -X POST http://localhost:3200/api/contacts/import \
 
 Or they can click "Import CSV" in the CRM tab to upload manually.
 
-### 7. Network Cadence & Outreach Drafter (Post-Setup)
+### 7. Generate Email Voice File (Post-Setup)
+
+After Gmail is connected and contacts are imported, generate a **Forge Voice File** — a writing profile that captures how the user actually writes emails, so every draft matches their voice.
+
+1. **Read the last 30 days of sent emails:**
+   ```bash
+   gog gmail list --folder sent --after $(date -v-30d +%Y/%m/%d) --limit 100
+   ```
+   Read each email's body with `gog gmail read <id>`. Focus on emails the user personally wrote (skip auto-replies, calendar invites, one-word responses).
+
+2. **Analyze the emails and extract voice patterns.** Look for:
+   - Greeting style ("Hey", "Hi [name]", "[name],", no greeting at all?)
+   - Sign-off style ("Best", "Thanks", "Cheers", name only, nothing?)
+   - Sentence length and rhythm (short punchy sentences? longer and more explanatory?)
+   - Formality level (casual vs. professional vs. somewhere in between)
+   - Common phrases or expressions they use frequently
+   - Punctuation habits (lots of exclamation points? em dashes? ellipses?)
+   - How they handle action items (bullet lists? inline requests? "Let me know if..."?)
+   - Tone in different contexts: investors vs. friends vs. vendors vs. colleagues
+
+3. **Write the voice file to `~/.openclaw/workspace/FORGE-VOICE.md`:**
+   ```markdown
+   # FORGE-VOICE.md — Email Voice for [User Name]
+   
+   Generated from analysis of [N] sent emails (last 30 days). [Date]
+   
+   ## Writing Style
+   - Greeting: ...
+   - Sign-off: ...
+   - Tone: ...
+   - Sentence structure: ...
+   - Formality: ...
+   
+   ## Common Patterns
+   - ...
+   
+   ## Phrases They Use
+   - ...
+   
+   ## Phrases to Avoid (AI tells)
+   - "I hope this email finds you well"
+   - "Certainly!"
+   - "As per our conversation"
+   - Em dash overuse
+   - ... (add any patterns NOT present in their actual writing)
+   
+   ## By Recipient Type
+   - To investors/LPs: ...
+   - To business partners: ...
+   - To friends/casual: ...
+   ```
+
+4. **Update the email triage cron** to reference this voice file. Add to the cron prompt: "Before drafting any response, read `~/.openclaw/workspace/FORGE-VOICE.md` to understand how [user] writes. Match their voice exactly."
+
+5. Tell the user: "I've analyzed your last 30 days of emails and created a voice profile. Every draft I write will now sound like you — same greeting style, tone, phrases, and rhythm. You can edit `~/.openclaw/workspace/FORGE-VOICE.md` at any time to update it."
+
+### 8. Network Cadence & Outreach Drafter (Post-Setup)
 
 After Forge is running and contacts are imported, ask the user:
 
