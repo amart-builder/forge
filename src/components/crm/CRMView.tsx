@@ -93,7 +93,7 @@ export default function CRMView() {
   return (
     <div className="h-full flex flex-col">
       {/* CRM Header */}
-      <div className="px-4 py-2.5 border-b border-border flex items-center justify-between bg-background">
+      <div className="px-4 py-2.5 border-b border-border flex items-center justify-between bg-background transition-colors duration-200">
         <h1 className="font-semibold text-foreground">CRM</h1>
         <button
           onClick={() => setShowImport(true)}
@@ -105,7 +105,7 @@ export default function CRMView() {
 
       {/* Add Contact Form */}
       {showAddForm && (
-        <div className="px-4 py-3 border-b border-border bg-muted/50 flex items-end gap-3">
+        <div className="px-4 py-3 border-b border-border bg-muted/50 flex items-end gap-3 transition-colors duration-200">
           <div className="flex-1 grid grid-cols-3 gap-2">
             <div>
               <label className="text-xs text-muted-foreground">Name *</label>
@@ -114,7 +114,7 @@ export default function CRMView() {
                 value={newContact.name}
                 onChange={(e) => setNewContact((p) => ({ ...p, name: e.target.value }))}
                 placeholder="Full name"
-                className="w-full px-2 py-1.5 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
+                className="w-full px-2 py-1.5 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
                 autoFocus
               />
             </div>
@@ -125,7 +125,7 @@ export default function CRMView() {
                 value={newContact.email}
                 onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))}
                 placeholder="Email"
-                className="w-full px-2 py-1.5 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
+                className="w-full px-2 py-1.5 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
               />
             </div>
             <div>
@@ -135,7 +135,7 @@ export default function CRMView() {
                 value={newContact.company}
                 onChange={(e) => setNewContact((p) => ({ ...p, company: e.target.value }))}
                 placeholder="Company"
-                className="w-full px-2 py-1.5 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
+                className="w-full px-2 py-1.5 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
               />
             </div>
           </div>

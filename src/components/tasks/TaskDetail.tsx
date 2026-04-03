@@ -133,9 +133,9 @@ export default function TaskDetail({
     <div
       ref={backdropRef}
       onClick={handleBackdropClick}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 dark:bg-black/50 backdrop-blur-sm"
     >
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto">
+      <div className="bg-card rounded-xl shadow-xl w-full max-w-lg mx-4 p-6 max-h-[90vh] overflow-y-auto transition-colors duration-200">
         {/* Header */}
         <div className="flex items-start justify-between mb-5">
           <h2 className="text-base font-semibold">Edit Task</h2>
@@ -157,7 +157,7 @@ export default function TaskDetail({
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue"
+              className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue bg-background text-foreground"
             />
           </div>
 
@@ -170,7 +170,7 @@ export default function TaskDetail({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               rows={4}
-              className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue resize-y"
+              className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue resize-y bg-background text-foreground"
             />
           </div>
 
@@ -185,7 +185,7 @@ export default function TaskDetail({
                 onChange={(e) =>
                   setPriority(e.target.value as 'low' | 'medium' | 'high')
                 }
-                className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue bg-white"
+                className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue bg-background text-foreground"
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -199,7 +199,7 @@ export default function TaskDetail({
               <select
                 value={columnId}
                 onChange={(e) => setColumnId(e.target.value)}
-                className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue bg-white"
+                className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue bg-background text-foreground"
               >
                 {columns.map((col) => (
                   <option key={col.id} value={col.id}>
@@ -219,7 +219,7 @@ export default function TaskDetail({
               type="date"
               value={dueDate}
               onChange={(e) => setDueDate(e.target.value)}
-              className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue"
+              className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue bg-background text-foreground"
             />
           </div>
 
@@ -233,7 +233,7 @@ export default function TaskDetail({
               value={tagsStr}
               onChange={(e) => setTagsStr(e.target.value)}
               placeholder="design, frontend, urgent"
-              className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue"
+              className="w-full px-3 py-2 text-sm border rounded-lg outline-none focus:ring-1 focus:ring-accent-blue bg-background text-foreground"
             />
           </div>
 

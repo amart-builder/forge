@@ -107,7 +107,7 @@ export default function ContactList({
           placeholder="Search contacts..."
           value={searchValue}
           onChange={(e) => handleSearch(e.target.value)}
-          className="w-full px-3 py-1.5 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-accent-blue/30 focus:border-accent-blue transition-all duration-150"
+          className="w-full px-3 py-1.5 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-accent-blue/30 focus:border-accent-blue transition-all duration-150"
         />
       </div>
 

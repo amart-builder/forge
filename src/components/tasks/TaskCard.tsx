@@ -56,10 +56,10 @@ export default function TaskCard({
     isDragging,
   } = useSortable({ id: task.id });
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.4 : 1,
+  const style: React.CSSProperties = {
+    transform: CSS.Translate.toString(transform),
+    transition: transition ?? undefined,
+    opacity: isDragging ? 0 : 1,
   };
 
   const tags = parseTags(task.tags);
@@ -71,8 +71,12 @@ export default function TaskCard({
       {...(isOverlay ? {} : attributes)}
       {...(isOverlay ? {} : listeners)}
       onClick={() => onOpenDetail(task.id)}
-      className={`bg-white rounded-lg border p-3 cursor-pointer transition-shadow duration-150 hover:shadow-md ${
-        isOverlay ? 'shadow-lg rotate-2' : ''
+      className={`bg-card rounded-lg border p-3 cursor-pointer transition-all duration-200 hover:shadow-md ${
+        isOverlay
+          ? 'shadow-xl scale-[1.02] rotate-[2deg]'
+          : isDragging
+            ? 'ring-2 ring-accent-blue/30 border-dashed'
+            : ''
       }`}
     >
       <p className="text-sm font-medium leading-snug">{task.title}</p>

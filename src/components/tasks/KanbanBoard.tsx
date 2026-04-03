@@ -9,6 +9,7 @@ import {
   useSensor,
   useSensors,
   closestCorners,
+  defaultDropAnimationSideEffects,
 } from '@dnd-kit/core';
 import type {
   DragEndEvent,
@@ -40,6 +41,18 @@ interface TaskData {
   created_at: string;
   updated_at: string;
 }
+
+const dropAnimationConfig = {
+  duration: 250,
+  easing: 'cubic-bezier(0.25, 1, 0.5, 1)',
+  sideEffects: defaultDropAnimationSideEffects({
+    styles: {
+      active: {
+        opacity: '0.5',
+      },
+    },
+  }),
+};
 
 export default function KanbanBoard() {
   const [columns, setColumns] = useState<ColumnData[]>([]);
@@ -263,11 +276,11 @@ export default function KanbanBoard() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-6 py-3 border-b">
+      <div className="flex items-center justify-between px-6 py-3 border-b transition-colors duration-200">
         <h1 className="text-lg font-semibold">Tasks</h1>
         <button
           onClick={handleAddColumn}
-          className="px-3 py-1.5 text-sm font-medium bg-foreground text-white rounded-lg hover:opacity-90 transition-opacity duration-150"
+          className="px-3 py-1.5 text-sm font-medium bg-foreground text-background rounded-lg hover:opacity-90 transition-opacity duration-150"
         >
           + Add Column
         </button>
@@ -295,7 +308,7 @@ export default function KanbanBoard() {
             ))}
           </div>
 
-          <DragOverlay dropAnimation={null}>
+          <DragOverlay dropAnimation={dropAnimationConfig}>
             {activeTask ? (
               <TaskCard
                 task={activeTask}

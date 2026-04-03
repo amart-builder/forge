@@ -101,7 +101,7 @@ export default function EmailView() {
         />
 
         {emails.length === 0 ? (
-          <div className="bg-white rounded-xl border border-border p-10 text-center">
+          <div className="bg-card rounded-xl border border-border p-10 text-center transition-colors duration-200">
             <p className="text-muted-foreground">
               Your inbox is clear. The email handler runs 3x daily during work hours.
             </p>

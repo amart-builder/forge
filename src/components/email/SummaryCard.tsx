@@ -14,7 +14,7 @@ export default function SummaryCard({
   dismissedCount,
 }: SummaryCardProps) {
   return (
-    <div className="bg-white rounded-xl border border-border p-6 shadow-sm">
+    <div className="bg-card rounded-xl border border-border p-6 shadow-sm transition-colors duration-200">
       <p className="text-sm text-muted-foreground mb-1">
         Here&apos;s what happened since you last checked
       </p>

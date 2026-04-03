@@ -30,7 +30,7 @@ const ACTION_BADGES: Record<string, { label: string; className: string }> = {
   reply: { label: 'Reply', className: 'bg-accent-blue/10 text-accent-blue' },
   archive: { label: 'Archive', className: 'bg-muted text-muted-foreground' },
   follow_up: { label: 'Follow Up', className: 'bg-accent-orange/10 text-accent-orange' },
-  delegate: { label: 'Delegate', className: 'bg-purple-100 text-purple-700' },
+  delegate: { label: 'Delegate', className: 'bg-purple-500/10 text-purple-400 dark:text-purple-300' },
   flag: { label: 'Flag', className: 'bg-accent-red/10 text-accent-red' },
   review: { label: 'Review', className: 'bg-muted text-muted-foreground' },
 };
@@ -38,7 +38,7 @@ const ACTION_BADGES: Record<string, { label: string; className: string }> = {
 const PRIORITY_BORDER: Record<number, string> = {
   1: 'border-l-accent-red border-l-[3px]',
   2: 'border-l-accent-yellow border-l-[3px]',
-  3: 'border-l-gray-300 border-l-[3px]',
+  3: 'border-l-muted-foreground/30 border-l-[3px]',
 };
 
 function hashColor(name: string): string {
@@ -103,7 +103,7 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
 
   if (done) {
     return (
-      <div className={`bg-white rounded-xl border border-border overflow-hidden ${borderClass} opacity-60 transition-opacity duration-300`}>
+      <div className={`bg-card rounded-xl border border-border overflow-hidden ${borderClass} opacity-60 transition-all duration-300`}>
         <div className="p-5 flex items-center justify-center text-muted-foreground text-sm">
           Done
         </div>
@@ -112,7 +112,7 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
   }
 
   return (
-    <div className={`bg-white rounded-xl border border-border overflow-hidden ${borderClass} transition-all duration-150`}>
+    <div className={`bg-card rounded-xl border border-border overflow-hidden ${borderClass} transition-all duration-200`}>
       <div className="p-5">
         {/* Header row */}
         <div className="flex items-start gap-3 mb-3">
@@ -156,7 +156,7 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
                 <textarea
                   value={localDraft}
                   onChange={(e) => setLocalDraft(e.target.value)}
-                  className="w-full border border-border rounded-lg p-3 text-sm bg-muted/50 resize-none focus:outline-none focus:ring-1 focus:ring-accent-blue"
+                  className="w-full border border-border rounded-lg p-3 text-sm bg-muted/50 resize-none focus:outline-none focus:ring-1 focus:ring-accent-blue text-foreground"
                   rows={5}
                 />
                 <div className="flex items-center gap-2 mt-2">
@@ -170,7 +170,7 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
                   <button
                     onClick={() => handleAction('dismissed')}
                     disabled={loading}
-                    className="px-4 py-1.5 bg-muted text-muted-foreground text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors duration-150 disabled:opacity-50"
+                    className="px-4 py-1.5 bg-muted text-muted-foreground text-sm font-medium rounded-lg hover:bg-muted/80 transition-colors duration-150 disabled:opacity-50"
                   >
                     Dismiss
                   </button>
@@ -195,7 +195,7 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
             <button
               onClick={() => handleAction('dismissed')}
               disabled={loading}
-              className="px-4 py-1.5 bg-muted text-muted-foreground text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors duration-150 disabled:opacity-50"
+              className="px-4 py-1.5 bg-muted text-muted-foreground text-sm font-medium rounded-lg hover:bg-muted/80 transition-colors duration-150 disabled:opacity-50"
             >
               Dismiss
             </button>
@@ -215,7 +215,7 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
             <button
               onClick={() => handleAction('dismissed')}
               disabled={loading}
-              className="px-4 py-1.5 bg-muted text-muted-foreground text-sm font-medium rounded-lg hover:bg-gray-200 transition-colors duration-150 disabled:opacity-50"
+              className="px-4 py-1.5 bg-muted text-muted-foreground text-sm font-medium rounded-lg hover:bg-muted/80 transition-colors duration-150 disabled:opacity-50"
             >
               Dismiss
             </button>

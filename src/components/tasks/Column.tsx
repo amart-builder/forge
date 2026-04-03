@@ -91,9 +91,9 @@ export default function Column({
   }
 
   return (
-    <div className="flex flex-col w-72 shrink-0 bg-muted/50 rounded-xl border">
+    <div className="flex flex-col w-72 shrink-0 bg-muted/50 rounded-xl border transition-colors duration-200">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2.5 bg-muted rounded-t-xl border-b">
+      <div className="flex items-center justify-between px-3 py-2.5 bg-muted rounded-t-xl border-b transition-colors duration-200">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isEditing ? (
             <input
@@ -103,7 +103,7 @@ export default function Column({
               onBlur={handleNameSubmit}
               onKeyDown={handleNameKeyDown}
               autoFocus
-              className="text-sm font-semibold bg-white px-1.5 py-0.5 rounded border outline-none focus:ring-1 focus:ring-accent-blue w-full"
+              className="text-sm font-semibold bg-card px-1.5 py-0.5 rounded border outline-none focus:ring-1 focus:ring-accent-blue w-full"
             />
           ) : (
             <span
@@ -124,14 +124,14 @@ export default function Column({
         <div className="flex items-center gap-1">
           <button
             onClick={() => setIsAdding(true)}
-            className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-white rounded transition-colors duration-150"
+            className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-card rounded transition-colors duration-150"
             title="Add task"
           >
             +
           </button>
           <button
             onClick={() => onDeleteColumn(column.id)}
-            className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-accent-red hover:bg-white rounded transition-colors duration-150"
+            className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-accent-red hover:bg-card rounded transition-colors duration-150"
             title="Delete column"
           >
             &times;
@@ -155,7 +155,7 @@ export default function Column({
               onKeyDown={handleAddKeyDown}
               placeholder="Task title..."
               autoFocus
-              className="w-full px-2.5 py-2 text-sm bg-white rounded-lg border outline-none focus:ring-1 focus:ring-accent-blue"
+              className="w-full px-2.5 py-2 text-sm bg-card rounded-lg border outline-none focus:ring-1 focus:ring-accent-blue"
             />
           </div>
         )}

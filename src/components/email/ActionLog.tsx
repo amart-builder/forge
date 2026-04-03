@@ -40,7 +40,7 @@ export default function ActionLog({ actions }: ActionLogProps) {
   const filtered = filter ? actions.filter((a) => a.action_type === filter) : actions;
 
   return (
-    <div className="bg-muted rounded-xl border border-border overflow-hidden">
+    <div className="bg-muted rounded-xl border border-border overflow-hidden transition-colors duration-200">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between p-4 text-left hover:bg-muted/80 transition-colors duration-150"
@@ -64,7 +64,7 @@ export default function ActionLog({ actions }: ActionLogProps) {
             <button
               onClick={() => setFilter(null)}
               className={`px-3 py-1 rounded-full text-xs font-medium transition-colors duration-150 ${
-                filter === null ? 'bg-foreground text-white' : 'bg-white text-muted-foreground hover:bg-gray-100'
+                filter === null ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-muted/80'
               }`}
             >
               All
@@ -76,7 +76,7 @@ export default function ActionLog({ actions }: ActionLogProps) {
                   key={type}
                   onClick={() => setFilter(type)}
                   className={`px-3 py-1 rounded-full text-xs font-medium transition-colors duration-150 ${
-                    filter === type ? 'bg-foreground text-white' : 'bg-white text-muted-foreground hover:bg-gray-100'
+                    filter === type ? 'bg-foreground text-background' : 'bg-card text-muted-foreground hover:bg-muted/80'
                   }`}
                 >
                   {badge?.label ?? type}
@@ -98,7 +98,7 @@ export default function ActionLog({ actions }: ActionLogProps) {
                 return (
                   <div
                     key={action.id}
-                    className="flex items-start gap-3 bg-white rounded-lg p-3 border border-border"
+                    className="flex items-start gap-3 bg-card rounded-lg p-3 border border-border transition-colors duration-200"
                   >
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium shrink-0 ${badge.className}`}>
                       {badge.label}
