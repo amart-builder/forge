@@ -216,16 +216,42 @@ Open http://localhost:3200 in the user's browser and confirm all three tabs load
 
 - **Next.js 16** with TypeScript and App Router
 - **Tailwind CSS** for styling
-- **SQLite** (better-sqlite3) for local data persistence
+- **SQLite** (better-sqlite3) for local data persistence (default)
 - **@dnd-kit** for drag-and-drop kanban board
-- No external database or server required — everything runs locally
+- Dark mode with system preference detection
 
 ## Data Storage
 
-All data is stored in `./data/forge.db` (SQLite). This file is created automatically on first run.
+By default, Forge uses a local SQLite database at `./data/forge.db`. This is the simplest option — zero config, no external dependencies, everything stays on the Mac Mini.
+
+For more advanced setups, ask the user which database option they prefer:
+
+### Option A: SQLite (Default — Local Only)
+The default. No setup required. Data lives on the Mac Mini.
+- **Pros:** Zero config, fully offline, fast, private — data never leaves the machine
+- **Cons:** Single machine only, no real-time sync between devices, manual backups
+- **Best for:** Users who primarily work from one machine
 
 To back up: `cp data/forge.db data/forge.db.backup`
 To reset: `rm data/forge.db` and restart the server.
+
+### Option B: Supabase (Cloud — Multi-Device)
+Replace SQLite with Supabase (hosted Postgres) for cloud sync. Data accessible from any device.
+- **Pros:** Access from anywhere, real-time sync, automatic backups, generous free tier
+- **Cons:** Requires Supabase account, data leaves the machine, slight latency
+- **Best for:** Users who want to access Forge from multiple devices or want cloud backup
+- **Setup:** Create a project at supabase.com, get the URL + anon key, run the migration SQL against the Supabase database, update Forge's db.ts to use @supabase/supabase-js instead of better-sqlite3
+
+### Option C: Convex (Real-time Reactive Backend)
+Replace SQLite with Convex (convex.dev) for a fully reactive, real-time backend. The most powerful option.
+- **Pros:** Real-time reactive queries (UI updates instantly when data changes), built-in TypeScript functions, scheduled jobs, file storage, generous free tier
+- **Cons:** Requires Convex account, learning curve for Convex functions, data in cloud
+- **Best for:** Power users who want the most responsive experience, or users building custom automations on top of Forge
+- **Setup:** `npx convex dev` to initialize, migrate schema to Convex format, replace API routes with Convex queries/mutations. See convex.dev/quickstart/nextjs
+
+Ask the user: *"Forge stores your tasks, contacts, and email data. The simplest option is local-only storage on this Mac Mini. If you want to access it from other devices too, we can use Supabase (cloud Postgres) or Convex (real-time reactive backend). Which would you prefer?"*
+
+Default to SQLite if the user isn't sure or doesn't want to decide now — they can always migrate later.
 
 ## API Reference
 
