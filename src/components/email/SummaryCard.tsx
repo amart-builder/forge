@@ -14,12 +14,12 @@ export default function SummaryCard({
   dismissedCount,
 }: SummaryCardProps) {
   return (
-    <div className="bg-card rounded-xl border border-border p-6 shadow-sm transition-colors duration-200">
-      <p className="text-sm text-muted-foreground mb-1">
-        Here&apos;s what happened since you last checked
+    <div className="bg-card rounded-lg border p-5 transition-colors duration-200">
+      <p className="text-[11px] text-muted-foreground mb-1 uppercase tracking-wide">
+        Summary
       </p>
-      <p className="text-foreground mb-4">{summary}</p>
-      <div className="flex items-center gap-6">
+      <p className="text-sm text-foreground mb-3">{summary}</p>
+      <div className="flex items-center gap-5">
         <Stat label="Pending" value={pendingCount} color="text-accent-orange" />
         <Stat label="Actioned" value={actionedCount} color="text-accent-green" />
         <Stat label="Dismissed" value={dismissedCount} color="text-muted-foreground" />
@@ -30,9 +30,9 @@ export default function SummaryCard({
 
 function Stat({ label, value, color }: { label: string; value: number; color: string }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className={`text-lg font-semibold ${color}`}>{value}</span>
-      <span className="text-sm text-muted-foreground">{label}</span>
+    <div className="flex items-center gap-1.5">
+      <span className={`text-base font-semibold tabular-nums ${color}`}>{value}</span>
+      <span className="text-[11px] text-muted-foreground">{label}</span>
     </div>
   );
 }

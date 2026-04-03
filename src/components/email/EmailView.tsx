@@ -53,7 +53,7 @@ export default function EmailView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto py-6 px-4 space-y-6">
+      <div className="max-w-3xl mx-auto py-5 px-5 space-y-4">
         <SummaryCard
           summary={summary}
           pendingCount={counts.pending}
@@ -62,13 +62,13 @@ export default function EmailView() {
         />
 
         {emails.length === 0 ? (
-          <div className="bg-card rounded-xl border border-border p-10 text-center transition-colors duration-200">
-            <p className="text-muted-foreground">
+          <div className="bg-card rounded-lg border p-10 text-center transition-colors duration-200">
+            <p className="text-muted-foreground text-sm">
               Your inbox is clear. The email handler runs 3x daily during work hours.
             </p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3">
             {emails.map((email) => (
               <ActionCard
                 key={email._id}

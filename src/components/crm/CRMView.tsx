@@ -43,57 +43,94 @@ export default function CRMView() {
 
   return (
     <div className="h-full flex flex-col">
-      {/* CRM Header */}
-      <div className="px-4 py-2.5 border-b border-border flex items-center justify-between bg-background transition-colors duration-200">
-        <h1 className="font-semibold text-foreground">CRM</h1>
-        <button
-          onClick={() => setShowImport(true)}
-          className="px-3 py-1.5 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-border transition-colors duration-150"
+      {/* Header bar */}
+      <div className="px-5 py-2.5 border-b flex items-center gap-3 transition-colors duration-200">
+        <h1 className="text-sm font-semibold text-foreground">Contacts</h1>
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {contacts.length} {contacts.length === 1 ? 'entry' : 'entries'}
+        </span>
+
+        <div className="ml-4 relative max-w-[220px] flex-1">
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+          <input
+            type="text"
+            placeholder="Search..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-8 pr-3 py-1.5 text-xs rounded-md border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
+          />
+        </div>
+
+        <select
+          value={tier}
+          onChange={(e) => setTier(e.target.value)}
+          className="px-2 py-1.5 text-xs rounded-md border bg-background text-foreground"
         >
-          Import CSV
-        </button>
+          <option value="">All Tiers</option>
+          <option value="A">Tier A</option>
+          <option value="B">Tier B</option>
+          <option value="C">Tier C</option>
+        </select>
+
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => setShowImport(true)}
+            className="px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground border rounded-md hover:bg-muted transition-colors duration-150"
+          >
+            Import
+          </button>
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="px-3 py-1.5 text-xs font-medium bg-foreground text-background rounded-md hover:opacity-90 transition-opacity duration-150"
+          >
+            + Add
+          </button>
+        </div>
       </div>
 
-      {/* Add Contact Form */}
+      {/* Quick add form */}
       {showAddForm && (
-        <div className="px-4 py-3 border-b border-border bg-muted/50 flex items-end gap-3 transition-colors duration-200">
+        <div className="px-5 py-3 border-b bg-muted/30 flex items-end gap-3 transition-colors duration-200">
           <div className="flex-1 grid grid-cols-3 gap-2">
             <div>
-              <label className="text-xs text-muted-foreground">Name *</label>
+              <label className="text-[11px] text-muted-foreground">Name *</label>
               <input
                 type="text"
                 value={newContact.name}
                 onChange={(e) => setNewContact((p) => ({ ...p, name: e.target.value }))}
                 placeholder="Full name"
-                className="w-full px-2 py-1.5 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
+                className="w-full px-2.5 py-1.5 text-sm rounded-md border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
                 autoFocus
               />
             </div>
             <div>
-              <label className="text-xs text-muted-foreground">Email</label>
+              <label className="text-[11px] text-muted-foreground">Email</label>
               <input
                 type="email"
                 value={newContact.email}
                 onChange={(e) => setNewContact((p) => ({ ...p, email: e.target.value }))}
                 placeholder="Email"
-                className="w-full px-2 py-1.5 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
+                className="w-full px-2.5 py-1.5 text-sm rounded-md border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
               />
             </div>
             <div>
-              <label className="text-xs text-muted-foreground">Company</label>
+              <label className="text-[11px] text-muted-foreground">Company</label>
               <input
                 type="text"
                 value={newContact.company}
                 onChange={(e) => setNewContact((p) => ({ ...p, company: e.target.value }))}
                 placeholder="Company"
-                className="w-full px-2 py-1.5 text-sm rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
+                className="w-full px-2.5 py-1.5 text-sm rounded-md border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
               />
             </div>
           </div>
-          <div className="flex gap-2 shrink-0">
+          <div className="flex gap-1.5 shrink-0">
             <button
               onClick={handleAddContact}
-              className="px-3 py-1.5 text-sm font-medium text-white bg-accent-blue rounded-lg hover:opacity-90 transition-opacity duration-150"
+              className="px-3 py-1.5 text-xs font-medium text-white bg-accent-blue rounded-md hover:opacity-90 transition-opacity duration-150"
             >
               Save
             </button>
@@ -102,7 +139,7 @@ export default function CRMView() {
                 setShowAddForm(false);
                 setNewContact({ name: '', email: '', company: '' });
               }}
-              className="px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+              className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
             >
               Cancel
             </button>
@@ -110,32 +147,32 @@ export default function CRMView() {
         </div>
       )}
 
-      {/* Two-panel layout */}
+      {/* Main content: table + detail panel */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left panel */}
-        <div className="w-[400px] border-r border-border flex-shrink-0 overflow-hidden">
+        {/* Table panel */}
+        <div className={`flex-1 overflow-hidden transition-all duration-200 ${selectedId ? 'min-w-0' : ''}`}>
           <ContactList
             contacts={contacts}
             selectedId={selectedId}
             onSelectContact={setSelectedId}
-            onAddContact={() => setShowAddForm(true)}
-            onSearch={setSearch}
-            onFilterTier={setTier}
+            sort={sort}
             onSort={setSort}
           />
         </div>
 
-        {/* Right panel */}
-        <div className="flex-1 overflow-hidden">
-          <ContactDetail
-            key={selectedId ?? '__none'}
-            contactId={selectedId}
-            onContactDeleted={handleContactDeleted}
-          />
-        </div>
+        {/* Detail panel (slide-in) */}
+        {selectedId && (
+          <div className="w-[380px] border-l flex-shrink-0 overflow-hidden bg-card transition-colors duration-200">
+            <ContactDetail
+              key={selectedId}
+              contactId={selectedId}
+              onContactDeleted={handleContactDeleted}
+              onClose={() => setSelectedId(null)}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Import Modal */}
       {showImport && (
         <ImportModal onClose={() => setShowImport(false)} />
       )}

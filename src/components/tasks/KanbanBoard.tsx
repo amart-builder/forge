@@ -63,35 +63,48 @@ export default function KanbanBoard() {
   const tasksQuery = useQuery(api.tasks.list);
 
   const seedMutation = useMutation(api.init.seed);
-  const createColumnMutation = useMutation(api.columns.create);
-  const updateColumnMutation = useMutation(api.columns.update);
-  const removeColumnMutation = useMutation(api.columns.remove);
   const createTaskMutation = useMutation(api.tasks.create);
   const updateTaskMutation = useMutation(api.tasks.update);
   const removeTaskMutation = useMutation(api.tasks.remove);
 
-  // Local state for optimistic DnD updates
   const [localTasks, setLocalTasks] = useState<TaskData[] | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<UniqueIdentifier | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
   const [seeded, setSeeded] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // Seed default columns on mount
+  // Add task form state
+  const [newTask, setNewTask] = useState({
+    title: '',
+    priority: 'medium' as 'low' | 'medium' | 'high',
+    dueDate: '',
+    description: '',
+    tags: '',
+  });
+
   useEffect(() => {
     if (!seeded) {
       seedMutation().then(() => setSeeded(true));
     }
   }, [seeded, seedMutation]);
 
-  // Use local override during drag, otherwise use query data
-  const columns = (columnsQuery ?? []) as ColumnData[];
+  // Force canonical column order regardless of position field
+  // Handle both old names (To Do) and new names (Not Started)
+  const COLUMN_ORDER: Record<string, number> = {
+    'Not Started': 0, 'To Do': 0,
+    'In Progress': 1,
+    'Blocked': 2,
+    'Done': 3, 'Completed': 3,
+  };
+  const columns = ((columnsQuery ?? []) as ColumnData[]).sort((a, b) => {
+    return (COLUMN_ORDER[a.name] ?? 99) - (COLUMN_ORDER[b.name] ?? 99);
+  });
   const tasks = (localTasks ?? tasksQuery ?? []) as TaskData[];
 
-  // Keep a ref to current tasks for drag handlers
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
 
-  // Clear local override when query data updates (drag completed)
   useEffect(() => {
     if (tasksQuery && localTasks) {
       setLocalTasks(null);
@@ -107,9 +120,20 @@ export default function KanbanBoard() {
   );
 
   const loading = columnsQuery === undefined || tasksQuery === undefined;
+  const totalTasks = tasks.length;
+
+  // Filter tasks by search
+  const filteredTasks = searchQuery.trim()
+    ? tasks.filter(
+        (t) =>
+          t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          t.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          t.tags.some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase()))
+      )
+    : tasks;
 
   function getTasksForColumn(columnId: string) {
-    return tasks
+    return filteredTasks
       .filter((t) => t.columnId === columnId)
       .sort((a, b) => a.position - b.position);
   }
@@ -135,7 +159,6 @@ export default function KanbanBoard() {
 
     if (!activeCol || !overCol || activeCol === overCol) return;
 
-    // Move the task to the new column optimistically
     setLocalTasks((prev) => {
       const base = prev ?? tasksRef.current;
       return base.map((t) =>
@@ -202,50 +225,37 @@ export default function KanbanBoard() {
     }
   }
 
-  async function handleAddColumn() {
-    const name = prompt('New column name:');
-    if (!name?.trim()) return;
+  async function handleAddTask(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newTask.title.trim()) return;
+
+    // Find "Not Started" column (first column by position)
+    const notStartedCol = columns.find((c) => c.name === 'Not Started') ?? columns[0];
+    if (!notStartedCol) return;
 
     try {
-      await createColumnMutation({ name: name.trim() });
-    } catch (err) {
-      console.error('Failed to add column:', err);
-    }
-  }
+      const tags = newTask.tags
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
 
-  async function handleAddTask(columnId: string, title: string) {
-    try {
-      await createTaskMutation({ title, columnId: columnId as any });
+      await createTaskMutation({
+        title: newTask.title.trim(),
+        columnId: notStartedCol._id as any,
+        priority: newTask.priority,
+        description: newTask.description || undefined,
+        dueDate: newTask.dueDate || undefined,
+        tags: tags.length > 0 ? tags : undefined,
+      });
+
+      setNewTask({ title: '', priority: 'medium', dueDate: '', description: '', tags: '' });
+      setShowAddForm(false);
     } catch (err) {
       console.error('Failed to add task:', err);
     }
   }
 
-  async function handleUpdateColumn(id: string, name: string) {
-    try {
-      await updateColumnMutation({ id: id as any, name });
-    } catch (err) {
-      console.error('Failed to update column:', err);
-    }
-  }
-
-  async function handleDeleteColumn(id: string) {
-    const colTasks = tasks.filter((t) => t.columnId === id);
-    if (colTasks.length > 0) {
-      const ok = confirm(
-        `This column has ${colTasks.length} task(s). Delete them all?`
-      );
-      if (!ok) return;
-    }
-
-    try {
-      await removeColumnMutation({ id: id as any });
-    } catch (err) {
-      console.error('Failed to delete column:', err);
-    }
-  }
-
-  function handleTaskDeleted(id: string) {
+  function handleTaskDeleted() {
     setDetailTaskId(null);
   }
 
@@ -255,7 +265,7 @@ export default function KanbanBoard() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
+      <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
         Loading board...
       </div>
     );
@@ -263,16 +273,124 @@ export default function KanbanBoard() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-6 py-3 border-b transition-colors duration-200">
-        <h1 className="text-lg font-semibold">Tasks</h1>
+      {/* Header */}
+      <div className="flex items-center gap-3 px-5 py-2.5 border-b transition-colors duration-200">
+        <h1 className="text-sm font-semibold text-foreground">Tasks</h1>
+        <span className="text-xs text-muted-foreground tabular-nums">{totalTasks}</span>
+
+        <div className="ml-4 flex items-center gap-2 flex-1">
+          <div className="relative max-w-[240px] flex-1">
+            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <input
+              type="text"
+              placeholder="Search tasks..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-md border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
+            />
+          </div>
+        </div>
+
+        {/* Filter tab */}
+        <div className="flex items-center gap-1">
+          <span className="px-2.5 py-1 text-xs font-medium bg-foreground text-background rounded-md">
+            All ({totalTasks})
+          </span>
+        </div>
+
         <button
-          onClick={handleAddColumn}
-          className="px-3 py-1.5 text-sm font-medium bg-foreground text-background rounded-lg hover:opacity-90 transition-opacity duration-150"
+          onClick={() => setShowAddForm(!showAddForm)}
+          className="ml-2 px-3 py-1.5 text-xs font-medium bg-foreground text-background rounded-md hover:opacity-90 transition-opacity duration-150"
         >
-          + Add Column
+          + Add
         </button>
       </div>
 
+      {/* Add Task Form */}
+      {showAddForm && (
+        <form onSubmit={handleAddTask} className="px-5 py-3 border-b bg-muted/30 transition-colors duration-200">
+          <div className="flex items-end gap-3 max-w-2xl">
+            <div className="flex-1">
+              <label className="block text-[11px] text-muted-foreground mb-1">Title *</label>
+              <input
+                type="text"
+                value={newTask.title}
+                onChange={(e) => setNewTask((p) => ({ ...p, title: e.target.value }))}
+                placeholder="Task title"
+                autoFocus
+                className="w-full px-2.5 py-1.5 text-sm rounded-md border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
+              />
+            </div>
+            <div className="w-24">
+              <label className="block text-[11px] text-muted-foreground mb-1">Priority</label>
+              <select
+                value={newTask.priority}
+                onChange={(e) => setNewTask((p) => ({ ...p, priority: e.target.value as any }))}
+                className="w-full px-2 py-1.5 text-sm rounded-md border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+            <div className="w-36">
+              <label className="block text-[11px] text-muted-foreground mb-1">Due date</label>
+              <input
+                type="date"
+                value={newTask.dueDate}
+                onChange={(e) => setNewTask((p) => ({ ...p, dueDate: e.target.value }))}
+                className="w-full px-2 py-1.5 text-sm rounded-md border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
+              />
+            </div>
+            <div className="flex gap-1.5 shrink-0">
+              <button
+                type="submit"
+                disabled={!newTask.title.trim()}
+                className="px-3 py-1.5 text-xs font-medium bg-accent-blue text-white rounded-md hover:opacity-90 transition-opacity duration-150 disabled:opacity-40"
+              >
+                Add Task
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddForm(false);
+                  setNewTask({ title: '', priority: 'medium', dueDate: '', description: '', tags: '' });
+                }}
+                className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors duration-150"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+          <div className="flex items-end gap-3 max-w-2xl mt-2">
+            <div className="flex-1">
+              <label className="block text-[11px] text-muted-foreground mb-1">Description</label>
+              <input
+                type="text"
+                value={newTask.description}
+                onChange={(e) => setNewTask((p) => ({ ...p, description: e.target.value }))}
+                placeholder="Optional description"
+                className="w-full px-2.5 py-1.5 text-sm rounded-md border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
+              />
+            </div>
+            <div className="flex-1">
+              <label className="block text-[11px] text-muted-foreground mb-1">Tags</label>
+              <input
+                type="text"
+                value={newTask.tags}
+                onChange={(e) => setNewTask((p) => ({ ...p, tags: e.target.value }))}
+                placeholder="design, frontend (comma-separated)"
+                className="w-full px-2.5 py-1.5 text-sm rounded-md border bg-card text-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
+              />
+            </div>
+          </div>
+        </form>
+      )}
+
+      {/* Board */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden">
         <DndContext
           sensors={sensors}
@@ -281,16 +399,13 @@ export default function KanbanBoard() {
           onDragOver={handleDragOver}
           onDragEnd={handleDragEnd}
         >
-          <div className="flex gap-4 p-6 h-full min-w-max">
+          <div className="flex gap-3 p-5 h-full min-w-max">
             {columns.map((col) => (
               <Column
                 key={col._id}
                 column={col}
                 tasks={getTasksForColumn(col._id)}
-                onAddTask={handleAddTask}
                 onOpenDetail={setDetailTaskId}
-                onUpdateColumn={handleUpdateColumn}
-                onDeleteColumn={handleDeleteColumn}
               />
             ))}
           </div>

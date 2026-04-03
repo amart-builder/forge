@@ -106,8 +106,8 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
 
   if (done) {
     return (
-      <div className={`bg-card rounded-xl border border-border overflow-hidden ${borderClass} opacity-60 transition-all duration-300`}>
-        <div className="p-5 flex items-center justify-center text-muted-foreground text-sm">
+      <div className={`bg-card rounded-lg border overflow-hidden ${borderClass} opacity-50 transition-all duration-300`}>
+        <div className="p-4 flex items-center justify-center text-muted-foreground text-xs">
           Done
         </div>
       </div>
@@ -115,65 +115,63 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
   }
 
   return (
-    <div className={`bg-card rounded-xl border border-border overflow-hidden ${borderClass} transition-all duration-200`}>
-      <div className="p-5">
-        {/* Header row */}
-        <div className="flex items-start gap-3 mb-3">
-          <div className={`w-9 h-9 rounded-full ${hashColor(senderName)} flex items-center justify-center text-white text-xs font-semibold shrink-0`}>
+    <div className={`bg-card rounded-lg border overflow-hidden ${borderClass} transition-all duration-200`}>
+      <div className="p-4">
+        {/* Header */}
+        <div className="flex items-start gap-3 mb-2">
+          <div className={`w-8 h-8 rounded-full ${hashColor(senderName)} flex items-center justify-center text-white text-[10px] font-semibold shrink-0`}>
             {initials(senderName)}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-0.5">
-              <span className="font-semibold text-foreground truncate">{senderName}</span>
-              <span className="text-xs text-muted-foreground truncate">{senderEmail}</span>
+              <span className="text-sm font-medium text-foreground truncate">{senderName}</span>
+              <span className="text-[11px] text-muted-foreground truncate">{senderEmail}</span>
             </div>
-            <p className="font-semibold text-foreground">{email.subject}</p>
+            <p className="text-sm font-medium text-foreground">{email.subject}</p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${badge.className}`}>
+            <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${badge.className}`}>
               {badge.label}
             </span>
-            <span className="text-xs text-muted-foreground">{formatTime(email.createdAt)}</span>
+            <span className="text-[10px] text-muted-foreground">{formatTime(email.createdAt)}</span>
           </div>
         </div>
 
-        {/* Summary */}
-        <p className="text-muted-foreground text-sm mb-2 line-clamp-2">{email.summary}</p>
+        <p className="text-muted-foreground text-[13px] mb-1.5 line-clamp-2">{email.summary}</p>
 
-        {/* Context */}
         {email.context && (
-          <p className="text-xs text-muted-foreground italic mb-3">{email.context}</p>
+          <p className="text-[11px] text-muted-foreground italic mb-2">{email.context}</p>
         )}
 
-        {/* Draft area for reply/follow_up */}
+        {/* Draft area */}
         {hasDraft && email.draftResponse && (
-          <div className="mt-3">
+          <div className="mt-2">
             <button
               onClick={() => setDraftExpanded(!draftExpanded)}
-              className="text-xs text-accent-blue font-medium hover:underline mb-2"
+              className="text-[11px] text-accent-blue font-medium hover:underline mb-1.5"
             >
               {draftExpanded ? 'Hide draft' : 'Show draft response'}
             </button>
             {draftExpanded && (
-              <div className="mt-2">
+              <div className="mt-1.5">
                 <textarea
                   value={localDraft}
                   onChange={(e) => setLocalDraft(e.target.value)}
-                  className="w-full border border-border rounded-lg p-3 text-sm bg-muted/50 resize-none focus:outline-none focus:ring-1 focus:ring-accent-blue text-foreground"
+                  className="w-full border rounded-md p-2.5 text-sm bg-muted/30 resize-none focus:outline-none focus:ring-1 focus:ring-accent-blue/40 text-foreground"
                   rows={5}
                 />
-                <div className="flex items-center gap-2 mt-2">
+                <div className="flex items-center gap-2 mt-1.5">
                   <button
                     onClick={handleSend}
                     disabled={loading}
-                    className="px-4 py-1.5 bg-accent-blue text-white text-sm font-medium rounded-lg hover:bg-accent-blue/90 transition-colors duration-150 disabled:opacity-50"
+                    className="px-3 py-1.5 bg-accent-blue text-white text-xs font-medium rounded-md hover:opacity-90 transition-opacity duration-150 disabled:opacity-50"
                   >
                     Send
                   </button>
                   <button
                     onClick={() => handleAction('dismissed')}
                     disabled={loading}
-                    className="px-4 py-1.5 bg-muted text-muted-foreground text-sm font-medium rounded-lg hover:bg-muted/80 transition-colors duration-150 disabled:opacity-50"
+                    className="px-3 py-1.5 bg-muted text-muted-foreground text-xs font-medium rounded-md hover:bg-muted/80 transition-colors duration-150 disabled:opacity-50"
                   >
                     Dismiss
                   </button>
@@ -183,13 +181,13 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
           </div>
         )}
 
-        {/* Action buttons for non-draft actions */}
+        {/* Action buttons for non-draft */}
         {!hasDraft && (
-          <div className="flex items-center gap-2 mt-3">
+          <div className="flex items-center gap-2 mt-2">
             <button
               onClick={() => handleAction('actioned')}
               disabled={loading}
-              className="px-4 py-1.5 bg-accent-blue text-white text-sm font-medium rounded-lg hover:bg-accent-blue/90 transition-colors duration-150 disabled:opacity-50"
+              className="px-3 py-1.5 bg-accent-blue text-white text-xs font-medium rounded-md hover:opacity-90 transition-opacity duration-150 disabled:opacity-50"
             >
               {email.recommendedAction === 'archive' ? 'Archive' :
                email.recommendedAction === 'flag' ? 'Flag' :
@@ -198,27 +196,27 @@ export default function ActionCard({ email, onAction, onSend, onDraftChange }: A
             <button
               onClick={() => handleAction('dismissed')}
               disabled={loading}
-              className="px-4 py-1.5 bg-muted text-muted-foreground text-sm font-medium rounded-lg hover:bg-muted/80 transition-colors duration-150 disabled:opacity-50"
+              className="px-3 py-1.5 bg-muted text-muted-foreground text-xs font-medium rounded-md hover:bg-muted/80 transition-colors duration-150 disabled:opacity-50"
             >
               Dismiss
             </button>
           </div>
         )}
 
-        {/* Draft-having items without a draft yet still get action buttons */}
+        {/* Draft-having items without a draft yet */}
         {hasDraft && !email.draftResponse && (
-          <div className="flex items-center gap-2 mt-3">
+          <div className="flex items-center gap-2 mt-2">
             <button
               onClick={() => handleAction('actioned')}
               disabled={loading}
-              className="px-4 py-1.5 bg-accent-blue text-white text-sm font-medium rounded-lg hover:bg-accent-blue/90 transition-colors duration-150 disabled:opacity-50"
+              className="px-3 py-1.5 bg-accent-blue text-white text-xs font-medium rounded-md hover:opacity-90 transition-opacity duration-150 disabled:opacity-50"
             >
               {email.recommendedAction === 'reply' ? 'Reply' : 'Follow Up'}
             </button>
             <button
               onClick={() => handleAction('dismissed')}
               disabled={loading}
-              className="px-4 py-1.5 bg-muted text-muted-foreground text-sm font-medium rounded-lg hover:bg-muted/80 transition-colors duration-150 disabled:opacity-50"
+              className="px-3 py-1.5 bg-muted text-muted-foreground text-xs font-medium rounded-md hover:bg-muted/80 transition-colors duration-150 disabled:opacity-50"
             >
               Dismiss
             </button>

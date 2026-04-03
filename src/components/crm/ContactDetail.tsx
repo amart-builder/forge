@@ -8,6 +8,7 @@ import { Id } from '../../../convex/_generated/dataModel';
 interface ContactDetailProps {
   contactId: string | null;
   onContactDeleted: () => void;
+  onClose: () => void;
 }
 
 const activityIcons: Record<string, string> = {
@@ -27,8 +28,8 @@ const activityLabels: Record<string, string> = {
 };
 
 const tierColors: Record<string, string> = {
-  A: 'bg-accent-green text-white',
-  B: 'bg-accent-blue text-white',
+  A: 'bg-accent-green/10 text-accent-green',
+  B: 'bg-accent-blue/10 text-accent-blue',
   C: 'bg-muted text-muted-foreground',
 };
 
@@ -67,6 +68,7 @@ function formatTimestamp(ts: number): string {
 export default function ContactDetail({
   contactId,
   onContactDeleted,
+  onClose,
 }: ContactDetailProps) {
   const typedId = contactId as Id<"contacts"> | null;
 
@@ -88,7 +90,6 @@ export default function ContactDetail({
   const [tagInput, setTagInput] = useState('');
   const [showActivities, setShowActivities] = useState(true);
   const [showNotes, setShowNotes] = useState(true);
-  const [showDetails, setShowDetails] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showAddActivity, setShowAddActivity] = useState(false);
   const [newActivity, setNewActivity] = useState({
@@ -189,40 +190,46 @@ export default function ContactDetail({
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="p-6 space-y-6">
+      <div className="p-5 space-y-5">
         {/* Header */}
-        <div className="flex items-start gap-4">
+        <div className="flex items-start gap-3">
           <div
-            className={`w-14 h-14 rounded-xl flex items-center justify-center text-white text-lg font-semibold shrink-0 ${getInitialsColor(contact.name)}`}
+            className={`w-10 h-10 rounded-lg flex items-center justify-center text-white text-sm font-semibold shrink-0 ${getInitialsColor(contact.name)}`}
           >
             {getInitials(contact.name)}
           </div>
           <div className="flex-1 min-w-0">
-            <h2 className="text-lg font-semibold text-foreground">{contact.name}</h2>
+            <h2 className="text-sm font-semibold text-foreground">{contact.name}</h2>
             {(contact.company || contact.role) && (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-[11px] text-muted-foreground">
                 {contact.role}{contact.role && contact.company ? ' at ' : ''}{contact.company}
               </p>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             {!editing && (
               <button
                 onClick={startEdit}
-                className="px-3 py-1.5 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-border transition-colors duration-150"
+                className="px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground border rounded-md hover:bg-muted transition-colors duration-150"
               >
                 Edit
               </button>
             )}
+            <button
+              onClick={onClose}
+              className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground rounded transition-colors duration-150"
+            >
+              &times;
+            </button>
           </div>
         </div>
 
-        {/* Quick Info Grid */}
+        {/* Quick Info */}
         {!editing && (
-          <div className="grid grid-cols-2 gap-3 text-sm">
+          <div className="grid grid-cols-2 gap-2 text-[12px]">
             {contact.email && (
               <div>
-                <span className="text-muted-foreground">Email</span>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Email</span>
                 <a
                   href={`mailto:${contact.email}`}
                   className="block text-accent-blue hover:underline truncate"
@@ -233,33 +240,33 @@ export default function ContactDetail({
             )}
             {contact.phone && (
               <div>
-                <span className="text-muted-foreground">Phone</span>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Phone</span>
                 <p className="text-foreground">{contact.phone}</p>
               </div>
             )}
             {contact.linkedin && (
               <div>
-                <span className="text-muted-foreground">LinkedIn</span>
-                <p className="text-foreground">{contact.linkedin}</p>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">LinkedIn</span>
+                <p className="text-foreground truncate">{contact.linkedin}</p>
               </div>
             )}
             {contact.location && (
               <div>
-                <span className="text-muted-foreground">Location</span>
+                <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Location</span>
                 <p className="text-foreground">{contact.location}</p>
               </div>
             )}
           </div>
         )}
 
-        {/* Tier Badge */}
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Tier:</span>
+        {/* Tier */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] text-muted-foreground mr-1">Tier</span>
           {tiers.map((t) => (
             <button
               key={t}
               onClick={() => updateTier(t)}
-              className={`px-2.5 py-0.5 text-xs font-semibold rounded-full transition-all duration-150 ${
+              className={`px-2 py-0.5 text-[10px] font-semibold rounded transition-all duration-150 ${
                 contact.tier === t
                   ? tierColors[t]
                   : 'bg-muted/50 text-muted-foreground hover:bg-muted'
@@ -271,51 +278,49 @@ export default function ContactDetail({
         </div>
 
         {/* Tags */}
-        <div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {contact.tags.map((tag) => (
-              <span
-                key={tag}
-                className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-muted text-muted-foreground"
-              >
-                {tag}
-                <button
-                  onClick={() => removeTag(tag)}
-                  className="text-muted-foreground hover:text-foreground ml-0.5"
-                >
-                  x
-                </button>
-              </span>
-            ))}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                addTag(tagInput);
-              }}
-              className="inline-flex"
+        <div className="flex flex-wrap items-center gap-1">
+          {contact.tags.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded bg-muted text-muted-foreground"
             >
-              <input
-                type="text"
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
-                placeholder="+ tag"
-                className="w-16 px-1.5 py-0.5 text-xs rounded border border-transparent focus:border-border focus:outline-none bg-transparent text-muted-foreground"
-              />
-            </form>
-          </div>
+              {tag}
+              <button
+                onClick={() => removeTag(tag)}
+                className="text-muted-foreground hover:text-foreground ml-0.5"
+              >
+                x
+              </button>
+            </span>
+          ))}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              addTag(tagInput);
+            }}
+            className="inline-flex"
+          >
+            <input
+              type="text"
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              placeholder="+ tag"
+              className="w-14 px-1 py-0.5 text-[10px] rounded border border-transparent focus:border-border focus:outline-none bg-transparent text-muted-foreground"
+            />
+          </form>
         </div>
 
         {/* How We Met */}
         {!editing && contact.howWeMet && (
-          <div className="text-sm">
-            <span className="text-muted-foreground">How we know each other:</span>
+          <div className="text-[12px]">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">How we met</span>
             <p className="text-foreground mt-0.5">{contact.howWeMet}</p>
           </div>
         )}
 
         {/* Edit Form */}
         {editing && (
-          <div className="space-y-3 p-4 bg-muted/50 rounded-xl">
+          <div className="space-y-2.5 p-3 bg-muted/30 rounded-lg border">
             {([
               ['name', 'Name'],
               ['email', 'Email'],
@@ -327,36 +332,36 @@ export default function ContactDetail({
               ['howWeMet', 'How we met'],
             ] as const).map(([field, label]) => (
               <div key={field}>
-                <label className="text-xs text-muted-foreground">{label}</label>
+                <label className="text-[10px] text-muted-foreground">{label}</label>
                 <input
                   type="text"
                   value={editForm[field] ?? ''}
                   onChange={(e) =>
                     setEditForm((prev) => ({ ...prev, [field]: e.target.value }))
                   }
-                  className="w-full px-3 py-1.5 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
+                  className="w-full px-2.5 py-1.5 text-sm rounded-md border bg-card focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
                 />
               </div>
             ))}
             <div>
-              <label className="text-xs text-muted-foreground">Notes</label>
+              <label className="text-[10px] text-muted-foreground">Notes</label>
               <textarea
                 value={editForm.notes ?? ''}
                 onChange={(e) => setEditForm((prev) => ({ ...prev, notes: e.target.value }))}
                 rows={3}
-                className="w-full px-3 py-1.5 text-sm rounded-lg border border-border bg-background focus:outline-none focus:ring-2 focus:ring-accent-blue/30 resize-none"
+                className="w-full px-2.5 py-1.5 text-sm rounded-md border bg-card focus:outline-none focus:ring-1 focus:ring-accent-blue/40 resize-none"
               />
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-1.5">
               <button
                 onClick={saveEdit}
-                className="px-4 py-1.5 text-sm font-medium text-white bg-accent-blue rounded-lg hover:opacity-90 transition-opacity duration-150"
+                className="px-3 py-1.5 text-xs font-medium text-white bg-accent-blue rounded-md hover:opacity-90 transition-opacity duration-150"
               >
                 Save
               </button>
               <button
                 onClick={() => setEditing(false)}
-                className="px-4 py-1.5 text-sm font-medium text-foreground bg-muted rounded-lg hover:bg-border transition-colors duration-150"
+                className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
               >
                 Cancel
               </button>
@@ -365,32 +370,32 @@ export default function ContactDetail({
         )}
 
         {/* Activity Timeline */}
-        <div className="border border-border rounded-xl">
+        <div className="border rounded-lg">
           <button
             onClick={() => setShowActivities(!showActivities)}
-            className="w-full px-4 py-2.5 flex items-center justify-between text-sm font-semibold text-foreground hover:bg-muted/50 rounded-t-xl transition-colors duration-150"
+            className="w-full px-3 py-2 flex items-center justify-between text-[11px] font-semibold text-foreground hover:bg-muted/30 rounded-t-lg transition-colors duration-150"
           >
-            <span>Activity Timeline ({activities.length})</span>
-            <span className="text-muted-foreground">{showActivities ? '\u25B2' : '\u25BC'}</span>
+            <span>Activity ({activities.length})</span>
+            <span className="text-muted-foreground text-[10px]">{showActivities ? '\u25B2' : '\u25BC'}</span>
           </button>
           {showActivities && (
-            <div className="border-t border-border">
-              <div className="px-4 py-2 border-b border-border">
+            <div className="border-t">
+              <div className="px-3 py-2 border-b">
                 {!showAddActivity ? (
                   <button
                     onClick={() => setShowAddActivity(true)}
-                    className="text-sm text-accent-blue hover:underline"
+                    className="text-[11px] text-accent-blue hover:underline"
                   >
                     + Add Activity
                   </button>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <select
                       value={newActivity.activityType}
                       onChange={(e) =>
                         setNewActivity((prev) => ({ ...prev, activityType: e.target.value }))
                       }
-                      className="px-2 py-1 text-sm rounded border border-border bg-background"
+                      className="px-2 py-1 text-xs rounded-md border bg-card"
                     >
                       {Object.entries(activityLabels).map(([value, label]) => (
                         <option key={value} value={value}>{label}</option>
@@ -403,7 +408,7 @@ export default function ContactDetail({
                       onChange={(e) =>
                         setNewActivity((prev) => ({ ...prev, title: e.target.value }))
                       }
-                      className="w-full px-2 py-1 text-sm rounded border border-border bg-background focus:outline-none focus:ring-2 focus:ring-accent-blue/30"
+                      className="w-full px-2 py-1 text-xs rounded-md border bg-card focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
                     />
                     <textarea
                       placeholder="Content (optional)"
@@ -412,12 +417,12 @@ export default function ContactDetail({
                         setNewActivity((prev) => ({ ...prev, content: e.target.value }))
                       }
                       rows={2}
-                      className="w-full px-2 py-1 text-sm rounded border border-border bg-background focus:outline-none focus:ring-2 focus:ring-accent-blue/30 resize-none"
+                      className="w-full px-2 py-1 text-xs rounded-md border bg-card focus:outline-none focus:ring-1 focus:ring-accent-blue/40 resize-none"
                     />
-                    <div className="flex gap-2">
+                    <div className="flex gap-1.5">
                       <button
                         onClick={addActivity}
-                        className="px-3 py-1 text-sm font-medium text-white bg-accent-blue rounded-lg hover:opacity-90 transition-opacity duration-150"
+                        className="px-2.5 py-1 text-[11px] font-medium text-white bg-accent-blue rounded-md hover:opacity-90 transition-opacity duration-150"
                       >
                         Add
                       </button>
@@ -426,7 +431,7 @@ export default function ContactDetail({
                           setShowAddActivity(false);
                           setNewActivity({ activityType: 'note', title: '', content: '' });
                         }}
-                        className="px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
+                        className="px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground"
                       >
                         Cancel
                       </button>
@@ -435,25 +440,25 @@ export default function ContactDetail({
                 )}
               </div>
               {activities.length === 0 ? (
-                <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-                  No activities recorded yet.
+                <div className="px-3 py-5 text-center text-[11px] text-muted-foreground">
+                  No activities yet.
                 </div>
               ) : (
-                <div className="divide-y divide-border">
+                <div className="divide-y">
                   {activities.map((act) => (
-                    <div key={act._id} className="px-4 py-3 flex items-start gap-3">
-                      <span className="text-base shrink-0 mt-0.5" title={activityLabels[act.activityType] || act.activityType}>
+                    <div key={act._id} className="px-3 py-2 flex items-start gap-2">
+                      <span className="text-sm shrink-0 mt-0.5" title={activityLabels[act.activityType] || act.activityType}>
                         {activityIcons[act.activityType] || '\u2022'}
                       </span>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-foreground">{act.title}</span>
-                          <span className="text-xs text-muted-foreground whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[12px] font-medium text-foreground">{act.title}</span>
+                          <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                             {formatTimestamp(act.createdAt)}
                           </span>
                         </div>
                         {act.content && (
-                          <p className="text-sm text-muted-foreground mt-0.5 line-clamp-2">
+                          <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
                             {act.content}
                           </p>
                         )}
@@ -467,101 +472,46 @@ export default function ContactDetail({
         </div>
 
         {/* Notes */}
-        <div className="border border-border rounded-xl">
+        <div className="border rounded-lg">
           <button
             onClick={() => setShowNotes(!showNotes)}
-            className="w-full px-4 py-2.5 flex items-center justify-between text-sm font-semibold text-foreground hover:bg-muted/50 rounded-t-xl transition-colors duration-150"
+            className="w-full px-3 py-2 flex items-center justify-between text-[11px] font-semibold text-foreground hover:bg-muted/30 rounded-t-lg transition-colors duration-150"
           >
             <span>Notes</span>
-            <span className="text-muted-foreground">{showNotes ? '\u25B2' : '\u25BC'}</span>
+            <span className="text-muted-foreground text-[10px]">{showNotes ? '\u25B2' : '\u25BC'}</span>
           </button>
           {showNotes && (
-            <div className="border-t border-border px-4 py-3">
+            <div className="border-t px-3 py-2.5">
               {contact.notes ? (
-                <p className="text-sm text-foreground whitespace-pre-wrap">{contact.notes}</p>
+                <p className="text-[12px] text-foreground whitespace-pre-wrap">{contact.notes}</p>
               ) : (
-                <p className="text-sm text-muted-foreground">No notes.</p>
+                <p className="text-[11px] text-muted-foreground">No notes.</p>
               )}
             </div>
           )}
         </div>
 
-        {/* Details */}
-        <div className="border border-border rounded-xl">
-          <button
-            onClick={() => setShowDetails(!showDetails)}
-            className="w-full px-4 py-2.5 flex items-center justify-between text-sm font-semibold text-foreground hover:bg-muted/50 rounded-t-xl transition-colors duration-150"
-          >
-            <span>Details</span>
-            <span className="text-muted-foreground">{showDetails ? '\u25B2' : '\u25BC'}</span>
-          </button>
-          {showDetails && (
-            <div className="border-t border-border px-4 py-3">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <span className="text-muted-foreground">Created</span>
-                  <p className="text-foreground">{formatTimestamp(contact.createdAt)}</p>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Updated</span>
-                  <p className="text-foreground">{formatTimestamp(contact.updatedAt)}</p>
-                </div>
-                {contact.lastContactDate && (
-                  <div>
-                    <span className="text-muted-foreground">Last Contact</span>
-                    <p className="text-foreground">{contact.lastContactDate}</p>
-                  </div>
-                )}
-                {contact.email && (
-                  <div>
-                    <span className="text-muted-foreground">Email</span>
-                    <p className="text-foreground">{contact.email}</p>
-                  </div>
-                )}
-                {contact.phone && (
-                  <div>
-                    <span className="text-muted-foreground">Phone</span>
-                    <p className="text-foreground">{contact.phone}</p>
-                  </div>
-                )}
-                {contact.linkedin && (
-                  <div>
-                    <span className="text-muted-foreground">LinkedIn</span>
-                    <p className="text-foreground">{contact.linkedin}</p>
-                  </div>
-                )}
-                {contact.location && (
-                  <div>
-                    <span className="text-muted-foreground">Location</span>
-                    <p className="text-foreground">{contact.location}</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
         {/* Delete */}
-        <div className="pt-2 border-t border-border">
+        <div className="pt-2 border-t">
           {!showDeleteConfirm ? (
             <button
               onClick={() => setShowDeleteConfirm(true)}
-              className="text-sm text-accent-red hover:underline"
+              className="text-[11px] text-accent-red hover:underline"
             >
               Delete Contact
             </button>
           ) : (
-            <div className="flex items-center gap-3">
-              <span className="text-sm text-foreground">Delete this contact and all data?</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-foreground">Delete this contact?</span>
               <button
                 onClick={deleteContact}
-                className="px-3 py-1 text-sm font-medium text-white bg-accent-red rounded-lg hover:opacity-90 transition-opacity duration-150"
+                className="px-2.5 py-1 text-[11px] font-medium text-white bg-accent-red rounded-md hover:opacity-90 transition-opacity duration-150"
               >
                 Yes, Delete
               </button>
               <button
                 onClick={() => setShowDeleteConfirm(false)}
-                className="px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
+                className="px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground"
               >
                 Cancel
               </button>

@@ -26,23 +26,26 @@ export default function TabNav() {
   }
 
   return (
-    <nav className="flex items-center gap-1 px-4 py-2.5 bg-card border-b border-border transition-colors duration-200" aria-label="Main navigation">
-      <span className="text-base font-semibold tracking-tight mr-4 text-foreground">Forge</span>
-      <div className="flex items-center gap-1">
+    <nav className="flex items-center gap-1 px-5 h-11 bg-card border-b transition-colors duration-200" aria-label="Main navigation">
+      <span className="text-sm font-semibold tracking-tight mr-5 text-foreground">Forge</span>
+      <div className="flex items-center h-full">
         {tabs.map((tab) => {
           const isActive = pathname.startsWith(tab.href);
           return (
             <Link
               key={tab.href}
               href={tab.href}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-150 ${
+              className={`relative px-3 h-full flex items-center text-sm font-medium transition-colors duration-150 ${
                 isActive
-                  ? 'bg-foreground text-background shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                  ? 'text-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
               aria-current={isActive ? 'page' : undefined}
             >
               {tab.name}
+              {isActive && (
+                <span className="absolute bottom-0 left-1 right-1 h-[2px] bg-foreground rounded-full" />
+              )}
             </Link>
           );
         })}
@@ -50,11 +53,11 @@ export default function TabNav() {
       <div className="ml-auto">
         <button
           onClick={toggleTheme}
-          className="w-8 h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors duration-150"
+          className="w-7 h-7 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors duration-150"
           aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
         >
           {dark ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="5" />
               <line x1="12" y1="1" x2="12" y2="3" />
               <line x1="12" y1="21" x2="12" y2="23" />
@@ -66,7 +69,7 @@ export default function TabNav() {
               <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
             </svg>
           ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
             </svg>
           )}

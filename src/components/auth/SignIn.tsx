@@ -29,15 +29,15 @@ export default function SignIn() {
     <div className="flex items-center justify-center h-screen bg-background">
       <div className="w-full max-w-sm mx-4">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-semibold text-foreground">Forge</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <h1 className="text-xl font-semibold text-foreground">Forge</h1>
+          <p className="text-xs text-muted-foreground mt-1">
             {mode === "signIn" ? "Sign in to continue" : "Create your account"}
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1">
+            <label className="block text-[11px] font-medium text-muted-foreground mb-1">
               Email
             </label>
             <input
@@ -45,13 +45,13 @@ export default function SignIn() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full px-3 py-2 text-sm border border-border rounded-lg outline-none focus:ring-2 focus:ring-accent-blue/30 bg-card text-foreground"
+              className="w-full px-3 py-2 text-sm border rounded-md outline-none focus:ring-1 focus:ring-accent-blue/40 bg-card text-foreground"
               placeholder="you@example.com"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-muted-foreground mb-1">
+            <label className="block text-[11px] font-medium text-muted-foreground mb-1">
               Password
             </label>
             <input
@@ -59,25 +59,25 @@ export default function SignIn() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="w-full px-3 py-2 text-sm border border-border rounded-lg outline-none focus:ring-2 focus:ring-accent-blue/30 bg-card text-foreground"
+              className="w-full px-3 py-2 text-sm border rounded-md outline-none focus:ring-1 focus:ring-accent-blue/40 bg-card text-foreground"
               placeholder="••••••••"
             />
           </div>
 
           {error && (
-            <p className="text-sm text-accent-red">{error}</p>
+            <p className="text-xs text-accent-red">{error}</p>
           )}
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2 text-sm font-medium bg-foreground text-background rounded-lg hover:opacity-90 transition-opacity duration-150 disabled:opacity-50"
+            className="w-full py-2 text-sm font-medium bg-foreground text-background rounded-md hover:opacity-90 transition-opacity duration-150 disabled:opacity-50"
           >
             {loading ? "..." : mode === "signIn" ? "Sign In" : "Sign Up"}
           </button>
         </form>
 
-        <p className="text-center text-xs text-muted-foreground mt-4">
+        <p className="text-center text-[11px] text-muted-foreground mt-4">
           {mode === "signIn" ? (
             <>
               No account?{" "}

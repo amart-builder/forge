@@ -13,6 +13,12 @@ export const create = mutation({
   args: {
     title: v.string(),
     columnId: v.id("columns"),
+    description: v.optional(v.string()),
+    priority: v.optional(
+      v.union(v.literal("low"), v.literal("medium"), v.literal("high")),
+    ),
+    dueDate: v.optional(v.string()),
+    tags: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const tasksInColumn = await ctx.db
@@ -25,9 +31,10 @@ export const create = mutation({
     return await ctx.db.insert("tasks", {
       title: args.title,
       columnId: args.columnId,
-      description: "",
-      priority: "medium",
-      tags: [],
+      description: args.description ?? "",
+      priority: args.priority ?? "medium",
+      dueDate: args.dueDate,
+      tags: args.tags ?? [],
       position: tasksInColumn.length,
       createdAt: now,
       updatedAt: now,

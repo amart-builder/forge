@@ -23,9 +23,9 @@ interface TaskCardProps {
 }
 
 const priorityColors: Record<string, string> = {
-  high: 'bg-accent-red/15 text-accent-red',
-  medium: 'bg-accent-orange/15 text-accent-orange',
-  low: 'bg-accent-green/15 text-accent-green',
+  high: 'bg-accent-red/10 text-accent-red',
+  medium: 'bg-accent-orange/10 text-accent-orange',
+  low: 'bg-accent-green/10 text-accent-green',
 };
 
 function formatDate(dateStr: string): string {
@@ -60,19 +60,42 @@ export default function TaskCard({
       {...(isOverlay ? {} : attributes)}
       {...(isOverlay ? {} : listeners)}
       onClick={() => onOpenDetail(task._id)}
-      className={`bg-card rounded-lg border p-3 cursor-pointer transition-all duration-200 hover:shadow-md ${
+      className={`bg-card rounded-md border p-2.5 cursor-pointer transition-all duration-150 hover:border-muted-foreground/30 ${
         isOverlay
-          ? 'shadow-xl scale-[1.02] rotate-[2deg]'
+          ? 'shadow-lg scale-[1.02] rotate-[2deg]'
           : isDragging
-            ? 'ring-2 ring-accent-blue/30 border-dashed'
+            ? 'ring-1 ring-accent-blue/30 border-dashed'
             : ''
       }`}
     >
-      <p className="text-sm font-medium leading-snug">{task.title}</p>
+      {/* Tags row */}
+      {task.tags.length > 0 && (
+        <div className="flex gap-1 mb-1.5 flex-wrap">
+          {task.tags.slice(0, 2).map((tag) => (
+            <span
+              key={tag}
+              className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded"
+            >
+              {tag}
+            </span>
+          ))}
+          {task.tags.length > 2 && (
+            <span className="text-[10px] text-muted-foreground">+{task.tags.length - 2}</span>
+          )}
+        </div>
+      )}
+
+      <p className="text-[13px] font-medium leading-snug text-foreground">{task.title}</p>
+
+      {task.description && (
+        <p className="text-[11px] text-muted-foreground mt-1 line-clamp-2 leading-relaxed">
+          {task.description}
+        </p>
+      )}
 
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
         <span
-          className={`text-[11px] font-medium px-1.5 py-0.5 rounded-full ${
+          className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
             priorityColors[task.priority] ?? priorityColors.medium
           }`}
         >
@@ -80,24 +103,11 @@ export default function TaskCard({
         </span>
 
         {task.dueDate && (
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-[10px] text-muted-foreground">
             {formatDate(task.dueDate)}
           </span>
         )}
       </div>
-
-      {task.tags.length > 0 && (
-        <div className="flex gap-1 mt-2 flex-wrap">
-          {task.tags.map((tag) => (
-            <span
-              key={tag}
-              className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded"
-            >
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

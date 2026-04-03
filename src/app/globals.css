@@ -3,31 +3,31 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  --background: #FAFAF9;
-  --foreground: #1C1C1E;
+  --background: #FAFAF8;
+  --foreground: #1A1A1A;
   --card: #FFFFFF;
-  --border: #E5E5E4;
-  --muted: #F5F5F4;
-  --muted-foreground: #78716C;
-  --accent-blue: #007AFF;
-  --accent-green: #34C759;
-  --accent-red: #FF3B30;
-  --accent-orange: #FF9500;
-  --accent-yellow: #FFCC00;
+  --border: #E8E5E0;
+  --muted: #F3F1EE;
+  --muted-foreground: #8A8580;
+  --accent-blue: #2C6FEF;
+  --accent-green: #2FA668;
+  --accent-red: #E5534B;
+  --accent-orange: #D4842C;
+  --accent-yellow: #C4971A;
 }
 
 .dark {
-  --background: #1A1A1A;
-  --foreground: #E5E5E5;
-  --card: #2A2A2A;
-  --border: #3A3A3A;
-  --muted: #2A2A2A;
-  --muted-foreground: #A0A0A0;
-  --accent-blue: #0A84FF;
-  --accent-green: #30D158;
-  --accent-red: #FF453A;
-  --accent-orange: #FF9F0A;
-  --accent-yellow: #FFD60A;
+  --background: #1A1917;
+  --foreground: #E8E5E0;
+  --card: #242320;
+  --border: #3A3835;
+  --muted: #2A2926;
+  --muted-foreground: #9A9590;
+  --accent-blue: #5B9AFF;
+  --accent-green: #4ADE80;
+  --accent-red: #FF6B6B;
+  --accent-orange: #FFAA44;
+  --accent-yellow: #FFD666;
 }
 
 @theme inline {
