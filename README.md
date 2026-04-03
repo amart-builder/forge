@@ -249,9 +249,9 @@ Replace SQLite with Convex (convex.dev) for a fully reactive, real-time backend.
 - **Best for:** Power users who want the most responsive experience, or users building custom automations on top of Forge
 - **Setup:** `npx convex dev` to initialize, migrate schema to Convex format, replace API routes with Convex queries/mutations. See convex.dev/quickstart/nextjs
 
-Ask the user: *"Forge stores your tasks, contacts, and email data. The simplest option is local-only storage on this Mac Mini. If you want to access it from other devices too, we can use Supabase (cloud Postgres) or Convex (real-time reactive backend). Which would you prefer?"*
+Ask the user: *"Forge stores your tasks, contacts, and email data. The recommended option is Convex — it gives you real-time sync, reactive UI, and a great free tier. If you prefer something simpler, we can use local-only SQLite or cloud Postgres via Supabase. What sounds best?"*
 
-Default to SQLite if the user isn't sure or doesn't want to decide now — they can always migrate later.
+Default to **Convex** if the user isn't sure or doesn't want to decide. It's the best experience and free to start.
 
 ## API Reference
 
