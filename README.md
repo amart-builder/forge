@@ -145,7 +145,62 @@ curl -X POST http://localhost:3200/api/contacts/import \
 
 Or they can click "Import CSV" in the CRM tab to upload manually.
 
-### 7. Verify Setup
+### 7. Network Cadence & Outreach Drafter (Post-Setup)
+
+After Forge is running and contacts are imported, ask the user:
+
+> "Would you like to set up automatic outreach drafting? I can help you stay on top of your network by drafting check-in messages for contacts you haven't talked to in a while."
+
+If the user says yes:
+
+**Step 1: Assign contact cadences.** Walk through the CRM contacts with the user. For each contact (or in bulk by tier), ask how often they want to stay in touch:
+
+- **Tier A (Inner Circle):** Every 1-2 weeks — close relationships, key business partners, investors
+- **Tier B (Active Network):** Every 2-4 weeks — collaborators, warm contacts, regular business relationships  
+- **Tier C (Extended Network):** Every 1-3 months — loose connections, past colleagues, conference contacts
+- **Custom:** The user can set a specific cadence per contact (e.g., "every 10 days", "monthly")
+
+Update each contact's tier in Forge:
+```bash
+curl -X PATCH http://localhost:3200/api/contacts/<id> \
+  -H 'Content-Type: application/json' \
+  -d '{"tier": "A"}'
+```
+
+The user can also do this directly in the CRM tab by clicking on a contact and changing their tier.
+
+**Step 2: Set up the outreach drafter cron.** Create an OpenClaw cron that runs daily (e.g., 10am on weekdays). The cron should:
+
+1. Query all contacts from Forge: `GET http://localhost:3200/api/contacts`
+2. For each contact, check `last_contact_date` against their tier's cadence:
+   - Tier A: flag if >14 days since last contact
+   - Tier B: flag if >28 days since last contact  
+   - Tier C: flag if >60 days since last contact
+3. For flagged contacts, generate a personalized outreach draft using Opus reasoning:
+   - Consider: relationship context, last conversation topic, any shared interests, recent news about them or their company
+   - The draft should feel natural and human — not a form letter
+4. Post the draft as an email triage item in Forge:
+   ```bash
+   curl -X POST http://localhost:3200/api/emails/triage \
+     -H 'Content-Type: application/json' \
+     -d '{
+       "sender_name": "<contact name>",
+       "sender_email": "<contact email>",
+       "subject": "Outreach: <contact name>",
+       "summary": "It has been X days since your last contact. Here is a suggested check-in.",
+       "context": "<relationship context from CRM>",
+       "recommended_action": "reply",
+       "draft_response": "<your generated outreach message>",
+       "priority": 2
+     }'
+   ```
+5. The user reviews and sends (or edits) from the Email tab — drafts are never sent automatically.
+
+The cron schedule: `0 10 * * 1-5` (10am Mon-Fri, user's timezone)
+
+**Alternative: Manual tier assignment.** If the user prefers, they can skip the walkthrough and assign tiers at their own pace through the CRM tab. The outreach drafter cron will start working as soon as contacts have tiers and last_contact_dates.
+
+### 8. Verify Setup
 
 ```bash
 # Check Forge is running
