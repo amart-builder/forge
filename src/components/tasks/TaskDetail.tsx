@@ -60,6 +60,7 @@ export default function TaskDetail({
   const removeTask = useMutation(api.tasks.remove);
 
   const backdropRef = useRef<HTMLDivElement>(null);
+  const mouseDownTargetRef = useRef<EventTarget | null>(null);
 
   useEffect(() => {
     setTitle(task.title);
@@ -70,8 +71,18 @@ export default function TaskDetail({
     setColumnId(task.columnId);
   }, [task]);
 
+  // Only close if BOTH mousedown and mouseup (click) happened on the backdrop.
+  // This prevents accidental close when drag-selecting text inside the modal
+  // and releasing the mouse outside the modal boundary.
+  function handleBackdropMouseDown(e: React.MouseEvent) {
+    mouseDownTargetRef.current = e.target;
+  }
+
   function handleBackdropClick(e: React.MouseEvent) {
-    if (e.target === backdropRef.current) {
+    if (
+      e.target === backdropRef.current &&
+      mouseDownTargetRef.current === backdropRef.current
+    ) {
       onClose();
     }
   }
@@ -116,6 +127,7 @@ export default function TaskDetail({
   return (
     <div
       ref={backdropRef}
+      onMouseDown={handleBackdropMouseDown}
       onClick={handleBackdropClick}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 dark:bg-black/40 backdrop-blur-sm"
     >
