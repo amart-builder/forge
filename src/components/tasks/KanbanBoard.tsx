@@ -276,7 +276,6 @@ export default function KanbanBoard() {
       {/* Header */}
       <div className="flex items-center gap-3 px-5 py-2.5 border-b transition-colors duration-200">
         <h1 className="text-sm font-semibold text-foreground">Tasks</h1>
-        <span className="text-xs text-muted-foreground tabular-nums">{totalTasks}</span>
 
         <div className="ml-4 flex items-center gap-2 flex-1">
           <div className="relative max-w-[240px] flex-1">
@@ -292,13 +291,6 @@ export default function KanbanBoard() {
               className="w-full pl-8 pr-3 py-1.5 text-xs rounded-md border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent-blue/40"
             />
           </div>
-        </div>
-
-        {/* Filter tab */}
-        <div className="flex items-center gap-1">
-          <span className="px-2.5 py-1 text-xs font-medium bg-foreground text-background rounded-md">
-            All ({totalTasks})
-          </span>
         </div>
 
         <button
