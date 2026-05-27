@@ -128,7 +128,7 @@ When no email items: "Your inbox is clear. The email handler runs 3x daily durin
 - `meeting_notes` table: id, contact_id, date, attendees (JSON), summary, action_items (JSON), source_email_id, created_at
 
 ### Contact Creation
-- Manual: "Add Contact" button → form
+- Manual: "Add Contact" button -> form
 - Auto-create: email triage cron creates contacts for new senders
 - Import: CSV upload support
 

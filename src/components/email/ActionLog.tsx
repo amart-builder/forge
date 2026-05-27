@@ -1,11 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { Id } from '../../../convex/_generated/dataModel';
 
 export interface EmailAction {
-  _id: Id<'emailActions'>;
-  emailItemId: Id<'emailItems'>;
+  _id: string;
+  emailItemId: string;
   actionType: string;
   description?: string;
   createdAt: number;

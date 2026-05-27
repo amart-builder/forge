@@ -1,8 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useMutation } from 'convex/react';
-import { api } from '../../../convex/_generated/api';
 
 interface ColumnData {
   _id: string;
@@ -18,10 +16,23 @@ interface TaskData {
   priority: 'low' | 'medium' | 'high';
   dueDate?: string;
   tags: string[];
+  status?: 'open' | 'done' | 'archived';
+  blocked: boolean;
   position: number;
   createdAt: number;
   updatedAt: number;
 }
+
+type UpdateTaskInput = {
+  columnId?: string | null;
+  title?: string;
+  description?: string;
+  priority?: 'low' | 'medium' | 'high';
+  dueDate?: string | null;
+  tags?: string[];
+  position?: number;
+  status?: 'open' | 'done' | 'archived';
+};
 
 interface TaskDetailProps {
   taskId: string;
@@ -29,6 +40,8 @@ interface TaskDetailProps {
   columns: ColumnData[];
   onClose: () => void;
   onDeleted: (id: string) => void;
+  onSaveTask: (patch: UpdateTaskInput) => Promise<void>;
+  onDeleteTask: () => Promise<void>;
 }
 
 function formatTimestamp(epoch: number): string {
@@ -41,23 +54,36 @@ function formatTimestamp(epoch: number): string {
   });
 }
 
+function isBlockedTag(tag: string): boolean {
+  return tag.trim().toLowerCase() === 'blocked';
+}
+
+function visibleTags(tags: string[]): string[] {
+  return tags.filter((tag) => !isBlockedTag(tag));
+}
+
+function tagsWithBlockedFlag(tags: string[], blocked: boolean): string[] {
+  const tagsWithoutFlag = visibleTags(tags);
+  return blocked ? [...tagsWithoutFlag, 'blocked'] : tagsWithoutFlag;
+}
+
 export default function TaskDetail({
   taskId,
   task,
   columns,
   onClose,
   onDeleted,
+  onSaveTask,
+  onDeleteTask,
 }: TaskDetailProps) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? '');
   const [priority, setPriority] = useState(task.priority);
   const [dueDate, setDueDate] = useState(task.dueDate ?? '');
-  const [tagsStr, setTagsStr] = useState(task.tags.join(', '));
+  const [tagsStr, setTagsStr] = useState(visibleTags(task.tags).join(', '));
   const [columnId, setColumnId] = useState(task.columnId);
+  const [blocked, setBlocked] = useState(task.blocked);
   const [saving, setSaving] = useState(false);
-
-  const updateTask = useMutation(api.tasks.update);
-  const removeTask = useMutation(api.tasks.remove);
 
   const backdropRef = useRef<HTMLDivElement>(null);
   const mouseDownTargetRef = useRef<EventTarget | null>(null);
@@ -67,8 +93,9 @@ export default function TaskDetail({
     setDescription(task.description ?? '');
     setPriority(task.priority);
     setDueDate(task.dueDate ?? '');
-    setTagsStr(task.tags.join(', '));
+    setTagsStr(visibleTags(task.tags).join(', '));
     setColumnId(task.columnId);
+    setBlocked(task.blocked);
   }, [task]);
 
   // Only close if BOTH mousedown and mouseup (click) happened on the backdrop.
@@ -95,14 +122,13 @@ export default function TaskDetail({
         .map((s) => s.trim())
         .filter(Boolean);
 
-      await updateTask({
-        id: taskId as any,
+      await onSaveTask({
         title,
         description,
         priority,
         dueDate: dueDate || null,
-        tags,
-        columnId: columnId as any,
+        tags: tagsWithBlockedFlag(tags, blocked),
+        columnId,
       });
 
       onClose();
@@ -117,7 +143,7 @@ export default function TaskDetail({
     if (!confirm('Delete this task? This cannot be undone.')) return;
 
     try {
-      await removeTask({ id: taskId as any });
+      await onDeleteTask();
       onDeleted(taskId);
     } catch (err) {
       console.error('Failed to delete task:', err);
@@ -203,6 +229,16 @@ export default function TaskDetail({
               className="w-full px-2.5 py-2 text-sm border rounded-md outline-none focus:ring-1 focus:ring-accent-blue/40 bg-background text-foreground"
             />
           </div>
+
+          <label className="flex items-center gap-2 rounded-md border bg-background px-2.5 py-2 text-sm">
+            <input
+              type="checkbox"
+              checked={blocked}
+              onChange={(e) => setBlocked(e.target.checked)}
+              className="h-4 w-4 accent-[var(--accent-orange)]"
+            />
+            <span className="text-foreground">Blocked</span>
+          </label>
 
           <div>
             <label className="block text-[11px] text-muted-foreground mb-1">Tags (comma-separated)</label>

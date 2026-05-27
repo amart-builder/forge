@@ -11,6 +11,8 @@ interface TaskData {
   priority: 'low' | 'medium' | 'high';
   dueDate?: string;
   tags: string[];
+  status?: 'open' | 'done' | 'archived';
+  blocked: boolean;
   position: number;
   createdAt: number;
   updatedAt: number;
@@ -19,7 +21,10 @@ interface TaskData {
 interface TaskCardProps {
   task: TaskData;
   onOpenDetail: (taskId: string) => void;
+  onCompleteTask?: (taskId: string) => void | Promise<void>;
+  isDone?: boolean;
   isOverlay?: boolean;
+  isCompleting?: boolean;
 }
 
 const priorityColors: Record<string, string> = {
@@ -33,10 +38,17 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+function visibleTags(tags: string[]): string[] {
+  return tags.filter((tag) => tag.trim().toLowerCase() !== 'blocked');
+}
+
 export default function TaskCard({
   task,
   onOpenDetail,
+  onCompleteTask,
+  isDone = false,
   isOverlay,
+  isCompleting = false,
 }: TaskCardProps) {
   const {
     attributes,
@@ -51,7 +63,21 @@ export default function TaskCard({
     transform: CSS.Translate.toString(transform),
     transition: transition ?? undefined,
     opacity: isDragging ? 0 : 1,
+    touchAction: 'none',
   };
+  const displayTags = visibleTags(task.tags);
+  const showCompleteButton = !isOverlay && !isDone && Boolean(onCompleteTask);
+
+  function handleCompletePointerDown(e: React.PointerEvent<HTMLButtonElement>) {
+    e.stopPropagation();
+  }
+
+  function handleCompleteClick(e: React.MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!onCompleteTask || isCompleting) return;
+    void onCompleteTask(task._id);
+  }
 
   return (
     <div
@@ -59,8 +85,14 @@ export default function TaskCard({
       style={isOverlay ? undefined : style}
       {...(isOverlay ? {} : attributes)}
       {...(isOverlay ? {} : listeners)}
+      role={isOverlay ? undefined : 'group'}
+      aria-label={isOverlay ? undefined : `Task: ${task.title}`}
       onClick={() => onOpenDetail(task._id)}
-      className={`bg-card rounded-md border p-2.5 cursor-pointer transition-all duration-150 hover:border-muted-foreground/30 ${
+      className={`relative bg-card rounded-md border p-2.5 transition-all duration-150 hover:border-muted-foreground/30 ${
+        isOverlay ? '' : 'cursor-grab active:cursor-grabbing'
+      } ${
+        showCompleteButton ? 'pr-8' : ''
+      } ${
         isOverlay
           ? 'shadow-lg scale-[1.02] rotate-[2deg]'
           : isDragging
@@ -68,10 +100,42 @@ export default function TaskCard({
             : ''
       }`}
     >
+      {showCompleteButton && (
+        <button
+          type="button"
+          aria-label={`Mark "${task.title}" done`}
+          title="Mark done"
+          disabled={isCompleting}
+          onPointerDown={handleCompletePointerDown}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={handleCompleteClick}
+          className="absolute right-2 top-2 flex h-5 w-5 cursor-pointer items-center justify-center rounded-full border border-muted-foreground/30 bg-background/95 text-muted-foreground shadow-sm transition-colors duration-150 hover:border-accent-green hover:bg-accent-green/10 hover:text-accent-green focus:outline-none focus:ring-2 focus:ring-accent-green/30 disabled:cursor-wait disabled:opacity-60"
+        >
+          <svg
+            aria-hidden="true"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        </button>
+      )}
+
       {/* Tags row */}
-      {task.tags.length > 0 && (
+      {(task.blocked || displayTags.length > 0) && (
         <div className="flex gap-1 mb-1.5 flex-wrap">
-          {task.tags.slice(0, 2).map((tag) => (
+          {task.blocked && (
+            <span className="text-[10px] font-medium text-accent-orange bg-accent-orange/10 px-1.5 py-0.5 rounded">
+              Blocked
+            </span>
+          )}
+          {displayTags.slice(0, 2).map((tag) => (
             <span
               key={tag}
               className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded"
@@ -79,8 +143,8 @@ export default function TaskCard({
               {tag}
             </span>
           ))}
-          {task.tags.length > 2 && (
-            <span className="text-[10px] text-muted-foreground">+{task.tags.length - 2}</span>
+          {displayTags.length > 2 && (
+            <span className="text-[10px] text-muted-foreground">+{displayTags.length - 2}</span>
           )}
         </div>
       )}

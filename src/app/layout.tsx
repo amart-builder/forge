@@ -5,7 +5,7 @@ import TabNav from "@/components/layout/TabNav";
 
 export const metadata: Metadata = {
   title: "Forge",
-  description: "Tasks, Email & CRM — your local command center",
+  description: "Tasks, Email, and CRM - your local command center",
 };
 
 export default function RootLayout({

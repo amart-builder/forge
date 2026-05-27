@@ -1,0 +1,100 @@
+import { forgeRest } from "../supabase/rest";
+import type { Draft, EmailActionLog, EmailItem, EmailTriageRun } from "./types";
+
+type SendDraftInput = {
+  accountEmail?: string;
+  body: string;
+  messageId?: string;
+  senderEmail?: string;
+  subject?: string;
+  threadId?: string;
+};
+
+export async function listEmailItems(status = "pending"): Promise<EmailItem[]> {
+  return forgeRest<EmailItem[]>("email_items", {
+    requireAuth: true,
+    query: {
+      select: "*",
+      status: `eq.${status}`,
+      order: "received_at.desc.nullslast,created_at.desc",
+    },
+  });
+}
+
+export async function listAllEmailItems(): Promise<EmailItem[]> {
+  return forgeRest<EmailItem[]>("email_items", {
+    requireAuth: true,
+    query: {
+      select: "*",
+      order: "created_at.desc",
+    },
+  });
+}
+
+export async function listDrafts(status = "needs_review"): Promise<Draft[]> {
+  return forgeRest<Draft[]>("drafts", {
+    requireAuth: true,
+    query: {
+      select: "*",
+      status: `eq.${status}`,
+      order: "created_at.desc",
+    },
+  });
+}
+
+export async function listEmailActionLog(): Promise<EmailActionLog[]> {
+  return forgeRest<EmailActionLog[]>("email_action_log", {
+    requireAuth: true,
+    query: {
+      select: "*",
+      order: "created_at.desc",
+      limit: 50,
+    },
+  });
+}
+
+export async function getLatestEmailSummary(): Promise<string> {
+  const rows = await forgeRest<EmailTriageRun[]>("email_triage_runs", {
+    requireAuth: true,
+    query: {
+      select: "id,summary,created_at",
+      order: "created_at.desc",
+      limit: 1,
+    },
+  });
+  return rows[0]?.summary ?? "No triage data yet.";
+}
+
+export async function updateEmailItem(
+  id: string,
+  patch: Partial<EmailItem>,
+): Promise<EmailItem> {
+  const rows = await forgeRest<EmailItem[]>("email_items", {
+    method: "PATCH",
+    query: { id: `eq.${id}` },
+    body: patch,
+  });
+  return rows[0];
+}
+
+export async function updateDraft(id: string, patch: Partial<Draft>): Promise<Draft> {
+  const rows = await forgeRest<Draft[]>("drafts", {
+    method: "PATCH",
+    query: { id: `eq.${id}` },
+    body: patch,
+  });
+  return rows[0];
+}
+
+export async function sendDraftEmail(input: SendDraftInput): Promise<void> {
+  const response = await fetch("/api/email/send-draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || "Failed to send draft.");
+  }
+}

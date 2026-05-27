@@ -1,0 +1,103 @@
+{
+  "agent_run_id": null,
+  "provider": "gmail",
+  "account_email": "alex@edge-fund.io",
+  "summary": "Email triage processed 5 new item(s): 3 need Alex, 1 update, 1 log-only.",
+  "cursor_before": null,
+  "cursor_after": null,
+  "emails": [
+    {
+      "thread_id": "sample-thread-action",
+      "message_id": "sample-message-action",
+      "sender_name": "Taylor Reed",
+      "sender_email": "taylor@example.com",
+      "subject": "Can we move tomorrow's meeting?",
+      "full_body": "Hey Alex,\n\nCould we move tomorrow later in the day? I have a customer call that is going to run into our slot.\n\nTaylor",
+      "body_excerpt": "Could we move tomorrow later in the day?",
+      "summary": "Taylor wants to reschedule tomorrow's meeting.",
+      "context": "Existing meeting is tomorrow.",
+      "classification": "action_item",
+      "recommended_action": "reply",
+      "priority": 1,
+      "received_at": "2026-05-04T16:00:00.000Z",
+      "draft_response": "Taylor - later tomorrow works. I can do 4:00 or 4:30 if either is easier.",
+      "safety_notes": "Alex should verify his calendar before sending."
+    },
+    {
+      "thread_id": "sample-thread-action-no-reply",
+      "message_id": "sample-message-action-no-reply",
+      "sender_name": "Heather Martinelli",
+      "sender_email": "heather@example.com",
+      "subject": "Email access",
+      "full_body": "Your email account is set up.\n\nThe password is in the thread.\n\nHeather",
+      "body_excerpt": "Your email account is set up. The password is in the thread.",
+      "summary": "Heather shared access details for a new email account.",
+      "context": "The message contains a password; handle it as a credential.",
+      "classification": "action_item",
+      "recommended_action": "review",
+      "action_title": "Secure the email account login",
+      "action_requirement": "Open Gmail, retrieve the password safely, store it where Alex manages credentials, and confirm the account works. No reply is needed.",
+      "priority": 1,
+      "received_at": "2026-05-04T16:15:00.000Z"
+    },
+    {
+      "thread_id": "sample-thread-tiding",
+      "message_id": "sample-message-tiding",
+      "sender_name": "Ops Digest",
+      "sender_email": "digest@example.com",
+      "subject": "Weekly investor update received",
+      "full_body": "Portfolio metrics are up this week; no reply required.\n\nRevenue and activation both moved in the right direction.",
+      "body_excerpt": "Portfolio metrics are up this week; no reply required.",
+      "summary": "Investor update had useful metrics but no required response.",
+      "classification": "tiding",
+      "recommended_action": "review",
+      "priority": 2,
+      "received_at": "2026-05-04T16:30:00.000Z"
+    },
+    {
+      "thread_id": "sample-thread-meeting-notes",
+      "message_id": "sample-message-meeting-notes",
+      "sender_name": "Meeting Notes Bot",
+      "sender_email": "notes@example.com",
+      "subject": "Meeting notes: Jordan Lee <> Alex Martin",
+      "full_body": "Gemini meeting notes are ready.\n\nGoogle Doc: https://docs.google.com/document/d/example-meeting-notes\n\nTopics discussed:\n- Fundraising timeline\n- Potential customer intros\n- Follow-up next week\n\nAction items:\n- Alex to send updated deck\n- Jordan to introduce two operators",
+      "body_excerpt": "Gemini meeting notes are ready for Jordan Lee and Alex Martin.",
+      "summary": "Forge filed the meeting notes to Jordan Lee's Attio record and found two possible follow-ups for Alex to review.",
+      "context": "The cron matched Jordan Lee in Attio, appended the meeting notes to that person record, and extracted follow-ups for Alex's judgment.",
+      "classification": "action_item",
+      "recommended_action": "meeting_followups",
+      "action_title": "Review Jordan Lee meeting follow-ups",
+      "action_requirement": "Suggested follow-ups:\n- Send Jordan the updated deck.\n- Decide whether Jordan's two operator intros should become Tasks after he sends names.\n\nDecide which of these should become Tasks; no email reply is needed.",
+      "meeting_notes_url": "https://docs.google.com/document/d/example-meeting-notes",
+      "attio_record_url": "https://app.attio.com/example/person/jordan-lee",
+      "follow_up_tasks": [
+        {
+          "title": "Send Jordan the updated deck",
+          "owner": "Alex",
+          "confidence": "high"
+        },
+        {
+          "title": "Review Jordan's operator intros once he sends names",
+          "owner": "Alex",
+          "confidence": "medium"
+        }
+      ],
+      "priority": 1,
+      "received_at": "2026-05-04T16:45:00.000Z"
+    },
+    {
+      "thread_id": "sample-thread-log",
+      "message_id": "sample-message-log",
+      "sender_name": "Receipt Bot",
+      "sender_email": "receipts@example.com",
+      "subject": "Receipt for subscription",
+      "full_body": "Your receipt is attached.\n\nNo action is required.",
+      "body_excerpt": "Your receipt is attached.",
+      "summary": "Routine receipt logged only.",
+      "classification": "log_only",
+      "recommended_action": "archive",
+      "priority": 3,
+      "received_at": "2026-05-04T17:00:00.000Z"
+    }
+  ]
+}

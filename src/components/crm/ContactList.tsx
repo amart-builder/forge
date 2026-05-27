@@ -1,15 +1,19 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface Contact {
   _id: string;
   name: string;
+  objectType?: 'people' | 'companies';
   email?: string;
   company?: string;
+  role?: string;
   linkedin?: string;
   notes?: string;
   tier: string;
+  relationship?: string;
+  relevant?: string;
   tags: string[];
   lastContactDate?: string;
 }
@@ -20,6 +24,7 @@ interface ContactListProps {
   onSelectContact: (id: string) => void;
   sort: string;
   onSort: (sort: string) => void;
+  emptyMessage?: string;
 }
 
 function getInitials(name: string): string {
@@ -55,15 +60,18 @@ const tierColors: Record<string, string> = {
   C: 'bg-muted text-muted-foreground',
 };
 
-type ColumnKey = 'name' | 'company' | 'email' | 'linkedin' | 'notes' | 'tier' | 'tags' | 'lastContactDate';
+type ColumnKey = 'name' | 'type' | 'company' | 'role' | 'email' | 'linkedin' | 'notes' | 'tier' | 'relationship' | 'tags' | 'lastContactDate';
 
 const ALL_COLUMNS: { key: ColumnKey; label: string; defaultVisible: boolean }[] = [
   { key: 'name', label: 'Name', defaultVisible: true },
+  { key: 'type', label: 'Type', defaultVisible: true },
   { key: 'company', label: 'Company', defaultVisible: true },
+  { key: 'role', label: 'Role', defaultVisible: true },
   { key: 'email', label: 'Email', defaultVisible: true },
   { key: 'linkedin', label: 'LinkedIn', defaultVisible: true },
   { key: 'notes', label: 'Notes', defaultVisible: true },
   { key: 'tier', label: 'Tier', defaultVisible: true },
+  { key: 'relationship', label: 'Relationship', defaultVisible: true },
   { key: 'tags', label: 'Tags', defaultVisible: true },
   { key: 'lastContactDate', label: 'Last Contact', defaultVisible: true },
 ];
@@ -74,12 +82,29 @@ export default function ContactList({
   onSelectContact,
   sort,
   onSort,
+  emptyMessage = 'No contacts yet. Add your first contact to get started.',
 }: ContactListProps) {
   const [visibleCols, setVisibleCols] = useState<Set<ColumnKey>>(
     new Set(ALL_COLUMNS.filter((c) => c.defaultVisible).map((c) => c.key))
   );
   const [showColMenu, setShowColMenu] = useState(false);
   const [checkedRows, setCheckedRows] = useState<Set<string>>(new Set());
+  const columnMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handlePointerDown(event: PointerEvent) {
+      if (
+        showColMenu &&
+        columnMenuRef.current &&
+        !columnMenuRef.current.contains(event.target as Node)
+      ) {
+        setShowColMenu(false);
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [showColMenu]);
 
   function toggleColumn(key: ColumnKey) {
     setVisibleCols((prev) => {
@@ -112,11 +137,21 @@ export default function ContactList({
   function handleSort(key: string) {
     if (key === 'name') onSort('name');
     else if (key === 'company') onSort('company');
+    else if (key === 'role') onSort('role');
+    else if (key === 'tier') onSort('tier');
+    else if (key === 'relationship') onSort('relationship');
     else if (key === 'lastContactDate') onSort('last_contact_date');
   }
 
   function getSortArrow(key: string) {
-    const mapping: Record<string, string> = { name: 'name', company: 'company', lastContactDate: 'last_contact_date' };
+    const mapping: Record<string, string> = {
+      name: 'name',
+      company: 'company',
+      role: 'role',
+      tier: 'tier',
+      relationship: 'relationship',
+      lastContactDate: 'last_contact_date',
+    };
     return sort === mapping[key] ? ' \u2193' : '';
   }
 
@@ -124,7 +159,7 @@ export default function ContactList({
     <div className="flex flex-col h-full">
       {/* Column visibility toggle */}
       <div className="px-4 py-1.5 border-b flex items-center justify-end">
-        <div className="relative">
+        <div className="relative" ref={columnMenuRef}>
           <button
             onClick={() => setShowColMenu(!showColMenu)}
             className="px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground border rounded-md hover:bg-muted transition-colors duration-150"
@@ -156,7 +191,7 @@ export default function ContactList({
       <div className="flex-1 overflow-auto">
         {contacts.length === 0 ? (
           <div className="px-4 py-12 text-center text-muted-foreground text-sm">
-            No contacts yet. Add your first contact to get started.
+            {emptyMessage}
           </div>
         ) : (
           <table className="w-full text-[13px]">
@@ -171,7 +206,7 @@ export default function ContactList({
                   />
                 </th>
                 {columns.map((col) => {
-                  const sortable = ['name', 'company', 'lastContactDate'].includes(col.key);
+                  const sortable = ['name', 'company', 'role', 'tier', 'relationship', 'lastContactDate'].includes(col.key);
                   return (
                     <th
                       key={col.key}
@@ -227,6 +262,16 @@ export default function ContactList({
                             {contact.company || '--'}
                           </span>
                         )}
+                        {col.key === 'type' && (
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                            {contact.objectType === 'companies' ? 'Company' : 'Person'}
+                          </span>
+                        )}
+                        {col.key === 'role' && (
+                          <span className="text-muted-foreground truncate max-w-[160px] block text-[11px]">
+                            {contact.role || '--'}
+                          </span>
+                        )}
                         {col.key === 'email' && (
                           <span className="text-muted-foreground truncate max-w-[180px] block">
                             {contact.email || '--'}
@@ -245,6 +290,11 @@ export default function ContactList({
                         {col.key === 'tier' && (
                           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${tierColors[contact.tier] ?? tierColors.C}`}>
                             {contact.tier}
+                          </span>
+                        )}
+                        {col.key === 'relationship' && (
+                          <span className="text-muted-foreground truncate max-w-[140px] block text-[11px]">
+                            {contact.relationship || contact.relevant || '--'}
                           </span>
                         )}
                         {col.key === 'tags' && (

@@ -4,12 +4,33 @@ export const seed = mutation({
   args: {},
   handler: async (ctx) => {
     const existing = await ctx.db.query("columns").collect();
-    if (existing.length > 0) return;
-
     const now = Date.now();
-    await ctx.db.insert("columns", { name: "Not Started", position: 0, createdAt: now });
-    await ctx.db.insert("columns", { name: "In Progress", position: 1, createdAt: now });
-    await ctx.db.insert("columns", { name: "Blocked", position: 2, createdAt: now });
-    await ctx.db.insert("columns", { name: "Done", position: 3, createdAt: now });
+    const columns = [
+      { name: "Not Started", aliases: ["Not Started", "To Do"], position: 0 },
+      {
+        name: "Needs to happen today",
+        aliases: ["Needs to happen today", "Must happen today", "Today"],
+        position: 10,
+      },
+      {
+        name: "In Flight / Waiting",
+        aliases: ["In Flight / Waiting", "In Progress"],
+        position: 20,
+      },
+      { name: "Done", aliases: ["Done", "Completed"], position: 30 },
+    ];
+
+    for (const column of columns) {
+      const exists = existing.some((existingColumn) =>
+        column.aliases.includes(existingColumn.name),
+      );
+      if (!exists) {
+        await ctx.db.insert("columns", {
+          name: column.name,
+          position: column.position,
+          createdAt: now,
+        });
+      }
+    }
   },
 });

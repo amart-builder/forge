@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "email:triage": "node scripts/run-email-triage.mjs"
   },
   "dependencies": {
     "@auth/core": "^0.37.4",

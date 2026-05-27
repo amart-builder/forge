@@ -2,27 +2,39 @@
 
 interface SummaryCardProps {
   summary: string;
-  pendingCount: number;
-  actionedCount: number;
-  dismissedCount: number;
+  actionCount: number;
+  updateCount: number;
+  handledCount: number;
+  draftCount: number;
 }
 
 export default function SummaryCard({
   summary,
-  pendingCount,
-  actionedCount,
-  dismissedCount,
+  actionCount,
+  updateCount,
+  handledCount,
+  draftCount,
 }: SummaryCardProps) {
   return (
     <div className="bg-card rounded-lg border p-5 transition-colors duration-200">
-      <p className="text-[11px] text-muted-foreground mb-1 uppercase tracking-wide">
-        Summary
-      </p>
-      <p className="text-sm text-foreground mb-3">{summary}</p>
-      <div className="flex items-center gap-5">
-        <Stat label="Pending" value={pendingCount} color="text-accent-orange" />
-        <Stat label="Actioned" value={actionedCount} color="text-accent-green" />
-        <Stat label="Dismissed" value={dismissedCount} color="text-muted-foreground" />
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] text-muted-foreground mb-1 uppercase tracking-wide">
+            Latest triage
+          </p>
+          <p className="text-sm text-foreground">{summary}</p>
+        </div>
+        {actionCount > 0 && (
+          <div className="rounded-md bg-accent-red/10 px-2.5 py-1 text-[11px] font-semibold text-accent-red">
+            {actionCount} need Alex
+          </div>
+        )}
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-5">
+        <Stat label="Need Alex" value={actionCount} color="text-accent-red" />
+        <Stat label="Updates" value={updateCount} color="text-accent-orange" />
+        <Stat label="Drafts" value={draftCount} color="text-accent-blue" />
+        <Stat label="Handled" value={handledCount} color="text-accent-green" />
       </div>
     </div>
   );
