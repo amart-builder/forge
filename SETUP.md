@@ -117,9 +117,53 @@ There is one honest limit to repeat here: the channel only delivers while a Clau
 
 Write `data/forge-reminders.json` (gitignored, stays on the Mac) with the channel and target, as shown in step 5d. Voice notes (step 5f) use the same channel.
 
-## 6. Email and CRM
+## 6. Set up Email
 
-**Email** and **CRM** are configured in their own setup steps, after a short interview about the user's accounts and how they like to work. Until then, the Email tab opens to an empty inbox and the CRM tab shows a short note.
+Forge's Email tab is a triage queue, not a second inbox. It surfaces the emails that actually need the user, each with a short summary and a ready-to-edit draft reply, so they can clear their inbox from inside Forge instead of living in Gmail. This step connects their email and fills that queue.
+
+How it works once set up: the user says "check my email" (or you run it on a schedule), you pull new mail, sort it, draft replies in their voice, and post the cards into the Email tab. The user reviews, edits, and approves. **Nothing is ever sent without their approval.**
+
+> Email connects through Composio, a service that handles the Google sign-in for you. The user makes their own free Composio account, so they own the connection to their own inbox. This is the one part of Forge that talks to an outside service: the connection runs through Composio. The triaged mail and the drafts still live in the local database on their Mac.
+
+**a. Create a Composio account and get an API key (user).**
+
+- Go to https://composio.dev, sign up (it is free), and open the dashboard.
+- Find the API key. Reveal it first (click the eye icon), or you will copy a blank value and get an auth error later. Copy it.
+
+**b. Connect Composio to Claude Code (user, you guiding).**
+
+- In Composio's dashboard, use their "connect to Claude Code" setup and run the command it gives in a terminal. It adds Composio as an MCP server (a set of tools you can call) authenticated with the API key from step a. If the dashboard has no button, add it as an MCP server using the API key per Composio's docs.
+- Restart Claude Code (or `/reload`) so the tools load. Confirm by checking that you now have `COMPOSIO_*` tools available.
+
+**c. Connect their Gmail (you drive, the user clicks).**
+
+- Start the Composio connection flow for the `gmail` toolkit (`COMPOSIO_MANAGE_CONNECTIONS`). It returns a Google sign-in link.
+- Give the user the link as a clickable link. They click it, pick their account, and approve the access.
+- Wait for the connection to report active (`COMPOSIO_WAIT_FOR_CONNECTIONS`). Now you can read and send their mail.
+
+**d. Record the connection (you).** Two small files, both gitignored, both staying on the Mac:
+
+- List the user's Composio connections for the `gmail` toolkit and copy the account `id` (it looks like `gmail_xxxxx`).
+- Write `data/forge-email.json`:
+  ```json
+  { "provider": "gmail", "account_email": "<their gmail address>", "connector": "composio", "connected_account_id": "<gmail_xxxxx>" }
+  ```
+- The Forge app itself needs their Composio API key to send mail. Add it to `.env.local` in the project root (create the file if it is missing):
+  ```
+  COMPOSIO_API_KEY=<their key from step a>
+  ```
+  Never print the key or commit it; `.env.local` is gitignored. Then restart Forge so it loads the key: `launchctl kickstart -k gui/$(id -u)/com.forge.local`.
+
+**e. First triage (you).** Run the `forge-email` skill: pull the last couple of days of inbox, sort it, draft replies, and post the cards into Forge. Then tell the user to open the Email tab and review. Sending a reply works right from the card now: the user edits the draft if needed and clicks Send, and Forge sends it through their Gmail.
+
+**f. The daily loop (tell the user).**
+
+- "Just say 'check my email' and I'll sort your inbox into Forge and draft the replies. You review and approve them in the Email tab, and I send only the ones you approve. I never send anything you have not approved."
+- Same honest limit as reminders (step 5e): this runs when you ask me, while this Mac is awake and a session is up. If you want it to run on its own a few times a day, that needs an always-on Mac (see "Running on more than one device").
+
+## 7. CRM
+
+CRM is set up in its own step, after a short interview about the user's contacts and how they track them. Until then, the CRM tab shows a short note.
 
 ## Running on more than one device
 

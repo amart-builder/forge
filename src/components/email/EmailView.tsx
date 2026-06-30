@@ -378,7 +378,7 @@ function EmailContent({
           <div>
             <h1 className="text-base font-semibold text-foreground">Email</h1>
             <p className="text-xs text-muted-foreground">
-              Personal triage for Alex: reply/decision work first, useful updates second.
+              Reply and decision work first, useful updates second.
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2">
@@ -472,7 +472,7 @@ function QueueButton({
 
 function getEmptyTitle(mode: QueueMode, search: string): string {
   if (search.trim()) return 'No matching emails';
-  if (mode === 'action') return 'No email needs Alex right now';
+  if (mode === 'action') return 'No email needs you right now';
   if (mode === 'updates') return 'No useful updates waiting';
   if (mode === 'handled') return 'No handled email yet';
   return 'No email data yet';

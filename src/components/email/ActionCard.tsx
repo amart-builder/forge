@@ -51,7 +51,7 @@ const ACTION_BADGES: Record<string, { label: string; className: string }> = {
 };
 
 const CLASSIFICATION_BADGES: Record<string, { label: string; className: string }> = {
-  action_item: { label: 'Needs Alex', className: 'bg-accent-red/10 text-accent-red' },
+  action_item: { label: 'Needs you', className: 'bg-accent-red/10 text-accent-red' },
   tiding: { label: 'Update', className: 'bg-accent-orange/10 text-accent-orange' },
   log_only: { label: 'Log', className: 'bg-muted text-muted-foreground' },
 };
@@ -248,7 +248,7 @@ function getActionRequirement(email: EmailItem): string {
   }
 
   if (isMeetingFollowUps(email)) {
-    return 'Review the suggested follow-ups, decide which should become Tasks, then tell Codex what to add to the board. No email reply is needed.';
+    return 'Review the suggested follow-ups, decide which should become Tasks, then tell me what to add to the board. No email reply is needed.';
   }
 
   if (/password|credential|login|access/i.test(text)) {
@@ -294,7 +294,7 @@ export default function ActionCard({ email, onAction, onSendDraft, onCreateTask 
       ? getActionTitle(email)
       : undefined;
   const recommendationDetail = hasDraft
-    ? 'Review the draft below, make any edits, then send it from Forge once Gmail sending is configured.'
+    ? 'Review the draft below, make any edits, then click Send to send it through your Gmail.'
     : isNoReplyAction
       ? getActionRequirement(email)
       : undefined;

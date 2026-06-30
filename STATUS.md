@@ -18,14 +18,14 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-06-30T12:37:20-0400
-- **task:** Tasks step: NL capture skill + native/text reminders
+- **since:** 2026-06-30T13:49:05-0400
+- **task:** Email step: Composio triage skill + send route
 <!-- END active-session -->
 
 ---
 
 **Last updated:** 2026-06-30
-**State:** Two tracks now. (1) Alex's live Forge still runs on the Mac Mini in Supabase mode over Tailscale, unchanged. (2) Jarvis Pro track: Forge is being productized to run fully local on a client's own MacBook (local SQLite, no login, bookmarked localhost:3200, auto-start LaunchAgent). 2026-06-30: the local-first foundation landed and was verified; the Tasks step (natural-language capture skill + native/text reminders) is built, verified, and committed. Voice-note capture is done (opt-in, on-device). Email and CRM client setup are the next steps.
+**State:** Two tracks now. (1) Alex's live Forge still runs on the Mac Mini in Supabase mode over Tailscale, unchanged. (2) Jarvis Pro track: Forge is being productized to run fully local on a client's own MacBook (local SQLite, no login, bookmarked localhost:3200, auto-start LaunchAgent). 2026-06-30: the local-first foundation landed and was verified; the Tasks step (natural-language capture skill + native/text reminders) is built, verified, and committed. Voice-note capture is done (opt-in, on-device). The Email step (Composio-connected triage + reply + send) is built, verified, and committed. CRM client setup is next, then the repo flips public.
 
 ## North Star Goal
 Make Forge the source of truth for Alex's day-to-day execution: tasks, email action items, CRM context, and daily priorities in one operating surface.
@@ -39,7 +39,17 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 
 ## Current State
 
-### 2026-06-30 — Jarvis Pro: Tasks step (natural-language capture + reminders)
+### 2026-06-30 Jarvis Pro: Email step (Composio triage + reply + send)
+- Scope (Alex's calls): connect via Composio, each client uses their OWN Composio account so Alex never holds a client's inbox; v1 = triage + reply + send on the existing Email tab (a triage queue, not a full mailbox). Draft-only: the user always sends.
+- Inbound: new skill `skills/forge-email/SKILL.md`. Pulls new Gmail via the Composio MCP (`GMAIL_FETCH_EMAILS`, `in:inbox after:<cursor>`), dedupes by `message_id`, classifies (action_item / tiding / log_only), drafts replies in the client's voice (their `~/.claude/CLAUDE.md`, falling back to their sent-mail tone), and POSTs cards to `email_items` + `drafts` (+ a one-line `email_triage_runs` summary) over the local REST API. `recommended_action` constrained to the UI vocabulary (reply/follow_up/delegate/flag/review/archive) so cards render right. Cursor in `data/forge-email-state.json` (gitignored); `after:` is date-granular by design, dedupe covers the overlap.
+- Outbound: rewrote `src/app/api/email/send-draft/route.ts` to call Composio's HTTP execute API (`POST backend.composio.dev/api/v3/tools/execute/GMAIL_REPLY_TO_THREAD`, `x-api-key`) instead of the old personal `gog` shell-out. The existing Send button now sends instantly through the client's Gmail with no UI changes. Reads `COMPOSIO_API_KEY` from `.env.local` and `connected_account_id` from `data/forge-email.json` (both gitignored); the key is header-only, never logged or returned.
+- Setup: `SETUP.md` Step 6 "Set up Email" walks the client through a Composio account, connecting the Composio MCP to Claude Code, the one-click Gmail OAuth, writing the config + key, and the first triage. CRM moved to its own Step 7 stub.
+- Productization fixes: genericized hard-coded "Alex"/"Codex" strings in the email components (ActionCard/EmailView/SummaryCard) to "you"/"me"; fixed the stale "once Gmail sending is configured" draft copy; added an in-code warning on the Convex `send` stub (Convex mode does not actually send).
+- Verified 2026-06-30: live Composio Gmail fetch returns the mapped fields; all four email tables + columns exist (source_payload JSON, priority INTEGER); REST write path proven (Tasks step); tsc clean on every touched file. Live send is confirmed at first real use with the client's own key (not testable here without extracting their key, which is not done). Fresh-context review passed after fixes (recommended_action vocabulary, dedupe efficiency + date-cursor note, voice fallback, name leaks, friendlier timeout). One overridden flag: `is_html:false` is a real field in the verified GMAIL_REPLY_TO_THREAD schema, kept as a plain-text guard.
+- Bonus noticed: Composio also has Google Calendar connected, so the Tasks scheduler can become calendar-aware later.
+- Next: CRM step, then flip the repo from private to public for the send-the-link flow.
+
+### 2026-06-30 Jarvis Pro: Tasks step (natural-language capture + reminders)
 - Natural-language capture skill at `skills/forge-task/SKILL.md` (the installer copies it into the client's `~/.claude/skills`). Triggers on "remind me to", "add to my board", etc. Claude picks a due date when none is given (from current task load + the user's CLAUDE.md priorities; calendar once connections are wired in the Email step), writes the task via `POST /api/forge-rest/tasks`, sets the reminder, and replies offering a text reminder.
 - Reminders: three new `tasks` columns (`remind_native` default on, `remind_text` default off, `notified_at`) with an idempotent migration in `db.ts`. New helper `scripts/forge-reminders.mjs` runs every 60s via LaunchAgent `com.forge.reminders`: fires a native macOS notification (osascript) and, if a channel is set in `data/forge-reminders.json` (gitignored), a Telegram (bot API) or iMessage (osascript) text. Atomic claim (`UPDATE ... WHERE notified_at IS NULL`) prevents double-fire across overlapping ticks; date-only due dates resolve to local 9am.
 - Docs split: `README.md` is the user-facing guide; `SETUP.md` is the agent playbook (clone/build/run, the Tasks interview, channel setup, Email/CRM stubs, storage modes). Setup covers the bookmark walkthrough, the "Telegram or iMessage?" interview (writes `data/forge-reminders.json`), honest laptop-vs-always-on messaging (reminders only fire while the Mac is awake unless there is a Mini/VPS), the voice-note opt-in, and a full Telegram/iMessage channel-setup walkthrough verified against the official plugins (BotFather + token + pairing for Telegram; Full Disk Access + allowlist for iMessage). Telegram is recommended for outbound reminders (Bot API); iMessage outbound via AppleScript is best-effort and is Mac-Mini-only (a single Apple ID on a laptop duplicates every message).
@@ -47,7 +57,7 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - Verified 2026-06-30: tsc clean; migration idempotent on fresh + pre-existing DBs; helper end-to-end (fires due-open only, skips future/done/undated, no double-fire on a second run, native notifications actually popped); REST POST stores + returns the reminder fields (booleans + tags round-trip). Fresh-context review passed after fixes (em dashes removed, double-fire race closed, date-only timezone fixed, stale README launchctl command corrected).
 - Voice notes (done, opt-in): `scripts/install-forge-voice.sh` builds an on-device transcription env at `.venv-voice` (gitignored) using mlx-whisper on Apple Silicon (proven on Python 3.14, model `mlx-community/whisper-small.en-mlx`) or faster-whisper on Intel (prefers Python 3.12/3.11, with a plain-English failure message). `scripts/forge-transcribe.sh` turns an audio file into clean text; the `forge-voice-note` skill (Telegram `download_attachment` / iMessage path -> transcribe -> follow forge-task) ships and is installed by `install-forge-local.sh`. Verified: a `say` clip converted to Telegram .ogg transcribed exactly; argv-isolated (injection-safe), stdout clean. Same awake-only limit as text reminders. Fresh-context review passed (only fix: Intel Python compatibility, done).
 
-### 2026-06-30 — Jarvis Pro: local-first re-base (new default)
+### 2026-06-30 Jarvis Pro: local-first re-base (new default)
 - Added a third runtime mode, `local`, and made it the DEFAULT when `NEXT_PUBLIC_FORGE_RUNTIME` is unset. Local mode uses a SQLite file (`data/forge.db`) via better-sqlite3, no login, no cloud. Supabase and Convex remain opt-in.
 - Owner machines unaffected: MacBook and Mini both pin `NEXT_PUBLIC_FORGE_RUNTIME=supabase` in their gitignored `.env.local`, so only fresh clones (clients) get local mode.
 - New `src/lib/local/db.ts` answers `/api/forge-rest/[table]` against SQLite (PostgREST subset: select, multi-col order + nullslast, limit/offset, eq/neq/gt/lt/in/is filters), parameterized + identifier-validated, seeds the 4 default columns on first run.

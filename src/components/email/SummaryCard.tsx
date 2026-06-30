@@ -26,12 +26,12 @@ export default function SummaryCard({
         </div>
         {actionCount > 0 && (
           <div className="rounded-md bg-accent-red/10 px-2.5 py-1 text-[11px] font-semibold text-accent-red">
-            {actionCount} need Alex
+            {actionCount} need you
           </div>
         )}
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-5">
-        <Stat label="Need Alex" value={actionCount} color="text-accent-red" />
+        <Stat label="Need you" value={actionCount} color="text-accent-red" />
         <Stat label="Updates" value={updateCount} color="text-accent-orange" />
         <Stat label="Drafts" value={draftCount} color="text-accent-blue" />
         <Stat label="Handled" value={handledCount} color="text-accent-green" />
