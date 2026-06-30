@@ -15,8 +15,25 @@ import ContactDetail from './ContactDetail';
 import ImportModal from './ImportModal';
 
 export default function CRMView() {
-  if (getRuntimeMode() === 'supabase') return <AttioCRMView />;
+  const mode = getRuntimeMode();
+  if (mode === 'supabase') return <AttioCRMView />;
+  if (mode === 'local') return <LocalCRMPlaceholder />;
   return <ConvexCRMView />;
+}
+
+function LocalCRMPlaceholder() {
+  return (
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="max-w-md rounded-lg border bg-card p-6 text-center">
+        <h1 className="text-base font-semibold text-foreground">CRM</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Your CRM lives right here in Forge, fully on your machine. We will set
+          it up in the CRM step: connect an existing CRM, use the built-in Forge
+          CRM, or build a custom one.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function ConvexCRMView() {

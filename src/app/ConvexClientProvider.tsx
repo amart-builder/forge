@@ -29,6 +29,11 @@ function AuthGate({ children }: { children: ReactNode }) {
 }
 
 export default function ConvexClientProvider({ children }: { children: ReactNode }) {
+  // Local mode: no Convex, no auth gate. The app opens straight to the UI.
+  if (getRuntimeMode() === "local") {
+    return <>{children}</>;
+  }
+
   if (getRuntimeMode() === "supabase" && convex) {
     return <ConvexProvider client={convex}>{children}</ConvexProvider>;
   }

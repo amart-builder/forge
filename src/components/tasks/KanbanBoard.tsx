@@ -142,8 +142,8 @@ const pointerFirstCollisionDetection: CollisionDetection = (args) => {
 };
 
 export default function KanbanBoard() {
-  const mode = getRuntimeMode();
-  if (mode === 'supabase') return <SupabaseKanbanBoard />;
+  // Local and Supabase both use the REST-backed board; only Convex differs.
+  if (getRuntimeMode() !== 'convex') return <SupabaseKanbanBoard />;
   return <ConvexKanbanBoard />;
 }
 

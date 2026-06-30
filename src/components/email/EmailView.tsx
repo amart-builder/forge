@@ -69,7 +69,8 @@ const emptyEmailState: EmailState = {
 };
 
 export default function EmailView() {
-  if (getRuntimeMode() === 'supabase') return <SupabaseEmailView />;
+  // Local and Supabase both use the REST-backed view; only Convex differs.
+  if (getRuntimeMode() !== 'convex') return <SupabaseEmailView />;
   return <ConvexEmailView />;
 }
 

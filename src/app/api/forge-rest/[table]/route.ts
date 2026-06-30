@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getRuntimeMode } from "@/lib/runtime/mode";
+import { handleLocalRest } from "@/lib/local/db";
 
 type RouteContext = {
   params: Promise<{ table: string }>;
@@ -53,25 +55,50 @@ async function handleRequest(
   request: NextRequest,
   context: RouteContext
 ): Promise<NextResponse> {
-  if (!serviceRoleKey) {
-    return new NextResponse("SUPABASE_SERVICE_ROLE_KEY is not configured.", {
-      status: 500,
-    });
-  }
-
   const { table } = await context.params;
   const decodedTable = decodeURIComponent(table);
   const unprefixedTable = stripKnownPrefix(decodedTable);
-
-  if (!ALLOWED_TABLES.has(unprefixedTable)) {
-    return new NextResponse("Unknown Forge table.", { status: 404 });
-  }
 
   const method = request.method;
   const body =
     method === "GET" || method === "HEAD"
       ? undefined
       : await request.text();
+
+  // Local SQLite mode (default): answer from the on-disk database.
+  if (getRuntimeMode() === "local") {
+    try {
+      const result = handleLocalRest(
+        unprefixedTable,
+        method,
+        request.nextUrl.searchParams,
+        body
+      );
+      if (result.status === 204 || result.body === undefined) {
+        return new NextResponse(null, { status: result.status });
+      }
+      if (typeof result.body === "string") {
+        return new NextResponse(result.body, { status: result.status });
+      }
+      return NextResponse.json(result.body, { status: result.status });
+    } catch (err) {
+      return new NextResponse(
+        err instanceof Error ? err.message : "Local database error.",
+        { status: 500 }
+      );
+    }
+  }
+
+  // Cloud (Supabase) mode.
+  if (!serviceRoleKey) {
+    return new NextResponse("SUPABASE_SERVICE_ROLE_KEY is not configured.", {
+      status: 500,
+    });
+  }
+
+  if (!ALLOWED_TABLES.has(unprefixedTable)) {
+    return new NextResponse("Unknown Forge table.", { status: 404 });
+  }
 
   let response: Response;
   try {
