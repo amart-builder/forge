@@ -81,7 +81,13 @@ system_profiler SPHardwareDataType | grep "Model Name"   # "MacBook ..." = lapto
 - **Always-on Mac (a Mac Mini) or a VPS:** reminders and texts work around the clock. Set `always_on` to `true`. Putting Forge on an always-on machine is the multi-device path (see "Need it on more than one device?").
 - Also ask whether they have a second, always-on machine, since only they know that.
 
-**f. Voice notes (ask, optional).** Ask: "Want to send me a voice note on Telegram or iMessage and have me turn it into a task?" If yes, note it. This needs a small on-device transcription tool and is set up in the voice-notes sub-step (next).
+**f. Voice notes (ask, optional).** Ask: "Want to send me a voice note on Telegram or iMessage and have me turn it into a task?" If yes, set it up:
+
+```bash
+bash scripts/install-forge-voice.sh
+```
+
+That installs a small on-device transcription tool (no API key, nothing leaves the Mac; mlx-whisper on Apple Silicon, faster-whisper on Intel) and tests it. After that, a voice note the user sends to Claude on Telegram or iMessage becomes a task automatically. Same limits as text reminders (step e): it only works while the Mac is awake and Claude is reachable on that channel.
 
 ### 6. Email and CRM
 
