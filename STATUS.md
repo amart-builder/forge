@@ -39,6 +39,15 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 
 ## Current State
 
+### 2026-06-30 Jarvis Pro: Email voice honing (humanizer + learned voice.md)
+- Alex's ask: drafts must sound human and sound like the specific user. Two layers: the humanizer skill runs on every draft out of the box, and a learned per-user voice profile shapes the writing.
+- New skill `skills/forge-voice/SKILL.md`: reads the user's own sent mail via Composio (`in:sent`, last 30 to 90 days, widening if sparse), strips quoted chains and skips forwards/one-liners, deduces their voice (greeting/sign-off, rhythm, formality by relationship, phrases, punctuation, length), writes `~/.claude/voice.md`, then runs 2 to 3 live calibration rounds (sample drafts, "sound like you? what would you change?", refine). Re-runnable anytime ("update my voice").
+- `forge-email` drafting now reads `~/.claude/voice.md` (falls back to CLAUDE.md or recent sent mail if absent) and runs every draft through the humanizer skill. No em dashes.
+- Bundled the humanizer skill (MIT, v2.5.1) into the repo at `skills/humanizer/` so a fresh client actually has it; `install-forge-local.sh` refreshes the forge-* skills each run but installs the humanizer only if absent (never clobbers a newer copy the client relies on).
+- SETUP Email step gained "e. Hone their writing voice" before first triage; daily-loop step renumbered to g.
+- voice.md lives at `~/.claude/voice.md` (per-client, outside the repo, reusable for any writing); stores style + short anchors, not whole emails.
+- Verified: no em/en dashes in the new skill or doc edits; voice.md + humanizer references consistent across all three files; installer `bash -n` clean. This auto-generates the client's equivalent of Alex's hand-built `writing-as-alex` + `VOICE.md`. Fresh-context review in progress.
+
 ### 2026-06-30 Jarvis Pro: Email step (Composio triage + reply + send)
 - Scope (Alex's calls): connect via Composio, each client uses their OWN Composio account so Alex never holds a client's inbox; v1 = triage + reply + send on the existing Email tab (a triage queue, not a full mailbox). Draft-only: the user always sends.
 - Inbound: new skill `skills/forge-email/SKILL.md`. Pulls new Gmail via the Composio MCP (`GMAIL_FETCH_EMAILS`, `in:inbox after:<cursor>`), dedupes by `message_id`, classifies (action_item / tiding / log_only), drafts replies in the client's voice (their `~/.claude/CLAUDE.md`, falling back to their sent-mail tone), and POSTs cards to `email_items` + `drafts` (+ a one-line `email_triage_runs` summary) over the local REST API. `recommended_action` constrained to the UI vocabulary (reply/follow_up/delegate/flag/review/archive) so cards render right. Cursor in `data/forge-email-state.json` (gitignored); `after:` is date-granular by design, dedupe covers the overlap.

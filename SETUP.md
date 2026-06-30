@@ -154,9 +154,11 @@ How it works once set up: the user says "check my email" (or you run it on a sch
   ```
   Never print the key or commit it; `.env.local` is gitignored. Then restart Forge so it loads the key: `launchctl kickstart -k gui/$(id -u)/com.forge.local`.
 
-**e. First triage (you).** Run the `forge-email` skill: pull the last couple of days of inbox, sort it, draft replies, and post the cards into Forge. Then tell the user to open the Email tab and review. Sending a reply works right from the card now: the user edits the draft if needed and clicks Send, and Forge sends it through their Gmail.
+**e. Hone their writing voice (you, with the user).** Before drafting real replies, learn how they write. Run the `forge-voice` skill: it reads their own sent mail from the last 30 to 60 days, writes a short voice profile to `~/.claude/voice.md`, then shows them a few sample drafts and tunes it over 2 to 3 rounds until they say it sounds like them. From then on every draft uses that voice, and the humanizer skill runs on every draft to keep it human. It costs the user a few minutes and is the difference between drafts that sound like them and drafts that sound like a bot.
 
-**f. The daily loop (tell the user).**
+**f. First triage (you).** Run the `forge-email` skill: pull the last couple of days of inbox, sort it, draft replies, and post the cards into Forge. Then tell the user to open the Email tab and review. Sending a reply works right from the card now: the user edits the draft if needed and clicks Send, and Forge sends it through their Gmail.
+
+**g. The daily loop (tell the user).**
 
 - "Just say 'check my email' and I'll sort your inbox into Forge and draft the replies. You review and approve them in the Email tab, and I send only the ones you approve. I never send anything you have not approved."
 - Same honest limit as reminders (step 5e): this runs when you ask me, while this Mac is awake and a session is up. If you want it to run on its own a few times a day, that needs an always-on Mac (see "Running on more than one device").

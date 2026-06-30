@@ -63,11 +63,21 @@ How to judge, fast:
   known contact or a stated priority ranks higher.
 
 ### 3. Draft a reply (for action_items that need one)
-Write the reply in the **user's** voice. Read their `~/.claude/CLAUDE.md` for
-tone and match how they actually write: same length, same plainness. If that
-file is thin or missing, match the tone of their own sent mail instead. Do not
-invent facts or commitments. This is a draft for them to review, never sent
-here.
+Write the reply in the **user's** voice:
+
+- Read `~/.claude/voice.md` (built by the `forge-voice` skill) and follow it
+  exactly.
+- If it does not exist yet, fall back to their `~/.claude/CLAUDE.md` tone, or
+  read their last 2 to 3 sent emails to this person and match that. Then suggest
+  they run the `forge-voice` skill so drafts get sharper.
+- Apply the **humanizer** skill's rules to every draft as you write it: no em
+  dashes, no AI vocabulary, vary the rhythm, plain words. In a batch you do not
+  need to invoke the humanizer as a separate pass on each email; for an important
+  reply you can run that one draft through it. If the humanizer skill is not
+  installed, apply its core rules anyway.
+
+Do not invent facts or commitments. This is a draft for them to review, never
+sent here.
 
 ### 4. Write it into Forge (local REST API, no auth)
 For each triaged email, `POST /api/forge-rest/email_items`:

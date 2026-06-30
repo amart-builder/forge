@@ -30,14 +30,23 @@ fi
 
 mkdir -p "$LOG_DIR" "$LA_DIR"
 
-# --- Install the Forge task-capture skill for the user's Claude ---
-# Lets the user say "remind me to..." in plain language and have it land on the
-# board automatically. Safe to re-run; replaces only the Forge skills.
+# --- Install Forge's skills for the user's Claude ---
+# The forge-* skills (task capture, email triage, voice honing, voice notes) are
+# refreshed every run. The bundled humanizer skill is installed only if the user
+# does not already have one, so we never clobber a newer copy they rely on.
 SKILLS_SRC="$REPO_DIR/skills"
 if [ -d "$SKILLS_SRC" ]; then
   mkdir -p "$HOME/.claude/skills"
-  cp -R "$SKILLS_SRC/." "$HOME/.claude/skills/"
-  echo "Installed the Forge task skill into ~/.claude/skills"
+  for skill_dir in "$SKILLS_SRC"/forge-*; do
+    [ -d "$skill_dir" ] || continue
+    rm -rf "$HOME/.claude/skills/$(basename "$skill_dir")"
+    cp -R "$skill_dir" "$HOME/.claude/skills/"
+  done
+  if [ -d "$SKILLS_SRC/humanizer" ] && [ ! -d "$HOME/.claude/skills/humanizer" ]; then
+    cp -R "$SKILLS_SRC/humanizer" "$HOME/.claude/skills/"
+    echo "Installed the humanizer skill into ~/.claude/skills"
+  fi
+  echo "Installed the Forge skills into ~/.claude/skills"
 fi
 
 SERVER_PLIST="$LA_DIR/com.forge.local.plist"
