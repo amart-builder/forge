@@ -18,14 +18,14 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-06-30T11:18:57-0400
-- **task:** Re-base Forge: local SQLite default + no-login local hosting
+- **since:** 2026-06-30T12:37:20-0400
+- **task:** Tasks step: NL capture skill + native/text reminders
 <!-- END active-session -->
 
 ---
 
 **Last updated:** 2026-06-30
-**State:** Two tracks now. (1) Alex's live Forge still runs on the Mac Mini in Supabase mode over Tailscale, unchanged. (2) Jarvis Pro track: Forge is being productized to run fully local on a client's own MacBook (local SQLite, no login, bookmarked localhost:3200, auto-start LaunchAgent). 2026-06-30: the local-first foundation landed and was verified; setup README rewritten. Email and CRM client setup are the next steps.
+**State:** Two tracks now. (1) Alex's live Forge still runs on the Mac Mini in Supabase mode over Tailscale, unchanged. (2) Jarvis Pro track: Forge is being productized to run fully local on a client's own MacBook (local SQLite, no login, bookmarked localhost:3200, auto-start LaunchAgent). 2026-06-30: the local-first foundation landed and was verified; the Tasks step (natural-language capture skill + native/text reminders) is built, verified, and committed. Voice-note capture is the next sub-step; Email and CRM client setup follow.
 
 ## North Star Goal
 Make Forge the source of truth for Alex's day-to-day execution: tasks, email action items, CRM context, and daily priorities in one operating surface.
@@ -39,6 +39,14 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 
 ## Current State
 
+### 2026-06-30 — Jarvis Pro: Tasks step (natural-language capture + reminders)
+- Natural-language capture skill at `skills/forge-task/SKILL.md` (the installer copies it into the client's `~/.claude/skills`). Triggers on "remind me to", "add to my board", etc. Claude picks a due date when none is given (from current task load + the user's CLAUDE.md priorities; calendar once connections are wired in the Email step), writes the task via `POST /api/forge-rest/tasks`, sets the reminder, and replies offering a text reminder.
+- Reminders: three new `tasks` columns (`remind_native` default on, `remind_text` default off, `notified_at`) with an idempotent migration in `db.ts`. New helper `scripts/forge-reminders.mjs` runs every 60s via LaunchAgent `com.forge.reminders`: fires a native macOS notification (osascript) and, if a channel is set in `data/forge-reminders.json` (gitignored), a Telegram (bot API) or iMessage (osascript) text. Atomic claim (`UPDATE ... WHERE notified_at IS NULL`) prevents double-fire across overlapping ticks; date-only due dates resolve to local 9am.
+- Setup (README): bookmark walkthrough, the "Telegram or iMessage?" interview (writes `data/forge-reminders.json`), honest laptop-only-vs-always-on messaging (reminders/texts only fire while the Mac is awake unless there is a Mini/VPS), and a voice-note opt-in placeholder.
+- Native reminders need no setup; text delivery needs a configured channel target. Everything runs only while the Mac is awake.
+- Verified 2026-06-30: tsc clean; migration idempotent on fresh + pre-existing DBs; helper end-to-end (fires due-open only, skips future/done/undated, no double-fire on a second run, native notifications actually popped); REST POST stores + returns the reminder fields (booleans + tags round-trip). Fresh-context review passed after fixes (em dashes removed, double-fire race closed, date-only timezone fixed, stale README launchctl command corrected).
+- NEXT (voice notes): receive a voice note via Telegram/iMessage and turn it into a task. Needs an on-device speech-to-text tool (none installed); recommend mlx-whisper/whisper.cpp, confirm with Alex, make it an opt-in setup step.
+
 ### 2026-06-30 — Jarvis Pro: local-first re-base (new default)
 - Added a third runtime mode, `local`, and made it the DEFAULT when `NEXT_PUBLIC_FORGE_RUNTIME` is unset. Local mode uses a SQLite file (`data/forge.db`) via better-sqlite3, no login, no cloud. Supabase and Convex remain opt-in.
 - Owner machines unaffected: MacBook and Mini both pin `NEXT_PUBLIC_FORGE_RUNTIME=supabase` in their gitignored `.env.local`, so only fresh clones (clients) get local mode.
@@ -48,8 +56,8 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - README rewritten for the local, no-login, bookmark-a-website client model (fixed the dead clone URL, removed stale Mini/OpenClaw/gog setup content).
 - Verified 2026-06-30: 22/22 engine unit tests pass (incl. limit/offset + like wildcard); `tsc --noEmit` clean; isolated `next build` succeeds in default local mode; production server on :3399 with a temp DB seeded 4 columns, created/listed/updated a task (tags round-trip as array, persisted to SQLite), `/tasks` = 200 with zero login markers. Done in an isolated copy so the other running session was untouched.
 - Fresh-context review (separate agent): no blockers, no SQL injection, no auth leak, supabase/convex provably unchanged. Fixed its flagged items: LaunchAgent resolves Node via `process.execPath` + verifies the server booted + uses `launchctl bootstrap/bootout`; `like`/`ilike` translate `*`→`%`; `limit`/`offset` integer-guarded. Re-verified clean.
-- NOT yet committed or pushed (awaiting Alex's go). Open product decision: how to distribute the repo so a client's agent can clone it (the repo is currently private).
-- Notifications (native macOS, even when Forge is closed) planned for the Tasks step.
+- Committed + pushed as `87368f0` on `main` (amart-builder/forge). Repo stays private until the full client setup (Tasks/Email/CRM) is done, then flips to public for the send-the-link flow.
+- Notifications: delivered in the Tasks step above (native macOS while the Mac is awake; optional Telegram/iMessage text).
 
 ### Earlier (Alex's live Mini Forge)
 - Live /tasks returns 200.

@@ -30,8 +30,19 @@ fi
 
 mkdir -p "$LOG_DIR" "$LA_DIR"
 
+# --- Install the Forge task-capture skill for the user's Claude ---
+# Lets the user say "remind me to..." in plain language and have it land on the
+# board automatically. Safe to re-run; replaces only the Forge skills.
+SKILLS_SRC="$REPO_DIR/skills"
+if [ -d "$SKILLS_SRC" ]; then
+  mkdir -p "$HOME/.claude/skills"
+  cp -R "$SKILLS_SRC/." "$HOME/.claude/skills/"
+  echo "Installed the Forge task skill into ~/.claude/skills"
+fi
+
 SERVER_PLIST="$LA_DIR/com.forge.local.plist"
 BACKUP_PLIST="$LA_DIR/com.forge.local.backup.plist"
+REMINDERS_PLIST="$LA_DIR/com.forge.reminders.plist"
 
 # --- Server: next start on localhost:3200 ---
 cat > "$SERVER_PLIST" <<EOF
@@ -97,12 +108,46 @@ cat > "$BACKUP_PLIST" <<EOF
 </plist>
 EOF
 
-# (Re)load both agents with the modern launchctl API (idempotent).
+# --- Reminders: check for due tasks every minute and fire notifications ---
+cat > "$REMINDERS_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.forge.reminders</string>
+  <key>WorkingDirectory</key>
+  <string>$REPO_DIR</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$NODE_REAL</string>
+    <string>$REPO_DIR/scripts/forge-reminders.mjs</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>StandardOutPath</key>
+  <string>$LOG_DIR/forge-reminders.log</string>
+  <key>StandardErrorPath</key>
+  <string>$LOG_DIR/forge-reminders.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$NODE_BIN:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+  </dict>
+</dict>
+</plist>
+EOF
+
+# (Re)load all agents with the modern launchctl API (idempotent).
 UID_NUM="$(id -u)"
 launchctl bootout "gui/$UID_NUM/com.forge.local" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.local.backup" 2>/dev/null || true
+launchctl bootout "gui/$UID_NUM/com.forge.reminders" 2>/dev/null || true
 launchctl bootstrap "gui/$UID_NUM" "$SERVER_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$BACKUP_PLIST"
+launchctl bootstrap "gui/$UID_NUM" "$REMINDERS_PLIST"
 launchctl enable "gui/$UID_NUM/com.forge.local" 2>/dev/null || true
 
 # Confirm the server actually came up. This catches the most common failure:

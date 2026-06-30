@@ -40,6 +40,7 @@ const JSON_COLUMNS: Record<string, string[]> = {
 /** Columns stored as 0/1 but exposed to the app as booleans. */
 const BOOLEAN_COLUMNS: Record<string, string[]> = {
   task_columns: ["is_default"],
+  tasks: ["remind_native", "remind_text"],
 };
 
 /** Default Kanban columns, matching the canonical board in KanbanBoard.tsx. */
@@ -87,6 +88,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   position INTEGER DEFAULT 0,
   status TEXT DEFAULT 'open',
   source_type TEXT DEFAULT 'manual',
+  remind_native INTEGER DEFAULT 1,
+  remind_text INTEGER DEFAULT 0,
+  notified_at TEXT,
   created_at TEXT,
   updated_at TEXT
 );
@@ -199,6 +203,7 @@ function getDb(): Database.Database {
   const conn = new Database(file);
   conn.pragma("journal_mode = WAL");
   conn.exec(SCHEMA);
+  migrate(conn);
   seedDefaults(conn);
   g.__forgeDb = conn;
   return conn;
@@ -206,6 +211,21 @@ function getDb(): Database.Database {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/** Add columns introduced after a database may already exist. Idempotent. */
+function migrate(conn: Database.Database): void {
+  const cols = new Set(
+    (conn.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map(
+      (c) => c.name,
+    ),
+  );
+  if (!cols.has("remind_native"))
+    conn.exec("ALTER TABLE tasks ADD COLUMN remind_native INTEGER DEFAULT 1");
+  if (!cols.has("remind_text"))
+    conn.exec("ALTER TABLE tasks ADD COLUMN remind_text INTEGER DEFAULT 0");
+  if (!cols.has("notified_at"))
+    conn.exec("ALTER TABLE tasks ADD COLUMN notified_at TEXT");
 }
 
 function seedDefaults(conn: Database.Database): void {
