@@ -19,13 +19,13 @@
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
 - **since:** 2026-06-30T13:49:05-0400
-- **task:** Email step: Composio triage skill + send route
+- **task:** PIVOT: email goes invisible (native Gmail drafts); prepped for context clear
 <!-- END active-session -->
 
 ---
 
 **Last updated:** 2026-06-30
-**State:** Two tracks now. (1) Alex's live Forge still runs on the Mac Mini in Supabase mode over Tailscale, unchanged. (2) Jarvis Pro track: Forge is being productized to run fully local on a client's own MacBook (local SQLite, no login, bookmarked localhost:3200, auto-start LaunchAgent). 2026-06-30: the local-first foundation landed and was verified; the Tasks step (natural-language capture skill + native/text reminders) is built, verified, and committed. Voice-note capture is done (opt-in, on-device). The Email step (Composio-connected triage + reply + send) is built, verified, and committed. CRM client setup is next, then the repo flips public.
+**State:** Two tracks now. (1) Alex's live Forge still runs on the Mac Mini in Supabase mode over Tailscale, unchanged. (2) Jarvis Pro track: Forge is being productized to run fully local on a client's own MacBook (local SQLite, no login, bookmarked localhost:3200, auto-start LaunchAgent). 2026-06-30: the local-first foundation landed and was verified; the Tasks step (natural-language capture skill + native/text reminders) is built, verified, and committed. Voice-note capture is done (opt-in, on-device), and email voice honing (learned `~/.claude/voice.md` + humanizer) is built and validated live. The Composio email step (triage + reply + send) was built and committed, but on 2026-06-30 Alex PIVOTED email away from a Forge surface: drafts should land natively in his Gmail inbox instead of a Forge Email tab (see the PIVOT entry at the top of Current State). Next session executes that pivot; CRM and the public flip follow.
 
 ## North Star Goal
 Make Forge the source of truth for Alex's day-to-day execution: tasks, email action items, CRM context, and daily priorities in one operating surface.
@@ -38,6 +38,31 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - Closed tasks require direct evidence before marking done.
 
 ## Current State
+
+### 2026-06-30 PIVOT (START HERE): Email goes invisible, native Gmail drafts, no Forge Email tab
+**Decision (Alex, 2026-06-30):** Drop the separate Forge Email surface. The email skill drafts replies directly into the user's Gmail as native draft replies, sitting in the real thread, ready to edit and send from Gmail (desktop or phone). Forge does not replace email; it pre-writes replies where the user already lives. Forge's surfaces become Tasks + CRM only.
+
+**Why (agreed):** the real want is "the reply already written, waiting where I already am, one tap to send," not a triage queue in a new app. Native drafts win: no new surface to check; native threading/attachments/mobile for free (the Forge Email tab was desktop-only and only while the Mac was awake); less to build and maintain (retire the Email UI AND the Composio send route); lower trust barrier (review in Gmail; a draft never self-sends).
+
+**Keep the one valuable thing we'd otherwise lose (the ranked "what needs you"):** the skill labels threads it touches (e.g. `Forge/Needs-you`, `Forge/FYI`) and posts a one-line digest to Telegram ("drafted 4 replies, 3 FYIs labeled"). The user gets the prioritized view as a Gmail search, not an app tab.
+
+**New architecture:**
+- Background `forge-email` skill (on demand or scheduled): read new mail via Composio, classify, draft in voice (`~/.claude/voice.md` + humanizer), create a native Gmail draft reply IN THREAD, label the thread, post a short digest.
+- User reviews + sends natively in Gmail. No Forge send route.
+
+**Do next session (execute the pivot):**
+1. VERIFY FIRST (real risk): confirm Composio `GMAIL_CREATE_EMAIL_DRAFT` can make a reply draft that nests in the original thread (needs `thread_id` + In-Reply-To/References headers). If it cannot, fall back to Gmail API `drafts.create` with a raw MIME that sets those headers. A draft that starts a NEW thread instead of nesting is the main thing that would break the feel. Test on Alex's own account (alex@joinedgeai.com, connected here).
+2. Refactor `skills/forge-email/SKILL.md`: output target changes from Forge `email_items`/`drafts`/REST to Gmail drafts + label + digest. Keep the classify + draft-in-voice logic (it carries over).
+3. Retire the Forge Email tab (`src/components/email/*`, the `/email` route) or hide behind a flag. Tasks + CRM stay.
+4. Retire `src/app/api/email/send-draft/route.ts` (Composio send) once nothing uses it.
+5. Update `SETUP.md` Email step: no Email tab; drafts land in Gmail, explain the label + digest.
+6. Decide: on-demand vs scheduled background triage; label taxonomy; digest channel (Telegram likely).
+
+**Preserved (NOT wasted by the pivot):**
+- `forge-voice` + `~/.claude/voice.md` + the bundled humanizer. voice.md was validated live: Alex reviewed 3 sample drafts on 2026-06-30 and said they sound like him (calibration passed at round 1). It is his real profile at `~/.claude/voice.md`.
+- The `forge-email` skill's classify + draft logic; the Composio Gmail connection + setup (still needed to read mail + create drafts).
+
+**Status:** nothing built for the pivot yet. Pre-pivot email work stays in git history (`3c93ebb` send route, `2ad26e9` voice). Session lock for `astack/forge` is held by this cowork instance.
 
 ### 2026-06-30 Jarvis Pro: Email voice honing (humanizer + learned voice.md)
 - Alex's ask: drafts must sound human and sound like the specific user. Two layers: the humanizer skill runs on every draft out of the box, and a learned per-user voice profile shapes the writing.
