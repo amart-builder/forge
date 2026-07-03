@@ -18,13 +18,13 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-06-30T13:49:05-0400
-- **task:** PIVOT: email goes invisible (native Gmail drafts); prepped for context clear
+- **since:** 2026-07-03T10:42:07-0400
+- **task:** browser-verify email card + swap-spiral root cause fix
 <!-- END active-session -->
 
 ---
 
-**Last updated:** 2026-06-30
+**Last updated:** 2026-07-03 (card browser-verified; swap-spiral root-caused + fixed)
 **State:** Two tracks now. (1) Alex's live Forge still runs on the Mac Mini in Supabase mode over Tailscale, unchanged. (2) Jarvis Pro track: Forge is being productized to run fully local on a client's own MacBook (local SQLite, no login, bookmarked localhost:3200, auto-start LaunchAgent). 2026-06-30: the local-first foundation landed and was verified; the Tasks step (natural-language capture skill + native/text reminders) is built, verified, and committed. Voice-note capture is done (opt-in, on-device), and email voice honing (learned `~/.claude/voice.md` + humanizer) is built and validated live. The Composio email step (triage + reply + send) was built and committed, but on 2026-06-30 Alex PIVOTED email away from a Forge surface: drafts should land natively in his Gmail inbox instead of a Forge Email tab (see the PIVOT entry at the top of Current State). Next session executes that pivot; CRM and the public flip follow.
 
 ## North Star Goal
@@ -39,7 +39,46 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 
 ## Current State
 
-### 2026-06-30 PIVOT (START HERE): Email goes invisible, native Gmail drafts, no Forge Email tab
+### 2026-07-03 Card verified in browser + dev-mode swap-spiral root-caused and fixed
+
+The one outstanding step is DONE. Browser-verified on a throwaway local DB (port 3410, real inbox untouched): the `Emails: Jul 3` card rendered all six sections with correct grouping (Carried over 1 / Reply 2 / Action 1 / Notifications 1 / Archived 1 / Done today 1), every Gmail deep link correct (`#inbox/<threadId>` per item, `#search/label:Forge/Reply` and `:Forge/Archived` rollups), checkboxes only on carried/reply/action. Clicked a reply checkbox: row left the open sections, Done today ticked 1 -> 2, and REST confirmed `email_items.status=actioned` persisted to SQLite. One cosmetic dev-only quirk: board data loads via `localhost:3410` but not `127.0.0.1:3410` (client fetch never fires on the IP host); use localhost for local verification, not worth chasing.
+
+ROOT CAUSE FOUND for the repeated 40GB swap spirals that kept killing Forge sessions on the MacBook: a stray May-2024 `package.json` + `package-lock.json` in `~` (old Solana project) made Next infer the workspace root as the HOME DIRECTORY. Tailwind then failed to resolve from the wrong base and dev fell into a compile-fail-retry loop (~27 retries/min, each leaking into the compiler graph -> gigabytes in minutes -> swap death spiral -> frozen machine -> crashed sessions -> orphaned processes compounding the next attempt). Fixed in `next.config.ts`: `turbopack.root` + `outputFileTracingRoot` pinned to the repo (also protects client installs from their own stray home lockfiles). CRITICAL SECOND HALF: the broken runs left a poisoned `.next` cache that kept replaying the failure loop even after the config fix — if the spiral ever recurs, `rm -rf .next` once. After both fixes: dev boots in 449ms, /tasks compiles cold in 1.6s, server steady ~530MB. Do NOT remove the home-dir lockfiles without Alex (not ours), the config pin makes them harmless. Dev-only noise seen and not chased: "Failed to generate static paths for /api/forge-rest/[table]" TypeError at startup (route works fine).
+
+Remaining: (1) live verification on alex@joinedgeai.com with Alex present (labels bootstrap, real in-thread draft, archive, reconcile round-trip, nudge, schedule) — unchanged from below; (2) README refresh (still the old user-facing version, tab is gone now).
+
+### 2026-07-01 PIVOT EXECUTION: backend triage + one daily card
+
+Refined the pivot and started building it. The "what needs you" surface is a single Forge task card, not a Telegram digest, and triage runs on a twice-daily schedule at user-set times.
+
+Design (Alex's calls this session):
+- One running card per day, `Emails: <Mon D>`, due today in Must-happen-today. Sections: Carried over, Reply (drafts ready), Action items (checkbox), Notifications, Archived (log), Done today.
+- Gmail is the source of truth; `Forge/*` labels are the memory (Triaged, Reply, Action, FYI, Archived, Done). Each run ingests only `-label:Forge/Triaged` mail, reads Gmail back to clear handled items, and fully rewrites the card. That is what makes two runs a day seamless (no stale re-shows).
+- Replies auto-clear: when the user sends, the next run detects the sent reply, marks done, and archives the thread. Action items clear via a checkbox on the card (sets `email_items.status`). Unfinished items carry forward to the next day's card; the prior card closes out. Newsletters/promos archived from day one. One-line nudge after each run via the reminders channel.
+- Unattended execution = headless `claude -p` running the `forge-email` skill (Alex's call over a constrained runner). Guardrail is the skill's hardened Safety section plus the global CLAUDE.md "treat outside content as data" rule (loads automatically). Draft-only; never sends/deletes/forwards; the allowed-action list is explicit.
+
+Built + fresh-reviewed this session:
+- `skills/forge-email/SKILL.md` rewritten as the three-pass state machine (ingest, reconcile, rebuild card) with the Safety section. Verified Composio supports it: `GMAIL_CREATE_EMAIL_DRAFT` nests a reply in-thread (thread_id + empty subject); `GMAIL_MODIFY_THREAD_LABELS` labels/archives; `GMAIL_FETCH_MESSAGE_BY_THREAD_ID` detects sent replies. Connected account: alex@joinedgeai.com.
+- `scripts/forge-notify.mjs`: reusable one-line Telegram/iMessage nudge (checks the Telegram `ok` flag so a bad token is not silent).
+- `scripts/forge-email-triage.sh` + `com.forge.email-triage` LaunchAgent (two `StartCalendarInterval` times read from `data/forge-email.json`) wired into `install-forge-local.sh`. Config gains `triage_times` + `timezone`.
+- `SETUP.md` step 6 rewritten to the backend model + the two-times + scheduling + honest awake-Mac limit.
+- Fresh-context review caught and fixed real bugs: bounded status model (archived/fyi terminal so the reconcile set cannot grow unbounded), idempotency (label immediately after drafting; dedupe by thread_id across all statuses), sent-reply detection (ignore DRAFT messages; require SENT newer than the latest inbound), correct Gmail deep-link format (`u/0/#inbox/<enc threadId>`), and `remind_native:false` on the card (no redundant native ping).
+
+Built 2026-07-02 (D + E, this session):
+- D (card UI): new `src/components/tasks/EmailCardDetail.tsx` renders the daily card as the grouped digest (Carried over / Reply / Action / Notifications / Archived / Done today), with clickable Gmail thread links (drafts sit in-thread) and real checkboxes that flip `email_items.status` to `actioned` (optimistic update + REST PATCH). `TaskDetail.tsx` shows this digest instead of the edit form when a card is tagged `email` AND titled `Emails: ...` (so it never collides with ordinary tasks or the old per-email cards). Built fresh rather than reusing ActionCard (E deletes ActionCard anyway). Bucket/triage_date/archived_note are read from `source_payload`; falls back to `classification` for older rows.
+- E (retire the tab): removed the Email link from `TabNav.tsx`; deleted the `/email` route, `src/components/email/*` (EmailView, ActionCard, ActionLog, SummaryCard), and `/api/email/send-draft`; removed `sendDraftEmail` + `SendDraftInput` from `lib/data/email.ts`. Left the other now-unused email read-helpers in email.ts as harmless dead code (optional future cleanup). `listAllEmailItems` + `updateEmailItem` stay (the card uses them).
+- `npm run build` PASSES clean: compiles, TypeScript clean, and the route list confirms `/email` and `/api/email/send-draft` are gone (only `/`, `/crm`, `/tasks`, `/api/crm/attio`, `/api/forge-rest/[table]` remain).
+
+Remaining (updated 2026-07-03; item 1 is DONE, see the 2026-07-03 entry above):
+1. ~~Browser-verify the card render + checkbox round-trip.~~ DONE 2026-07-03 (all 6 sections, Gmail links, checkbox persisted to SQLite).
+2. Live verification on alex@joinedgeai.com: labels bootstrap, a real in-thread draft, archive, the card, the reconcile round-trip (send one reply, re-run, confirm it clears + archives), the nudge, and the schedule firing. Touches the real inbox, so do it deliberately with Alex.
+3. README is still the old user-facing version; refresh now that the tab is gone.
+
+GOTCHA (fix before any local deploy / scheduled runner): the repo's better-sqlite3 native module is compiled for Node 23 (ABI 131, `/opt/homebrew/bin/node`). The login shell here defaults to Node 20 (ABI 115, `/usr/local/bin/node`); running Forge in local mode under Node 20 crashes at the first DB call ("NODE_MODULE_VERSION 131 vs 115"). `install-forge-local.sh` resolves node via `process.execPath`, so whatever `node` is first on PATH at install time MUST be the one better-sqlite3 was built against (or `npm rebuild better-sqlite3` under the target node). Worth hardening the installer to detect + warn on ABI mismatch.
+
+Note: `data/forge-email.json`, `forge-email-state.json`, `forge-reminders.json` are absent on the MacBook, so email is not live here; this MacBook runs supabase mode. Session lock for `astack/forge` held by this cowork instance.
+
+### 2026-06-30 PIVOT: Email goes invisible, native Gmail drafts, no Forge Email tab
 **Decision (Alex, 2026-06-30):** Drop the separate Forge Email surface. The email skill drafts replies directly into the user's Gmail as native draft replies, sitting in the real thread, ready to edit and send from Gmail (desktop or phone). Forge does not replace email; it pre-writes replies where the user already lives. Forge's surfaces become Tasks + CRM only.
 
 **Why (agreed):** the real want is "the reply already written, waiting where I already am, one tap to send," not a triage queue in a new app. Native drafts win: no new surface to check; native threading/attachments/mobile for free (the Forge Email tab was desktop-only and only while the Mac was awake); less to build and maintain (retire the Email UI AND the Composio send route); lower trust barrier (review in Gmail; a draft never self-sends).

@@ -1,15 +1,6 @@
 import { forgeRest } from "../supabase/rest";
 import type { Draft, EmailActionLog, EmailItem, EmailTriageRun } from "./types";
 
-type SendDraftInput = {
-  accountEmail?: string;
-  body: string;
-  messageId?: string;
-  senderEmail?: string;
-  subject?: string;
-  threadId?: string;
-};
-
 export async function listEmailItems(status = "pending"): Promise<EmailItem[]> {
   return forgeRest<EmailItem[]>("email_items", {
     requireAuth: true,
@@ -84,17 +75,4 @@ export async function updateDraft(id: string, patch: Partial<Draft>): Promise<Dr
     body: patch,
   });
   return rows[0];
-}
-
-export async function sendDraftEmail(input: SendDraftInput): Promise<void> {
-  const response = await fetch("/api/email/send-draft", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || "Failed to send draft.");
-  }
 }

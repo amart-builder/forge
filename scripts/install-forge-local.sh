@@ -52,6 +52,7 @@ fi
 SERVER_PLIST="$LA_DIR/com.forge.local.plist"
 BACKUP_PLIST="$LA_DIR/com.forge.local.backup.plist"
 REMINDERS_PLIST="$LA_DIR/com.forge.reminders.plist"
+TRIAGE_PLIST="$LA_DIR/com.forge.email-triage.plist"
 
 # --- Server: next start on localhost:3200 ---
 cat > "$SERVER_PLIST" <<EOF
@@ -149,14 +150,74 @@ cat > "$REMINDERS_PLIST" <<EOF
 </plist>
 EOF
 
+# --- Email triage: run the forge-email skill at the user's two chosen times ---
+# Only scheduled once email is set up (the Email step writes data/forge-email.json
+# with triage_times + timezone). launchd fires at LOCAL time on the Mac.
+if [ -f "$REPO_DIR/data/forge-email.json" ]; then
+  TRIAGE_CAL_XML="$(node -e '
+    const fs = require("fs");
+    let times = ["09:00", "15:00"];
+    try {
+      const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      if (Array.isArray(c.triage_times) && c.triage_times.length) times = c.triage_times;
+    } catch {}
+    const blocks = times.map((t) => {
+      const [h, m] = String(t).split(":").map((n) => parseInt(n, 10) || 0);
+      return `    <dict><key>Hour</key><integer>${h}</integer><key>Minute</key><integer>${m}</integer></dict>`;
+    }).join("\n");
+    process.stdout.write(blocks);
+  ' "$REPO_DIR/data/forge-email.json" 2>/dev/null || true)"
+  if [ -z "$TRIAGE_CAL_XML" ]; then
+    TRIAGE_CAL_XML='    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>'
+  fi
+  cat > "$TRIAGE_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.forge.email-triage</string>
+  <key>WorkingDirectory</key>
+  <string>$REPO_DIR</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$REPO_DIR/scripts/forge-email-triage.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+$TRIAGE_CAL_XML
+  </array>
+  <key>StandardOutPath</key>
+  <string>$LOG_DIR/forge-email-triage.log</string>
+  <key>StandardErrorPath</key>
+  <string>$LOG_DIR/forge-email-triage.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <key>HOME</key>
+    <string>$HOME</string>
+  </dict>
+</dict>
+</plist>
+EOF
+  echo "Scheduled email triage (times from data/forge-email.json; default 9:00 and 15:00)."
+else
+  rm -f "$TRIAGE_PLIST"
+fi
+
 # (Re)load all agents with the modern launchctl API (idempotent).
 UID_NUM="$(id -u)"
 launchctl bootout "gui/$UID_NUM/com.forge.local" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.local.backup" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.reminders" 2>/dev/null || true
+launchctl bootout "gui/$UID_NUM/com.forge.email-triage" 2>/dev/null || true
 launchctl bootstrap "gui/$UID_NUM" "$SERVER_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$BACKUP_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$REMINDERS_PLIST"
+if [ -f "$TRIAGE_PLIST" ]; then launchctl bootstrap "gui/$UID_NUM" "$TRIAGE_PLIST"; fi
 launchctl enable "gui/$UID_NUM/com.forge.local" 2>/dev/null || true
 
 # Confirm the server actually came up. This catches the most common failure:

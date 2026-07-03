@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import EmailCardDetail from './EmailCardDetail';
 
 interface ColumnData {
   _id: string;
@@ -148,6 +149,37 @@ export default function TaskDetail({
     } catch (err) {
       console.error('Failed to delete task:', err);
     }
+  }
+
+  // The daily "Emails: <date>" card renders its own interactive digest (grouped
+  // sections, Gmail links, action-item checkboxes) instead of the edit form. It is
+  // identified by the tag the skill sets plus the title, so it never collides with
+  // ordinary tasks or the older per-email "create task" cards (also tagged email).
+  const isEmailCard =
+    task.tags.includes('email') && task.title.trim().startsWith('Emails:');
+
+  if (isEmailCard) {
+    return (
+      <div
+        ref={backdropRef}
+        onMouseDown={handleBackdropMouseDown}
+        onClick={handleBackdropClick}
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 dark:bg-black/40 backdrop-blur-sm"
+      >
+        <div className="bg-card rounded-lg border w-full max-w-lg mx-4 p-5 max-h-[90vh] overflow-y-auto transition-colors duration-200">
+          <div className="flex items-start justify-between mb-4">
+            <h2 className="text-sm font-semibold">{task.title}</h2>
+            <button
+              onClick={onClose}
+              className="text-muted-foreground hover:text-foreground text-lg leading-none"
+            >
+              &times;
+            </button>
+          </div>
+          <EmailCardDetail onClose={onClose} />
+        </div>
+      </div>
+    );
   }
 
   return (
