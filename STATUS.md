@@ -16,10 +16,10 @@
 
 <!-- BEGIN active-session -->
 ## Active Session
-- **system:** cowork
-- **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-07-03T10:42:07-0400
-- **task:** browser-verify email card + swap-spiral root cause fix
+- **system:** none
+- **device:** —
+- **since:** —
+- **task:** —
 <!-- END active-session -->
 
 ---
@@ -45,7 +45,19 @@ The one outstanding step is DONE. Browser-verified on a throwaway local DB (port
 
 ROOT CAUSE FOUND for the repeated 40GB swap spirals that kept killing Forge sessions on the MacBook: a stray May-2024 `package.json` + `package-lock.json` in `~` (old Solana project) made Next infer the workspace root as the HOME DIRECTORY. Tailwind then failed to resolve from the wrong base and dev fell into a compile-fail-retry loop (~27 retries/min, each leaking into the compiler graph -> gigabytes in minutes -> swap death spiral -> frozen machine -> crashed sessions -> orphaned processes compounding the next attempt). Fixed in `next.config.ts`: `turbopack.root` + `outputFileTracingRoot` pinned to the repo (also protects client installs from their own stray home lockfiles). CRITICAL SECOND HALF: the broken runs left a poisoned `.next` cache that kept replaying the failure loop even after the config fix — if the spiral ever recurs, `rm -rf .next` once. After both fixes: dev boots in 449ms, /tasks compiles cold in 1.6s, server steady ~530MB. Do NOT remove the home-dir lockfiles without Alex (not ours), the config pin makes them harmless. Dev-only noise seen and not chased: "Failed to generate static paths for /api/forge-rest/[table]" TypeError at startup (route works fine).
 
-Remaining: (1) live verification on alex@joinedgeai.com with Alex present (labels bootstrap, real in-thread draft, archive, reconcile round-trip, nudge, schedule) — unchanged from below; (2) README refresh (still the old user-facing version, tab is gone now).
+### 2026-07-06 LIVE email verification PASSED (with Alex)
+
+Ran the full pipeline against the real alex@joinedgeai.com inbox, Alex watching. All core mechanics verified live:
+- Labels bootstrap: all six Forge/* labels created (Triaged=Label_9, Reply=Label_10, FYI=Label_11, Action=Label_12, Done=Label_13, Archived=Label_14; cached in data/forge-email.json on the MacBook).
+- Real triage run 1: QuickBooks promo -> archived (out of inbox, logged on card); Calendly booking notice -> FYI. Card "Emails: Jul 6" created on the LIVE board (Must happen today) via a local dev server on :3200 in supabase mode.
+- Real triage run 2: Alex's test email classified reply; draft written in his voice (voice.md honored, Calendly link https://calendly.com/edge-ai/30min pulled from real usage, not invented) and **nested correctly in-thread** via GMAIL_CREATE_EMAIL_DRAFT with empty subject. Alex's verdict: "passes the bar."
+- Round-trip: thread flipped to Forge/Done, out of inbox, row status=actioned, card rebuilt to "Done today: 1 replied". (Alex chose not to send the self-addressed test; the done-flip was applied manually via the same label/status transitions the reconcile pass performs. Test draft deleted at his request.)
+
+LIVE-SUPABASE SCHEMA DELTAS the skill must handle (found live, adapt before the scheduled runner goes live on a supabase-mode install): (1) forge_email_items requires provider NOT NULL -> always send "provider":"gmail"; (2) forge_tasks has NO remind_native/remind_text columns (local-mode-only migration) -> omit remind_* fields when the REST target is supabase mode, or add the columns in Supabase. Consider updating SKILL.md Step 6 to mark remind_* optional-by-mode.
+
+Still untested from the live checklist: the Telegram/iMessage nudge (data/forge-reminders.json not configured on the MacBook; forge-notify.mjs was a silent no-op) and the LaunchAgent schedule firing (com.forge.email-triage not installed here; natural test is letting a scheduled run fire on a configured machine). Neither blocks the core loop.
+
+Remaining: (1) nudge wiring + one scheduled-run observation (small); (2) README refresh (still the old user-facing version, tab is gone now).
 
 ### 2026-07-01 PIVOT EXECUTION: backend triage + one daily card
 
