@@ -16,10 +16,10 @@
 
 <!-- BEGIN active-session -->
 ## Active Session
-- **system:** none
-- **device:** —
-- **since:** —
-- **task:** —
+- **system:** cowork
+- **device:** Alexanders-MacBook-Pro-2
+- **since:** 2026-07-07T14:57:47-0700
+- **task:** land CRM v1 + codex triage runner
 <!-- END active-session -->
 
 ---
@@ -47,7 +47,13 @@ New `skills/forge-contact/SKILL.md`: natural-language capture (dedupe-first, res
 
 Skipped for v1 (deliberate): meeting_notes table, CSV-import API route (Claude imports via REST), editing companies in the UI. SPEC.md's /api/contacts/* routes are stale spec, not gaps.
 
-NEXT: the public repo flip (needs Alex's explicit go: secrets sweep of git history, README/SETUP final read, then flip to public for the send-a-link client flow). After that Forge is fully productized: Tasks + Email + CRM all built and verified.
+NEXT: the public repo flip (needs Alex's explicit go). After that Forge is fully productized: Tasks + Email + CRM all built and verified.
+
+### 2026-07-07 (later) Engine-aware triage (Codex option) + public-flip sweep CLEAN
+
+- **Triage runner is now engine-aware**, for Alex's own machines (clients stay on Claude by default): `data/forge-email.json` gains `engine` ("claude" default | "codex"), `codex_model` (default "gpt-5.5"), `codex_reasoning` (default "xhigh"), and `weekdays_only` (guard in the script via `date +%u`, NOT launchd Weekday keys). `triage_times` takes N entries; Alex wants 3x weekdays at 09:00/13:00/17:00 PT. The Codex path pipes the repo's `skills/forge-email/SKILL.md` plus an unattended-safety preamble into `codex exec` on stdin. UNVERIFIED and blocking before the Codex schedule goes live: the codex CLI flag spellings (`-m`, `-c model_reasoning_effort=`, `--dangerously-bypass-approvals-and-sandbox`) were written from conventions, codex is not installed on the MBP. At Mini install time: run one live supervised `codex exec` triage, verify flags parse, and have Alex judge 2 to 3 GPT-5.5 drafts (voice recalibration) before trusting it unattended.
+- **Public-flip secrets sweep: CLEAN TO FLIP.** Full 30-commit history swept: zero live secrets, no .env or db file ever committed, fixtures are synthetic @example.com personas, .gitignore solid. Recommendation to Alex (his call pending): publish via a fresh-history public mirror repo (e.g. amart-builder/forge-app) instead of flipping this repo, because this repo's STATUS.md history carries client names, a Telegram chat id, the Tailscale hostname, and internal ops narrative.
+- **Queued for the Mini's return:** pull repo, install the runner + verify codex flags, supervised first Codex triage + draft calibration, move the triage schedule and `forge_url` off the laptop, retire the laptop's `com.forge.web` + `com.forge.email-triage` once the Mini owns them, restore jarvis-memory.
 
 ### 2026-07-03 Card verified in browser + dev-mode swap-spiral root-caused and fixed
 

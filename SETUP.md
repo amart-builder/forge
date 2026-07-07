@@ -149,6 +149,8 @@ How it works once set up: at the user's two chosen times (or when they say "chec
   { "provider": "gmail", "account_email": "<their gmail>", "connector": "composio", "connected_account_id": "<gmail_xxxxx>", "triage_times": ["09:00", "15:00"], "timezone": "America/Los_Angeles" }
   ```
 - The triage runs as a headless Claude session and reaches Gmail through the Composio MCP you connected in step b, so no API key goes in `.env.local`.
+- The schedule takes any number of daily times, not just two: put as many `"HH:MM"` entries in `triage_times` as you want and each becomes its own scheduled run. Add `"weekdays_only": true` to skip Saturdays and Sundays; leave it out to run every day.
+- Advanced (optional): the runner defaults to Claude, but you can switch it to the OpenAI Codex CLI by adding `"engine": "codex"` to the config, with optional `"codex_model"` (default `gpt-5.5`) and `"codex_reasoning"` (default `xhigh`). This needs the `codex` CLI installed and logged in on the Mac. Leave `engine` out (or set it to `"claude"`) to keep the default Claude runner.
 
 **e. Hone their writing voice (you, with the user).** Before drafting real replies, learn how they write. Run the `forge-voice` skill: it reads their own sent mail from the last 30 to 60 days, writes a short voice profile to `~/.claude/voice.md`, then shows them a few sample drafts and tunes it over 2 to 3 rounds until they say it sounds like them. From then on every draft uses that voice, and the humanizer skill runs on every draft to keep it human. It costs the user a few minutes and is the difference between drafts that sound like them and drafts that sound like a bot.
 
