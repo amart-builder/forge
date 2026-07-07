@@ -16,10 +16,10 @@
 
 <!-- BEGIN active-session -->
 ## Active Session
-- **system:** none
-- **device:** —
-- **since:** —
-- **task:** —
+- **system:** cowork
+- **device:** Alexanders-MacBook-Pro-2
+- **since:** 2026-07-06T20:44:11-0400
+- **task:** wire nudge + schedule + dress rehearsal
 <!-- END active-session -->
 
 ---
@@ -45,6 +45,15 @@ The one outstanding step is DONE. Browser-verified on a throwaway local DB (port
 
 ROOT CAUSE FOUND for the repeated 40GB swap spirals that kept killing Forge sessions on the MacBook: a stray May-2024 `package.json` + `package-lock.json` in `~` (old Solana project) made Next infer the workspace root as the HOME DIRECTORY. Tailwind then failed to resolve from the wrong base and dev fell into a compile-fail-retry loop (~27 retries/min, each leaking into the compiler graph -> gigabytes in minutes -> swap death spiral -> frozen machine -> crashed sessions -> orphaned processes compounding the next attempt). Fixed in `next.config.ts`: `turbopack.root` + `outputFileTracingRoot` pinned to the repo (also protects client installs from their own stray home lockfiles). CRITICAL SECOND HALF: the broken runs left a poisoned `.next` cache that kept replaying the failure loop even after the config fix — if the spiral ever recurs, `rm -rf .next` once. After both fixes: dev boots in 449ms, /tasks compiles cold in 1.6s, server steady ~530MB. Do NOT remove the home-dir lockfiles without Alex (not ours), the config pin makes them harmless. Dev-only noise seen and not chased: "Failed to generate static paths for /api/forge-rest/[table]" TypeError at startup (route works fine).
 
+### 2026-07-06 (later) Nudge + schedule LIVE on the MacBook; unattended dress rehearsal PASSED
+
+- Telegram nudge wired: data/forge-reminders.json -> chat 5740717209, token read from ~/.claude/channels/telegram/.env. Test ping delivered.
+- Always-on Forge web server installed on the MacBook: LaunchAgent com.forge.web runs `next start -p 3200` (supabase mode, prod build, ~107MB). localhost:3200/tasks serves the live board here. Installed because the Mini has been OFFLINE 11 days (Tailscale last saw it Jun 25) so the Tailscale bookmark is dead; when the Mini returns it can take this back.
+- Triage schedule installed: LaunchAgent com.forge.email-triage fires scripts/forge-email-triage.sh at 09:00 + 15:00; logs at ~/Library/Logs/forge-email-triage.log.
+- GAP FOUND + FIXED: forge-* skills were never installed to ~/.claude/skills on this machine (installer step, never run here), so headless runs could not find forge-email. Copied forge-email/task/voice/voice-note in (humanizer already present).
+- Dress rehearsal: ran forge-email-triage.sh by hand = a real unattended headless run. It ingested a genuinely new Wispr Flow receipt, archived it, rebuilt the card, sent the nudge, exit 0, safety held. The scheduled path is proven end to end.
+- Future nicety (from the run itself): nudge's card link is localhost:3200, phone-unfriendly; point forge_url at a stable URL when the Mini is back.
+
 ### 2026-07-06 LIVE email verification PASSED (with Alex)
 
 Ran the full pipeline against the real alex@joinedgeai.com inbox, Alex watching. All core mechanics verified live:
@@ -57,7 +66,7 @@ LIVE-SUPABASE SCHEMA DELTAS the skill must handle (found live, adapt before the 
 
 Still untested from the live checklist: the Telegram/iMessage nudge (data/forge-reminders.json not configured on the MacBook; forge-notify.mjs was a silent no-op) and the LaunchAgent schedule firing (com.forge.email-triage not installed here; natural test is letting a scheduled run fire on a configured machine). Neither blocks the core loop.
 
-Remaining: (1) nudge wiring + one scheduled-run observation (small); (2) README refresh (still the old user-facing version, tab is gone now).
+Remaining: (1) README refresh (still the old user-facing version, tab is gone now); (2) optional: let tomorrow's 09:00 scheduled fire confirm launchd timing (the run path itself is already proven).
 
 ### 2026-07-01 PIVOT EXECUTION: backend triage + one daily card
 
