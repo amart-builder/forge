@@ -39,6 +39,16 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 
 ## Current State
 
+### 2026-07-07 CRM step BUILT + browser-verified (last surface before the public flip)
+
+Local-mode CRM is live. New `src/components/crm/LocalCRMView.tsx` (two panes: searchable contact list + detail with notes/tier/tags/how-we-met, activity timeline, add-contact form with create-new-company) consumes the previously dead `src/lib/data/crm.ts` REST functions; `CRMView.tsx` local branch swapped from the placeholder (supabase/Attio and convex branches untouched, verified by diff). Built by an Opus subagent from spec; its fresh-context review fixed 3 real bugs (silent catch on the last-contact touch, crash on empty PATCH return, tag dedupe). Browser-verified end to end on the throwaway DB (port 3410): created Sarah Chen + Chen Plumbing through the UI form, how_we_met saved on blur, meeting activity posted + timeline rendered + `last_interaction_at` touched (list re-sorted), search matches company names and shows a clean empty state, all rows confirmed persisted via REST, zero console errors. tsc clean.
+
+New `skills/forge-contact/SKILL.md`: natural-language capture (dedupe-first, resolve-or-create company, log activity + touch last contact, chain follow-ups into forge-task), "who is X" briefings, CSV import with confirm-the-mapping. Installer picks it up automatically (copies all skills/forge-*). SETUP.md step 7 rewritten from stub to the real client walkthrough (2-question interview, optional import, demo capture).
+
+Skipped for v1 (deliberate): meeting_notes table, CSV-import API route (Claude imports via REST), editing companies in the UI. SPEC.md's /api/contacts/* routes are stale spec, not gaps.
+
+NEXT: the public repo flip (needs Alex's explicit go: secrets sweep of git history, README/SETUP final read, then flip to public for the send-a-link client flow). After that Forge is fully productized: Tasks + Email + CRM all built and verified.
+
 ### 2026-07-03 Card verified in browser + dev-mode swap-spiral root-caused and fixed
 
 The one outstanding step is DONE. Browser-verified on a throwaway local DB (port 3410, real inbox untouched): the `Emails: Jul 3` card rendered all six sections with correct grouping (Carried over 1 / Reply 2 / Action 1 / Notifications 1 / Archived 1 / Done today 1), every Gmail deep link correct (`#inbox/<threadId>` per item, `#search/label:Forge/Reply` and `:Forge/Archived` rollups), checkboxes only on carried/reply/action. Clicked a reply checkbox: row left the open sections, Done today ticked 1 -> 2, and REST confirmed `email_items.status=actioned` persisted to SQLite. One cosmetic dev-only quirk: board data loads via `localhost:3410` but not `127.0.0.1:3410` (client fetch never fires on the IP host); use localhost for local verification, not worth chasing.
