@@ -39,6 +39,19 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 
 ## Current State
 
+### 2026-07-08 Mini is BACK and now owns email triage (Codex engine, VERIFIED LIVE)
+
+The whole Mini queue from 07-07 is done and proven:
+
+- **Mini repo synced**: the "dirty" files were Syncthing copies of already-pushed work (proven byte-identical to origin/main per file before touching anything); stashed as a safety net (`stash@{0}` on the Mini, droppable) and fast-forwarded d587be5 -> 2cf9668. Note: `~/Desktop/Atlas` on the Mini is now a SYMLINK to `~/Atlas` (moved 2026-07-07, presumably for the TCC/launchd problem); same repo, two paths.
+- **Codex CLI installed on the Mini** (npm, codex-cli 0.143.0) and logged in WITHOUT re-auth by copying `~/.codex/auth.json` from the MBP (ChatGPT login). Flags verified against real `--help`: `-m`, `-c key=value`, `--dangerously-bypass-approvals-and-sandbox`, stdin `-` all parse. The runner's flag spellings were right.
+- **Composio wired into Codex**: `~/.codex/config.toml` on the Mini points at the hosted Composio MCP (same API key header as the MBP's Claude config). Live smoke test: codex called COMPOSIO_SEARCH_TOOLS and got GMAIL_FETCH_EMAILS back.
+- **Supabase-mode skill fixes landed** (2cf9668): email_items POST now includes `"provider":"gmail"` (NOT NULL on live table) and Step 6 documents the remind_* retry for supabase installs missing those columns.
+- **Mini forge rebuilt + serving**: `.env.local` was MISSING on the Mini (first rebuild silently came up in local SQLite mode!); copied from the MBP, rebuilt, com.atlas.forge-web kickstarted, board at :3200 serves the real Supabase columns.
+- **FIRST SUPERVISED CODEX TRIAGE PASSED** (gpt-5.5, xhigh, exit 0, ~116k tokens): real inbox run drafted a reply to Heather Martinelli in-thread (draft r-1252160083511349427), filed 2 action items (Jay Miller meeting notes to-do, Cloudflare domain expiry), archived 1 login link, rebuilt "Emails: Jul 8" on the live board, stamped the cursor. Telegram from the Mini verified with a delivered test ping.
+- **Schedule moved**: com.forge.email-triage now on the Mini (09:00/13:00/17:00; weekdays guard lives in the script) with PATH incl. /opt/homebrew/bin (codex's node shebang needs it; manual runs must export it too). MBP's triage agent booted out, plist kept as `.retired-20260708`. MBP keeps com.forge.web so the laptop bookmark still works (both point at the same Supabase data).
+- STILL OPEN: Alex to judge the Heather draft (only 1 reply draft in this run; calibration wants 2-3 before full trust); nudge card link still `localhost:3200` (phone-unfriendly); public-flip decision.
+
 ### 2026-07-07 CRM step BUILT + browser-verified (last surface before the public flip)
 
 Local-mode CRM is live. New `src/components/crm/LocalCRMView.tsx` (two panes: searchable contact list + detail with notes/tier/tags/how-we-met, activity timeline, add-contact form with create-new-company) consumes the previously dead `src/lib/data/crm.ts` REST functions; `CRMView.tsx` local branch swapped from the placeholder (supabase/Attio and convex branches untouched, verified by diff). Built by an Opus subagent from spec; its fresh-context review fixed 3 real bugs (silent catch on the last-contact touch, crash on empty PATCH return, tag dedupe). Browser-verified end to end on the throwaway DB (port 3410): created Sarah Chen + Chen Plumbing through the UI form, how_we_met saved on blur, meeting activity posted + timeline rendered + `last_interaction_at` touched (list re-sorted), search matches company names and shows a clean empty state, all rows confirmed persisted via REST, zero console errors. tsc clean.
