@@ -159,6 +159,7 @@ thread.
 
 ```json
 {
+  "provider": "gmail",
   "message_id": "<newest inbound messageId>",
   "thread_id": "<threadId>",
   "classification": "action_item | tiding | log_only",
@@ -227,6 +228,10 @@ open email card even if a prior run half-finished.
 
 `remind_native:false` matters: the card is a passive mirror, so it must not trip
 the reminders cron's native "Task due" ping. This skill owns its own nudge.
+
+Supabase-mode installs may lack the `remind_native`/`remind_text` columns on
+`tasks` (the POST fails with PGRST204). If that happens, retry the POST without
+those two fields; everything else stays the same.
 
 **Rebuild the description** whole each run (it is the mirror), from the current
 rows. Per-item Gmail link (matches the app's format):
