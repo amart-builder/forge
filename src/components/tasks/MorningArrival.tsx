@@ -340,12 +340,9 @@ function SortableArrivalCard({
             aria-label={`Claude execution for ${view.title}`}
             data-card-control
           >
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="rounded-full border border-accent-blue/40 bg-accent-blue/10 px-2.5 py-1 font-medium text-foreground">
                 {selectedMode === 'plan_review' ? 'Plan with Claude' : 'Autonomous'}
-              </span>
-              <span className="text-muted-foreground">
-                Model selected automatically: {selectedModel === 'opus' ? 'Opus' : 'Sonnet'}
               </span>
             </div>
             {selectedMode === 'autonomous' && executionWorkspaces.length > 0 && (

@@ -229,6 +229,8 @@ test('execution command never turns autonomous work into bypass-permissions or n
   assert.equal(command.args[command.args.indexOf('--max-budget-usd') + 1], '1.5');
   assert.ok(!command.args.includes('--dangerously-skip-permissions'));
   assert.ok(!command.args.includes('--bg'));
+  assert.equal(command.args[command.args.indexOf('--effort') + 1], 'high');
+  assert.match(command.stdin, /^Choose the model and effort level that you think makes the most sense for this task\./);
 });
 
 test('autonomous worker stays in the allowlisted workspace and stops at awaiting_review', async (t) => {
