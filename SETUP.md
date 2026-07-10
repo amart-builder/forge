@@ -1,8 +1,10 @@
-# Forge setup (for the AI assistant)
+# Forge setup (for Claude or Codex)
 
-The user sent you this repository and asked you to set up Forge for them. Follow these steps in order. Walk the user through the parts that need their input; do the rest yourself and report as you go.
+The user sent you this repository and asked you to set up Forge for them. Follow these steps in order. Walk the user through the parts that need their input; do the rest yourself and report as you go. The same product behavior and safety boundaries apply whether you are Claude or Codex.
 
 > Setup is fully local by design. Do not configure Tailscale, Supabase, Convex, or any login. The default is a local SQLite database with no account and no authentication. Only switch to a cloud database if the user explicitly asks for multi-device access (see "Running on more than one device" at the end).
+
+If the user later chooses Supabase or Convex, designate one Forge installation as the canonical server and point every browser and agent at its URL. Cloud tasks sync across servers; the provisional Quiet Current layer intentionally remains on the canonical Forge machine in the first release.
 
 ## 1. Clone and install
 
@@ -40,15 +42,58 @@ It binds to `localhost` only, so Forge is never exposed to the network. It is re
 - "Forge is running at `http://localhost:3200` and everything saves locally on your Mac. There is no account and no login."
 - "Next we'll bookmark it and turn on reminders."
 
+## Personalization interview
+
+Before importing work or connecting other systems, learn how this person actually works. Ask one question at a time, let them answer naturally, and reflect back the important parts before moving on. Do not show them this entire list as a form.
+
+1. **Their world:** "What are the main things you are responsible for right now, at work and outside it?"
+2. **What winning means:** "If the next 90 days went unusually well, what would be meaningfully different?"
+3. **How work reaches them:** "Where does new work usually appear today: your head, conversations, texts, email, calendar, notes, or somewhere else?"
+4. **Their day:** "When do you normally begin and stop work, and are there parts of the day you protect for deep work, calls, family, or recovery?" Confirm their timezone; never turn these answers into task-duration estimates.
+5. **Their current system:** "Where are your open commitments now, and which source should we treat as authoritative while we bring them into Forge?"
+6. **Jarvis boundaries:** "What may I carry for you after you hand it over, and what kinds of decisions or actions must always come back to you first?" Inferred work still enters in pencil regardless of the answer.
+7. **What creates stress:** "What do you most often forget, avoid, lose track of, or discover too late?"
+
+Summarize what you heard in plain language and ask the user to correct it. Then write the confirmed answers to `data/forge-profile.json` using this local shape:
+
+```json
+{
+  "name": "<preferred name>",
+  "timezone": "<IANA timezone>",
+  "workday": { "starts": "09:00", "ends": "17:00" },
+  "responsibilities": ["<area>"],
+  "ninety_day_outcomes": ["<outcome>"],
+  "protected_time": ["<constraint or ritual>"],
+  "work_sources": ["<where new work appears>"],
+  "authoritative_source": "<current system during migration>",
+  "jarvis_may_carry": ["<delegated category>"],
+  "jarvis_must_return": ["<decision or action requiring review>"],
+  "failure_patterns": ["<what gets lost or delayed>"],
+  "updated_at": "<ISO timestamp>"
+}
+```
+
+This profile is not permission to create inferred tasks or take external action. It helps the agent explain and prioritize pencil suggestions in the person's own context. Keep credentials, private message content, and raw email out of it.
+
+Next, help the user establish their first current:
+
+- Import or capture only real open commitments from the authoritative source they named. Confirm the mapping before a bulk import.
+- Ask which one commitment they want centered as Now. Do not choose it for them during setup.
+- Offer at most three clearly reasoned pencil suggestions for missing work; silence is better than speculative setup theater.
+- Complete one harmless demo loop together: switch focus, mark a demo task done, Undo it, hand it to Jarvis, and bring it back.
+- End by saying: "Tomorrow, open Today first. Tell me what changed, choose what is Now, and then begin. Forge will learn from your corrections without silently changing your commitments."
+
 ## 5. Set up Tasks
 
 Tasks works the moment Forge is running. This step turns it into a real reminder system. Walk the user through it like a conversation. Do not dump all of it on them at once.
 
-**a. Bookmark the board.** Get the page to one click:
+**a. Bookmark Today.** Get the page to one click:
 
 - Open `http://localhost:3200/tasks` in their main browser.
 - Chrome, Edge, or Brave: press `Cmd+D`, then "Done". Safari: press `Cmd+D`, then "Add". Or drag the icon at the left of the address bar onto the bookmarks bar.
 - Suggest they pin it or keep it on the bookmarks bar so it is always there.
+
+When it opens, explain only this: "Solid work is committed. Pale work is a suggestion. Looking at pale work never accepts it." Do not require a planning ceremony before the user can begin.
 
 **b. Capture by talking (already installed).** The setup script installed a skill so the user can just tell you in plain language what to remember: "remind me to call Joe Friday", "add prep the deck to my board", "I need to send the invoice by Tuesday". You put it on the board, choose a due date when they do not give one (from their current task load and the priorities in their `CLAUDE.md`), and set a reminder. Tell the user they can do this anytime.
 

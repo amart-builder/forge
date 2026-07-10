@@ -30,23 +30,24 @@ fi
 
 mkdir -p "$LOG_DIR" "$LA_DIR"
 
-# --- Install Forge's skills for the user's Claude ---
-# The forge-* skills (task capture, email triage, voice honing, voice notes) are
-# refreshed every run. The bundled humanizer skill is installed only if the user
-# does not already have one, so we never clobber a newer copy they rely on.
+# --- Install Forge's skills for Claude and Codex ---
+# The forge-* skills are refreshed every run in both supported agent homes. The
+# bundled humanizer skill is installed only when absent, so unrelated personal
+# skills and newer humanizer copies are never overwritten.
 SKILLS_SRC="$REPO_DIR/skills"
 if [ -d "$SKILLS_SRC" ]; then
-  mkdir -p "$HOME/.claude/skills"
-  for skill_dir in "$SKILLS_SRC"/forge-*; do
-    [ -d "$skill_dir" ] || continue
-    rm -rf "$HOME/.claude/skills/$(basename "$skill_dir")"
-    cp -R "$skill_dir" "$HOME/.claude/skills/"
+  for agent_skills in "$HOME/.claude/skills" "${CODEX_HOME:-$HOME/.codex}/skills"; do
+    mkdir -p "$agent_skills"
+    for skill_dir in "$SKILLS_SRC"/forge-*; do
+      [ -d "$skill_dir" ] || continue
+      rm -rf "$agent_skills/$(basename "$skill_dir")"
+      cp -R "$skill_dir" "$agent_skills/"
+    done
+    if [ -d "$SKILLS_SRC/humanizer" ] && [ ! -d "$agent_skills/humanizer" ]; then
+      cp -R "$SKILLS_SRC/humanizer" "$agent_skills/"
+    fi
+    echo "Installed the Forge skills into $agent_skills"
   done
-  if [ -d "$SKILLS_SRC/humanizer" ] && [ ! -d "$HOME/.claude/skills/humanizer" ]; then
-    cp -R "$SKILLS_SRC/humanizer" "$HOME/.claude/skills/"
-    echo "Installed the humanizer skill into ~/.claude/skills"
-  fi
-  echo "Installed the Forge skills into ~/.claude/skills"
 fi
 
 SERVER_PLIST="$LA_DIR/com.forge.local.plist"

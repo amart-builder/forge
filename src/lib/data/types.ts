@@ -17,6 +17,9 @@ export type Task = {
   tags: string[];
   position: number;
   status: "open" | "done" | "archived";
+  source_type?: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type Company = {
