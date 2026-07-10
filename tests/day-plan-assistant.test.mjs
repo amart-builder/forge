@@ -120,6 +120,41 @@ test('assistant clarification does not mutate the plan', (t) => {
   assert.equal(store.getPlan(plan.id).version, plan.version);
 });
 
+test('assistant prompts queue in order and rebase onto the latest applied plan', (t) => {
+  const { store, plan } = setup(t);
+  const first = store.createAssistantTurn({
+    id: 'assistant-turn-queued-first',
+    planId: plan.id,
+    expectedVersion: plan.version,
+    userText: 'Rename the first item.',
+  }).turn;
+  const second = store.createAssistantTurn({
+    id: 'assistant-turn-queued-second',
+    planId: plan.id,
+    expectedVersion: plan.version,
+    userText: 'Assign the second item to Claude.',
+  }).turn;
+
+  assert.equal(store.claimNextAssistantTurn().id, first.id);
+  assert.equal(store.claimNextAssistantTurn(), undefined);
+  const firstApplied = store.completeAssistantTurn(first.id, {
+    assistantText: 'Renamed the first item.',
+    needsClarification: false,
+    operations: [{ operation: 'edit_item', itemId: plan.items[0].id, title: 'Renamed task' }],
+  });
+  const secondClaimed = store.claimNextAssistantTurn();
+  assert.equal(secondClaimed.id, second.id);
+  assert.equal(secondClaimed.baseVersion, firstApplied.plan.version);
+  const secondApplied = store.completeAssistantTurn(second.id, {
+    assistantText: 'Assigned the second item.',
+    needsClarification: false,
+    operations: [{ operation: 'set_owner', itemId: plan.items[1].id, owner: 'claude' }],
+  });
+  assert.equal(secondApplied.turn.state, 'applied');
+  assert.equal(secondApplied.plan.items[0].title, 'Renamed task');
+  assert.equal(secondApplied.plan.items[1].owner, 'claude');
+});
+
 test('assistant can create, complete, update, and reprioritize task-backed work atomically', (t) => {
   const { store, plan } = setup(t);
   const completedItem = plan.items[0];

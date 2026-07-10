@@ -539,7 +539,7 @@ export default function MorningArrival({
   async function handleAssistantSubmit(event: FormEvent) {
     event.preventDefault();
     const userText = assistantPrompt.trim();
-    if (!userText || assistantSubmitting || assistantActive) return;
+    if (!userText || assistantSubmitting) return;
     try {
       await onAssistantSubmit(userText);
       setAssistantPrompt('');
@@ -706,7 +706,7 @@ export default function MorningArrival({
                   value={assistantPrompt}
                   maxLength={4000}
                   rows={2}
-                  disabled={assistantSubmitting || assistantActive}
+                  disabled={assistantSubmitting}
                   className="max-h-40 min-h-11 min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-accent-blue/40 disabled:opacity-60"
                   placeholder="Add context or change the order…"
                   onChange={(event) => {
@@ -717,11 +717,11 @@ export default function MorningArrival({
                 />
                 <button
                   type="submit"
-                  disabled={!assistantPrompt.trim() || assistantSubmitting || assistantActive}
-                  aria-label={assistantSubmitting || assistantActive ? 'Claude is working' : 'Send'}
+                  disabled={!assistantPrompt.trim() || assistantSubmitting}
+                  aria-label={assistantSubmitting ? 'Sending to Claude' : 'Send'}
                   className="min-h-11 min-w-20 rounded-xl bg-foreground px-4 text-sm font-semibold text-background transition-colors disabled:bg-muted-foreground/25 disabled:text-foreground/50 disabled:opacity-100"
                 >
-                  {assistantSubmitting || assistantActive
+                  {assistantSubmitting
                     ? <span aria-hidden="true" className="inline-block size-1.5 rounded-full bg-current opacity-50 motion-safe:animate-pulse" />
                     : 'Send'}
                 </button>

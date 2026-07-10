@@ -493,12 +493,7 @@ export default function useDayRitual({
   const submitAssistantPrompt = useCallback(async (userText: string) => {
     const current = planRef.current;
     if (!current) throw new Error('The day plan is not ready.');
-    if (
-      assistantSubmittingRef.current ||
-      (assistantTurnRef.current && ACTIVE_ASSISTANT_STATES.has(assistantTurnRef.current.state))
-    ) {
-      throw new Error('Claude is already considering a change.');
-    }
+    if (assistantSubmittingRef.current) throw new Error('Forge is sending the previous prompt.');
     assistantSubmittingRef.current = true;
     setAssistantSubmitting(true);
     setAssistantError(undefined);

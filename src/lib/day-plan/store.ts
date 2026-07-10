@@ -589,7 +589,11 @@ export function createDayPlanStore(options: {
   );
   const selectNextAssistantTurn = db.prepare(
     `SELECT * FROM day_plan_assistant_turns
-     WHERE state = 'queued' ORDER BY created_at, id LIMIT 1`,
+     WHERE state = 'queued'
+       AND NOT EXISTS (
+         SELECT 1 FROM day_plan_assistant_turns active WHERE active.state = 'running'
+       )
+     ORDER BY created_at, id LIMIT 1`,
   );
   const selectExecutionConfig = db.prepare(
     "SELECT * FROM day_plan_execution_configs WHERE day_plan_id = ? AND item_id = ?",
@@ -1097,12 +1101,14 @@ export function createDayPlanStore(options: {
     return immediate(() => {
       const row = selectNextAssistantTurn.get() as AssistantTurnRow | undefined;
       if (!row) return undefined;
+      const plan = getPlan(row.day_plan_id);
+      if (!plan) throw new DayPlanNotFound();
       const startedAt = now().toISOString();
       const changed = db.prepare(
         `UPDATE day_plan_assistant_turns
-         SET state = 'running', started_at = ?
+         SET state = 'running', base_version = ?, started_at = ?
          WHERE id = ? AND state = 'queued'`,
-      ).run(startedAt, row.id);
+      ).run(plan.version, startedAt, row.id);
       if (changed.changes !== 1) return undefined;
       return getAssistantTurn(row.id);
     });
