@@ -28,6 +28,7 @@ import {
 import { realTimeLabel } from '@/lib/quiet-current/presentation';
 import { buildDayPlanCandidates } from '@/lib/day-plan/candidates';
 import {
+  combineSurfaceErrors,
   firstCarriedItem,
   moveDayPlanItem,
   reorderDayPlanItems,
@@ -1548,6 +1549,10 @@ function TodayExperience({
     orderedPlanItems.map((item) => [item.id, item.settlementDecision?.disposition]),
   );
   const proposedTomorrow = firstCarriedItem(orderedPlanItems, settlementDecisions);
+  const visibleSurfaceError = combineSurfaceErrors(
+    dayRitual.ritualOpen ? undefined : dayRitual.error,
+    surfaceError,
+  );
 
   if (loading || dayRitual.view === 'checking') {
     return (
@@ -1674,7 +1679,9 @@ function TodayExperience({
                 <button type="submit" disabled={!capture.trim() || capturing}>Add</button>
               </form>
             )}
-            {surfaceError && <p role="alert" className="current-surface-error">{surfaceError}</p>}
+            {visibleSurfaceError && (
+              <p role="alert" className="current-surface-error">{visibleSurfaceError}</p>
+            )}
             {error && (
               <div role="alert" className="current-refresh-warning">
                 <span>{error}</span>

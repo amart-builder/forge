@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   allSettlementDecisionsMade,
+  combineSurfaceErrors,
   firstCarriedItem,
   moveAnnouncement,
   moveDayPlanItem,
@@ -89,4 +90,15 @@ test('an overdue defer is applied before its resurface against updated task stat
   assert.deepEqual(resurfaced.patch, { columnId: 'today', status: 'open' });
   state = resurfaced.nextState;
   assert.equal(reconciliationStateMatches(state, resurfaced.nextState), true);
+});
+
+test('ritual and secondary surface failures remain visible together', () => {
+  assert.equal(
+    combineSurfaceErrors('Morning Arrival could not load.', 'Suggestions are unavailable.'),
+    'Morning Arrival could not load. Suggestions are unavailable.',
+  );
+  assert.equal(
+    combineSurfaceErrors('Morning Arrival could not load.', 'Morning Arrival could not load.'),
+    'Morning Arrival could not load.',
+  );
 });

@@ -31,6 +31,11 @@ export type BuildDayPlanCandidatesInput = {
 };
 
 const PRIORITY_WEIGHT = { high: 0, medium: 1, low: 2 } as const;
+const TITLE_MAX = 240;
+const OUTCOME_MAX = 1200;
+const PROJECT_MAX = 120;
+const EVENT_ID_MAX = 200;
+const EVENT_IDS_MAX = 20;
 
 function validDate(value: string): boolean {
   return !Number.isNaN(new Date(value).getTime());
@@ -57,14 +62,30 @@ function clean(value: string | undefined): string | undefined {
   return trimmed || undefined;
 }
 
+function cleanBounded(value: string | undefined, maximum: number): string | undefined {
+  const cleaned = clean(value);
+  if (!cleaned || cleaned.length <= maximum) return cleaned;
+  return `${cleaned.slice(0, maximum - 1).trimEnd()}…`;
+}
+
+function boundedEventIds(values: string[] | undefined): string[] {
+  return [...new Set(
+    (values ?? [])
+      .map((value) => clean(value))
+      .filter((value): value is string => Boolean(value && value.length <= EVENT_ID_MAX)),
+  )].slice(0, EVENT_IDS_MAX);
+}
+
 function candidateForTask(
   task: CandidateTaskInput,
   localDate: string,
   timezone: string,
 ): RecommendationCandidate | undefined {
-  const title = clean(task.title);
+  const title = cleanBounded(task.title, TITLE_MAX);
   if (
     !title ||
+    !clean(task.id) ||
+    task.id.length > 200 ||
     task.status !== "open" ||
     !Number.isFinite(task.position) ||
     !validDate(task.updatedAt) ||
@@ -75,6 +96,10 @@ function candidateForTask(
   }
 
   const dueDate = task.dueAt ? localDateFor(task.dueAt, timezone) : undefined;
+  const explicitOutcomeKey = clean(task.outcomeKey);
+  const outcomeKey = explicitOutcomeKey && explicitOutcomeKey.length <= TITLE_MAX
+    ? explicitOutcomeKey
+    : `task:${task.id}`;
   const isOverdue = Boolean(dueDate && dueDate < localDate);
   const isDueToday = dueDate === localDate;
   const supports: RecommendationSourceRef["supports"] = ["commitment", "priority"];
@@ -97,11 +122,14 @@ function candidateForTask(
   return {
     candidateId: `task:${task.id}`,
     taskId: task.id,
-    outcomeKey: clean(task.outcomeKey) ?? `task:${task.id}`,
+    outcomeKey,
     title,
-    outcome: clean(task.outcome) ?? clean(task.description) ?? title,
-    definitionOfDone: clean(task.definitionOfDone),
-    project: clean(task.project),
+    outcome: cleanBounded(
+      clean(task.outcome) ?? clean(task.description) ?? title,
+      OUTCOME_MAX,
+    )!,
+    definitionOfDone: cleanBounded(task.definitionOfDone, OUTCOME_MAX),
+    project: cleanBounded(task.project, PROJECT_MAX),
     owner: task.owner ?? "me",
     commitment: "ink",
     whyToday,
@@ -119,7 +147,7 @@ function candidateForTask(
     ],
     newestSourceRefreshAt: task.refreshedAt,
     conflicts: [],
-    humanDecisionEventIds: [...new Set(task.humanDecisionEventIds ?? [])],
+    humanDecisionEventIds: boundedEventIds(task.humanDecisionEventIds),
     rankReasons,
   };
 }

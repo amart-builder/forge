@@ -83,3 +83,52 @@ test('returns an honest empty set when there is no credible work', () => {
     [],
   );
 });
+
+test('bounds task prose to the day-plan API contract without dropping the task', () => {
+  const [candidate] = build([
+    {
+      ...base,
+      id: 'long-task',
+      title: 'A'.repeat(300),
+      description: 'B'.repeat(2685),
+      project: 'C'.repeat(180),
+    },
+  ]);
+
+  assert.equal(candidate.taskId, 'long-task');
+  assert.equal(candidate.title.length, 240);
+  assert.equal(candidate.outcome.length, 1200);
+  assert.equal(candidate.project.length, 120);
+  assert.match(candidate.title, /…$/);
+  assert.match(candidate.outcome, /…$/);
+});
+
+test('oversized identity metadata cannot collapse tasks or reject the whole plan', () => {
+  const sharedPrefix = 'same'.repeat(70);
+  const candidates = build([
+    {
+      ...base,
+      id: 'task-one',
+      title: 'One',
+      outcomeKey: `${sharedPrefix}-one`,
+      humanDecisionEventIds: [
+        ...Array.from({ length: 24 }, (_, index) => `event-${index}`),
+        'X'.repeat(201),
+      ],
+    },
+    {
+      ...base,
+      id: 'task-two',
+      title: 'Two',
+      position: 1,
+      outcomeKey: `${sharedPrefix}-two`,
+    },
+  ]);
+
+  assert.deepEqual(candidates.map((candidate) => candidate.outcomeKey), [
+    'task:task-one',
+    'task:task-two',
+  ]);
+  assert.equal(candidates[0].humanDecisionEventIds.length, 20);
+  assert.ok(candidates[0].humanDecisionEventIds.every((eventId) => eventId.length <= 200));
+});

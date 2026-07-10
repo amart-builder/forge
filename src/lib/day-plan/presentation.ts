@@ -102,3 +102,8 @@ export function moveAnnouncement(
 ): string {
   return `${title} moved to priority ${nextIndex + 1} of ${total}.`;
 }
+
+export function combineSurfaceErrors(...errors: Array<string | undefined>): string | undefined {
+  const messages = [...new Set(errors.map((error) => error?.trim()).filter(Boolean))];
+  return messages.length > 0 ? messages.join(' ') : undefined;
+}
