@@ -17,6 +17,11 @@ import type {
   RecommendationSourceRef,
   SettlementDisposition,
 } from "@/lib/day-plan/types";
+import { isClaudeWorkerAvailable } from "@/lib/claude-execution/trigger";
+import {
+  publicExecutionRun,
+  publicUnreadyItem,
+} from "@/lib/day-plan/public-execution";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -455,7 +460,27 @@ export async function POST(request: NextRequest) {
       : parsed.action === "reconciliation_applied"
         ? store.acknowledgeReconciliation(parsed.reconciliationId)
         : store.mutateDayPlan(parsed.input);
-    return NextResponse.json(result, { status: parsed.action === "ensure" ? 201 : 200 });
+    const queuedRuns = parsed.action === "start_day" && "executionRuns" in result
+      ? result.executionRuns?.filter((run) => run.status === "queued").length ?? 0
+      : 0;
+    const publicResult = "executionRuns" in result
+      ? {
+          ...result,
+          executionRuns: result.executionRuns?.map(publicExecutionRun),
+          unreadyItems: result.unreadyItems?.map(publicUnreadyItem),
+          ...(parsed.action === "start_day"
+            ? {
+                worker: {
+                  queuedRuns,
+                  available: isClaudeWorkerAvailable(),
+                },
+              }
+            : {}),
+        }
+      : result;
+    return NextResponse.json(publicResult, {
+      status: parsed.action === "ensure" ? 201 : 200,
+    });
   } catch (error) {
     if (error instanceof DayPlanVersionConflict) {
       return NextResponse.json(

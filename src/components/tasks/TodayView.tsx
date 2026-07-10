@@ -2032,6 +2032,13 @@ function TodayExperience({
           announcement={dayRitual.announcement}
           busy={dayRitual.busy}
           error={dayRitual.error}
+          assistantTurn={dayRitual.assistantTurn}
+          assistantSubmitting={dayRitual.assistantSubmitting}
+          assistantError={dayRitual.assistantError}
+          executionState={dayRitual.executionState}
+          executionLoading={dayRitual.executionLoading}
+          executionBusyItemIds={dayRitual.executionBusyItemIds}
+          executionError={dayRitual.executionError}
           inertTargetRef={livingCurrentRef}
           onExpand={(itemId) => setExpandedArrivalItemId((current) => current === itemId ? null : itemId)}
           onOwnerChange={(itemId, owner) => dayRitual.setOwner(itemId, owner)}
@@ -2042,6 +2049,10 @@ function TodayExperience({
             if (position >= 0) await dayRitual.reorder(activeId, position, title);
           }}
           onDismiss={dayRitual.dismissItem}
+          onAssistantSubmit={dayRitual.submitAssistantPrompt}
+          onConfigureExecution={dayRitual.configureExecution}
+          onKickoffExecution={dayRitual.kickoffExecution}
+          onCancelExecution={dayRitual.cancelExecution}
           onSnooze={() => dayRitual.snooze().catch(() => undefined)}
           onSkip={() => dayRitual.skip().catch(() => undefined)}
           onBypass={() => dayRitual.bypass().catch(() => undefined)}

@@ -25,6 +25,8 @@ export type SettlementState =
   | "settled";
 
 export type DayPlanOwner = "me" | "claude" | "together";
+export type DayPlanExecutionMode = "plan_review" | "autonomous";
+export type DayPlanModelAlias = "sonnet" | "opus";
 export type DayPlanCommitment = "ink" | "pencil";
 export type DayPlanItemDecision =
   | "pending"
@@ -165,7 +167,11 @@ export type DayPlanEvent = {
   createdAt: string;
 };
 
-export type DayPlanEventType = "ensure" | DayPlanMutationAction;
+export type DayPlanEventType =
+  | "ensure"
+  | "assistant_patch"
+  | "item_kickoff"
+  | DayPlanMutationAction;
 
 export type DayPlanMutationAction =
   | "arrival_open"
@@ -215,6 +221,12 @@ export type DayPlanMutationResult = {
   plan: DayPlan;
   snapshot?: DaySnapshot;
   pendingReconciliations?: DayPlanReconciliation[];
+  executionRuns?: DayPlanExecutionRun[];
+  unreadyItems?: DayPlanUnreadyItem[];
+  worker?: {
+    queuedRuns: number;
+    available: boolean;
+  };
   replayed: boolean;
 };
 
@@ -227,4 +239,195 @@ export type DayPlanReadModel = {
   currentPlan?: DayPlan;
   latestSnapshot?: DaySnapshot;
   pendingReconciliations: DayPlanReconciliation[];
+};
+
+export type DayPlanAssistantOperation =
+  | {
+      operation: "edit_item";
+      itemId: string;
+      title?: string;
+      outcome?: string;
+      definitionOfDone?: string | null;
+    }
+  | {
+      operation: "set_owner";
+      itemId: string;
+      owner: DayPlanOwner;
+    }
+  | {
+      operation: "reorder";
+      orderedItemIds: string[];
+    };
+
+export type DayPlanAssistantProposal = {
+  assistantText: string;
+  needsClarification: boolean;
+  operations: DayPlanAssistantOperation[];
+};
+
+export type DayPlanAssistantTurnState =
+  | "queued"
+  | "running"
+  | "proposed"
+  | "applied"
+  | "conflict"
+  | "failed"
+  | "cancelled";
+
+export type DayPlanAssistantTurn = {
+  id: string;
+  dayPlanId: string;
+  baseVersion: number;
+  userText: string;
+  state: DayPlanAssistantTurnState;
+  proposal?: DayPlanAssistantProposal;
+  resultVersion?: number;
+  errorCode?: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  appliedAt?: string;
+};
+
+export type DayPlanExecutionConfig = {
+  dayPlanId: string;
+  itemId: string;
+  mode: DayPlanExecutionMode;
+  modelAlias: DayPlanModelAlias;
+  workspaceId?: string;
+  budgetUsd?: number;
+  briefHash: string;
+  authorizationHash: string;
+  lastMutationId: string;
+  configuredAt: string;
+  updatedAt: string;
+};
+
+export type DayPlanReadinessCode =
+  | "ready"
+  | "owner_not_agent"
+  | "mode_required"
+  | "together_requires_plan_review"
+  | "brief_changed"
+  | "execution_disabled"
+  | "definition_of_done_required"
+  | "workspace_required"
+  | "workspace_not_allowlisted"
+  | "workspace_missing"
+  | "workspace_not_git"
+  | "workspace_dirty"
+  | "project_not_opted_in"
+  | "budget_required"
+  | "budget_exceeds_limit";
+
+export type DayPlanExecutionReadiness = {
+  ready: boolean;
+  codes: DayPlanReadinessCode[];
+  checkedAt: string;
+  workspacePath?: string;
+  maximumBudgetUsd?: number;
+};
+
+export type DayPlanExecutionRunStatus =
+  | "queued"
+  | "starting"
+  | "running"
+  | "plan_ready"
+  | "ready_to_join"
+  | "awaiting_review"
+  | "failed"
+  | "interrupted"
+  | "cancelling"
+  | "cancelled";
+
+export type DayPlanExecutionRun = {
+  id: string;
+  dayPlanId: string;
+  itemId: string;
+  taskId: string;
+  owner: DayPlanOwner;
+  mode: DayPlanExecutionMode;
+  modelAlias: DayPlanModelAlias;
+  status: DayPlanExecutionRunStatus;
+  idempotencyKey: string;
+  attempt: number;
+  claudeSessionId: string;
+  briefHash: string;
+  authorizationHash: string;
+  promptSnapshot: {
+    title: string;
+    outcome: string;
+    definitionOfDone?: string;
+    whyToday: string;
+    project?: string;
+    dueAt?: string;
+  };
+  workspaceId?: string;
+  workspacePath?: string;
+  budgetUsd?: number;
+  readiness: DayPlanExecutionReadiness;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  pid?: number;
+  heartbeatAt?: string;
+  resultSummary?: DayPlanExecutionResultSummary;
+  exitCode?: number;
+  errorCode?: string;
+};
+
+export type DayPlanExecutionResultSummary = {
+  kind: "plan" | "execution";
+  text: string;
+  durationMs?: number;
+  totalCostUsd?: number;
+};
+
+export type DayPlanExecutionWorkspaceMetadata = {
+  id: string;
+  maximumBudgetUsd: number;
+};
+
+export type DayPlanUnreadyItem = {
+  itemId: string;
+  taskId: string;
+  title: string;
+  readiness: DayPlanExecutionReadiness;
+};
+
+export type ConfigureDayPlanExecutionInput = {
+  planId: string;
+  itemId: string;
+  expectedVersion: number;
+  mutationId: string;
+  mode: DayPlanExecutionMode;
+  modelAlias: DayPlanModelAlias;
+  workspaceId?: string;
+  budgetUsd?: number;
+};
+
+export type DayPlanExecutionConfigResult = {
+  config: DayPlanExecutionConfig;
+  readiness: DayPlanExecutionReadiness;
+  replayed: boolean;
+};
+
+export type KickoffDayPlanItemInput = {
+  planId: string;
+  itemId: string;
+  expectedVersion: number;
+  mutationId: string;
+};
+
+export type KickoffDayPlanItemResult = {
+  plan: DayPlan;
+  run?: DayPlanExecutionRun;
+  readiness: DayPlanExecutionReadiness;
+  worker?: {
+    queued: true;
+    workerAvailable: boolean;
+    lane: "execution";
+  };
+  replayed: boolean;
 };

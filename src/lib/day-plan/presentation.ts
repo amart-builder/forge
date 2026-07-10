@@ -1,4 +1,7 @@
 import type {
+  DayPlanAssistantTurn,
+  DayPlanExecutionReadiness,
+  DayPlanExecutionRunStatus,
   DayPlanItem,
   DayPlanOwner as DayOwner,
   SettlementDisposition,
@@ -55,6 +58,80 @@ export function helpfulProjectLabel(value: string | undefined): string | undefin
     return undefined;
   }
   return cleaned;
+}
+
+export function assistantTurnStatusLabel(turn: DayPlanAssistantTurn): string {
+  if (turn.state === 'queued') return 'Queued';
+  if (turn.state === 'running') return 'Claude is working';
+  if (turn.state === 'applied') return 'Applied';
+  if (turn.state === 'proposed' && turn.proposal?.needsClarification) {
+    return 'Clarification needed';
+  }
+  if (turn.state === 'proposed') return 'Ready to review';
+  if (turn.state === 'conflict') return 'Plan changed before this could apply';
+  if (turn.state === 'cancelled') return 'Cancelled';
+  return 'Error';
+}
+
+export function executionRunStatusLabel(status: DayPlanExecutionRunStatus): string {
+  if (status === 'queued') return 'Queued';
+  if (status === 'starting' || status === 'running') return 'Claude is working';
+  if (status === 'plan_ready') return 'Plan ready';
+  if (status === 'ready_to_join') return 'Ready to join';
+  if (status === 'awaiting_review') return 'Awaiting review';
+  if (status === 'cancelling') return 'Cancelling';
+  if (status === 'failed') return 'Failed';
+  return 'Interrupted';
+}
+
+export function executionReadinessMessage(
+  readiness: DayPlanExecutionReadiness | undefined,
+  owner: DayOwner,
+): string {
+  if (owner === 'me') return 'Choose Claude or Together before selecting an execution mode.';
+  if (
+    !readiness ||
+    readiness.codes.includes('mode_required') ||
+    readiness.codes.includes('owner_not_agent')
+  ) {
+    return owner === 'together'
+      ? 'Choose Plan with Claude before kickoff.'
+      : 'Choose Plan with Claude or Autonomous before kickoff.';
+  }
+  if (readiness.ready) return 'Ready to queue.';
+  if (readiness.codes.includes('brief_changed')) {
+    return 'The brief changed. Choose a mode again to refresh it.';
+  }
+  if (readiness.codes.includes('together_requires_plan_review')) {
+    return 'Together can only use Plan with Claude.';
+  }
+  if (readiness.codes.includes('execution_disabled')) {
+    return 'Autonomous work is not enabled on this Forge setup.';
+  }
+  if (readiness.codes.includes('definition_of_done_required')) {
+    return 'Add a definition of done before autonomous kickoff.';
+  }
+  if (
+    readiness.codes.includes('workspace_required') ||
+    readiness.codes.includes('workspace_not_allowlisted') ||
+    readiness.codes.includes('workspace_missing') ||
+    readiness.codes.includes('workspace_not_git')
+  ) {
+    return 'This task is not linked to an approved project for autonomous work.';
+  }
+  if (readiness.codes.includes('workspace_dirty')) {
+    return 'The approved project has uncommitted changes, so autonomous work is paused.';
+  }
+  if (readiness.codes.includes('project_not_opted_in')) {
+    return 'This project has not opted into autonomous work.';
+  }
+  if (
+    readiness.codes.includes('budget_required') ||
+    readiness.codes.includes('budget_exceeds_limit')
+  ) {
+    return 'Autonomous budget setup is incomplete.';
+  }
+  return 'This brief needs more context before kickoff.';
 }
 
 export function ownerLabel(owner: DayOwner): string {

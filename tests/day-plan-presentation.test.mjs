@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   allSettlementDecisionsMade,
+  assistantTurnStatusLabel,
   combineSurfaceErrors,
   firstCarriedItem,
+  executionReadinessMessage,
+  executionRunStatusLabel,
   helpfulProjectLabel,
   ownerDescription,
   reorderDayPlanItems,
@@ -71,6 +74,44 @@ test('project pills suppress operational tags and overlong labels', () => {
   assert.equal(helpfulProjectLabel('Catalyst'), 'Catalyst');
   assert.equal(helpfulProjectLabel('captured-today'), undefined);
   assert.equal(helpfulProjectLabel('x'.repeat(33)), undefined);
+});
+
+test('assistant and execution states use truthful non-completion labels', () => {
+  assert.equal(assistantTurnStatusLabel({ state: 'queued' }), 'Queued');
+  assert.equal(
+    assistantTurnStatusLabel({
+      state: 'proposed',
+      proposal: { needsClarification: true, assistantText: 'Which client?', operations: [] },
+    }),
+    'Clarification needed',
+  );
+  assert.equal(executionRunStatusLabel('running'), 'Claude is working');
+  assert.equal(executionRunStatusLabel('plan_ready'), 'Plan ready');
+  assert.equal(executionRunStatusLabel('awaiting_review'), 'Awaiting review');
+  assert.equal(executionRunStatusLabel('cancelling'), 'Cancelling');
+  assert.notEqual(executionRunStatusLabel('plan_ready'), 'Completed');
+});
+
+test('readiness copy explains mode and brief resets without exposing paths', () => {
+  assert.equal(
+    executionReadinessMessage({ ready: false, codes: ['mode_required'], checkedAt: '' }, 'claude'),
+    'Choose Plan with Claude or Autonomous before kickoff.',
+  );
+  assert.equal(
+    executionReadinessMessage({ ready: false, codes: ['owner_not_agent'], checkedAt: '' }, 'claude'),
+    'Choose Plan with Claude or Autonomous before kickoff.',
+  );
+  assert.equal(
+    executionReadinessMessage({ ready: false, codes: ['brief_changed'], checkedAt: '' }, 'together'),
+    'The brief changed. Choose a mode again to refresh it.',
+  );
+  const workspaceCopy = executionReadinessMessage({
+    ready: false,
+    codes: ['workspace_dirty'],
+    checkedAt: '',
+    workspacePath: '/secret/client/repo',
+  }, 'claude');
+  assert.equal(workspaceCopy.includes('/secret'), false);
 });
 
 test('an overdue defer is applied before its resurface against updated task state', () => {

@@ -27,6 +27,19 @@ if [ ! -x "$NEXT_BIN" ]; then
   echo "Could not find Next.js at $NEXT_BIN. Run 'npm install' and 'npm run build' first." >&2
   exit 1
 fi
+TSX_BIN="$REPO_DIR/node_modules/.bin/tsx"
+if [ ! -x "$TSX_BIN" ]; then
+  echo "Could not find tsx at $TSX_BIN. Run 'npm install' first." >&2
+  exit 1
+fi
+CLAUDE_BIN="${FORGE_CLAUDE_BIN:-$(command -v claude 2>/dev/null || true)}"
+if [ -z "$CLAUDE_BIN" ] && [ -x "$HOME/.local/bin/claude" ]; then
+  CLAUDE_BIN="$HOME/.local/bin/claude"
+fi
+if [ -z "$CLAUDE_BIN" ] || [ ! -x "$CLAUDE_BIN" ]; then
+  echo "Claude Code is required for Forge execution. Install it or set FORGE_CLAUDE_BIN." >&2
+  exit 1
+fi
 
 mkdir -p "$LOG_DIR" "$LA_DIR"
 
@@ -54,6 +67,7 @@ SERVER_PLIST="$LA_DIR/com.forge.local.plist"
 BACKUP_PLIST="$LA_DIR/com.forge.local.backup.plist"
 REMINDERS_PLIST="$LA_DIR/com.forge.reminders.plist"
 TRIAGE_PLIST="$LA_DIR/com.forge.email-triage.plist"
+WORKER_PLIST="$LA_DIR/com.forge.claude-worker.plist"
 
 # --- Server: next start on localhost:3200 ---
 cat > "$SERVER_PLIST" <<EOF
@@ -90,6 +104,50 @@ cat > "$SERVER_PLIST" <<EOF
     <string>production</string>
     <key>FORGE_DAY_PLAN_ACCESS_MODE</key>
     <string>loopback</string>
+    <key>FORGE_CLAUDE_WORKER_AVAILABLE</key>
+    <string>1</string>
+  </dict>
+</dict>
+</plist>
+EOF
+
+# --- Claude worker: supervised durable queue consumer ---
+cat > "$WORKER_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.forge.claude-worker</string>
+  <key>WorkingDirectory</key>
+  <string>$REPO_DIR</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$TSX_BIN</string>
+    <string>$REPO_DIR/scripts/forge-claude-worker.ts</string>
+    <string>--lane</string>
+    <string>watch</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>$LOG_DIR/forge-claude-worker.log</string>
+  <key>StandardErrorPath</key>
+  <string>$LOG_DIR/forge-claude-worker.error.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <key>HOME</key>
+    <string>$HOME</string>
+    <key>FORGE_CLAUDE_WORKER_ENABLED</key>
+    <string>1</string>
+    <key>FORGE_CLAUDE_BIN</key>
+    <string>$CLAUDE_BIN</string>
   </dict>
 </dict>
 </plist>
@@ -220,11 +278,14 @@ launchctl bootout "gui/$UID_NUM/com.forge.local" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.local.backup" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.reminders" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.email-triage" 2>/dev/null || true
+launchctl bootout "gui/$UID_NUM/com.forge.claude-worker" 2>/dev/null || true
 launchctl bootstrap "gui/$UID_NUM" "$SERVER_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$BACKUP_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$REMINDERS_PLIST"
+launchctl bootstrap "gui/$UID_NUM" "$WORKER_PLIST"
 if [ -f "$TRIAGE_PLIST" ]; then launchctl bootstrap "gui/$UID_NUM" "$TRIAGE_PLIST"; fi
 launchctl enable "gui/$UID_NUM/com.forge.local" 2>/dev/null || true
+launchctl enable "gui/$UID_NUM/com.forge.claude-worker" 2>/dev/null || true
 
 # Confirm the server actually came up. This catches the most common failure:
 # launchd not being able to find/run Node on the client's machine.
@@ -239,9 +300,24 @@ for _ in $(seq 1 20); do
 done
 
 if [ -n "$UP" ]; then
+  WORKER_UP=""
+  for _ in $(seq 1 10); do
+    if [ -f "$REPO_DIR/data/claude-worker.heartbeat" ]; then
+      WORKER_UP="yes"
+      break
+    fi
+    sleep 1
+  done
+  if [ -z "$WORKER_UP" ]; then
+    echo "Forge web started, but the Claude worker did not become healthy." >&2
+    echo "See: $LOG_DIR/forge-claude-worker.error.log" >&2
+    exit 1
+  fi
   echo "Forge is running at http://localhost:3200 and will start automatically on login."
   echo "Server logs: $LOG_DIR/forge.log"
   echo "Daily database backups: $REPO_DIR/data/backups"
+  echo "Claude worker: supervised by com.forge.claude-worker"
+  echo "Autonomous execution remains off until FORGE_CLAUDE_EXECUTION_ENABLED=1 and an allowlisted workspace config are explicitly added."
 else
   echo "Forge did not respond on http://localhost:3200 within 20 seconds." >&2
   echo "See the log for why: $LOG_DIR/forge.error.log" >&2

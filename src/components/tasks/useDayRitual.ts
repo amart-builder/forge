@@ -3,15 +3,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   acknowledgeDayPlanReconciliation,
+  cancelDayPlanExecutionRun,
+  configureDayPlanExecution,
+  createDayPlanAssistantTurn,
   DayPlanApiConflict,
   ensureDayPlan,
+  getDayPlanAssistantTurn,
+  getDayPlanExecutionState,
   getDayPlanState,
+  kickoffDayPlanItem,
   mutateDayPlan,
   newDayPlanMutationId,
   onceOnlyDayPlanMutationId,
+  type DayPlanExecutionState,
 } from '@/lib/data/day-plan';
 import type {
   DayPlan,
+  DayPlanAssistantTurn,
+  DayPlanExecutionMode,
+  DayPlanModelAlias,
   DayPlanMutationAction,
   DayPlanMutationInput,
   DayPlanMutationResult,
@@ -62,6 +72,31 @@ function stableMutationId(action: string, plan: DayPlan): string {
   return `${action}:${plan.id}:${plan.version}`;
 }
 
+const ACTIVE_ASSISTANT_STATES = new Set(['queued', 'running']);
+const ACTIVE_EXECUTION_STATES = new Set(['queued', 'starting', 'running', 'cancelling']);
+
+function assertAutonomousSetup(
+  mode: DayPlanExecutionMode,
+  state: DayPlanExecutionState | undefined,
+  workspaceId: string | undefined,
+  budgetUsd: number | undefined,
+) {
+  if (mode !== 'autonomous') return;
+  if (!state?.workspaces.length) {
+    throw new Error('Autonomous needs a connected project.');
+  }
+  const workspace = state.workspaces.find((candidate) => candidate.id === workspaceId);
+  if (!workspace) throw new Error('Choose a connected project.');
+  if (
+    budgetUsd === undefined ||
+    !Number.isFinite(budgetUsd) ||
+    budgetUsd <= 0 ||
+    budgetUsd > workspace.maximumBudgetUsd
+  ) {
+    throw new Error(`Set a budget between $0.01 and $${workspace.maximumBudgetUsd}.`);
+  }
+}
+
 export default function useDayRitual({
   enabled,
   candidates,
@@ -76,7 +111,17 @@ export default function useDayRitual({
   const [error, setError] = useState<string>();
   const [announcement, setAnnouncement] = useState('');
   const [transitionMessage, setTransitionMessage] = useState('');
+  const [assistantTurn, setAssistantTurn] = useState<DayPlanAssistantTurn>();
+  const [assistantSubmitting, setAssistantSubmitting] = useState(false);
+  const [assistantError, setAssistantError] = useState<string>();
+  const [executionState, setExecutionState] = useState<DayPlanExecutionState>();
+  const [executionLoading, setExecutionLoading] = useState(false);
+  const [executionBusyItemIds, setExecutionBusyItemIds] = useState<Set<string>>(new Set());
+  const [executionError, setExecutionError] = useState<string>();
   const planRef = useRef<DayPlan | undefined>(undefined);
+  const assistantTurnRef = useRef<DayPlanAssistantTurn | undefined>(undefined);
+  const assistantSubmittingRef = useRef(false);
+  const executionStateRef = useRef<DayPlanExecutionState | undefined>(undefined);
   const candidatesRef = useRef(candidates);
   const reconciliationBlockedRef = useRef(false);
   const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
@@ -89,6 +134,39 @@ export default function useDayRitual({
     if (snapshot) setLatestSnapshot(snapshot);
     setView(inferView(nextPlan));
   }, []);
+
+  const refreshPlan = useCallback(async () => {
+    const readModel = await getDayPlanState();
+    setLatestSnapshot(readModel.latestSnapshot);
+    setPendingReconciliations(readModel.pendingReconciliations);
+    if (readModel.currentPlan) acceptPlan(readModel.currentPlan, readModel.latestSnapshot);
+    return readModel.currentPlan;
+  }, [acceptPlan]);
+
+  const acceptExecutionState = useCallback((next: DayPlanExecutionState) => {
+    executionStateRef.current = next;
+    setExecutionState(next);
+  }, []);
+
+  const refreshExecution = useCallback(async (planId?: string) => {
+    const targetPlanId = planId ?? planRef.current?.id;
+    if (!targetPlanId) return undefined;
+    setExecutionLoading(true);
+    try {
+      const next = await getDayPlanExecutionState(targetPlanId);
+      acceptExecutionState(next);
+      setExecutionError(undefined);
+      return next;
+    } catch (nextError) {
+      const message = nextError instanceof Error
+        ? nextError.message
+        : "Forge couldn't refresh Claude execution state.";
+      setExecutionError(message);
+      throw nextError;
+    } finally {
+      setExecutionLoading(false);
+    }
+  }, [acceptExecutionState]);
 
   useEffect(() => {
     if (!enabled) {
@@ -233,6 +311,69 @@ export default function useDayRitual({
     };
   }, [acceptPlan, candidatesReady, enabled]);
 
+  useEffect(() => {
+    if (!enabled || !plan?.id) return;
+    void refreshExecution(plan.id).catch(() => undefined);
+  }, [enabled, plan?.id, plan?.version, refreshExecution]);
+
+  useEffect(() => {
+    const currentTurn = assistantTurn;
+    if (!currentTurn || !ACTIVE_ASSISTANT_STATES.has(currentTurn.state)) return;
+    const turnId = currentTurn.id;
+    let cancelled = false;
+    let timeout: number | undefined;
+
+    async function poll() {
+      try {
+        const next = await getDayPlanAssistantTurn(turnId);
+        if (cancelled) return;
+        assistantTurnRef.current = next;
+        setAssistantTurn(next);
+        setAssistantError(undefined);
+        if (next.state === 'applied') {
+          const refreshed = await refreshPlan();
+          if (refreshed) await refreshExecution(refreshed.id);
+          return;
+        }
+        if (ACTIVE_ASSISTANT_STATES.has(next.state)) {
+          timeout = window.setTimeout(() => void poll(), 1000);
+        }
+      } catch (nextError) {
+        if (cancelled) return;
+        setAssistantError(
+          nextError instanceof Error ? nextError.message : "Forge couldn't check Claude's response.",
+        );
+        timeout = window.setTimeout(() => void poll(), 1500);
+      }
+    }
+
+    timeout = window.setTimeout(() => void poll(), 800);
+    return () => {
+      cancelled = true;
+      if (timeout !== undefined) window.clearTimeout(timeout);
+    };
+  }, [assistantTurn, refreshExecution, refreshPlan]);
+
+  useEffect(() => {
+    if (!executionState?.runs.some((run) => ACTIVE_EXECUTION_STATES.has(run.status))) return;
+    let cancelled = false;
+    let timeout: number | undefined;
+
+    async function poll() {
+      try {
+        await refreshExecution(planRef.current?.id);
+      } catch {
+        if (!cancelled) timeout = window.setTimeout(() => void poll(), 2000);
+      }
+    }
+
+    timeout = window.setTimeout(() => void poll(), 1500);
+    return () => {
+      cancelled = true;
+      if (timeout !== undefined) window.clearTimeout(timeout);
+    };
+  }, [executionState, refreshExecution]);
+
   const enqueueMutation = useCallback(
     async (
       action: DayPlanMutationAction,
@@ -344,6 +485,214 @@ export default function useDayRitual({
     });
   }, [enqueueMutation]);
 
+  const submitAssistantPrompt = useCallback(async (userText: string) => {
+    const current = planRef.current;
+    if (!current) throw new Error('The day plan is not ready.');
+    if (
+      assistantSubmittingRef.current ||
+      (assistantTurnRef.current && ACTIVE_ASSISTANT_STATES.has(assistantTurnRef.current.state))
+    ) {
+      throw new Error('Claude is already considering a change.');
+    }
+    assistantSubmittingRef.current = true;
+    setAssistantSubmitting(true);
+    setAssistantError(undefined);
+    try {
+      const result = await createDayPlanAssistantTurn({
+        planId: current.id,
+        expectedVersion: current.version,
+        mutationId: `assistant:${current.id}:${newDayPlanMutationId()}`,
+        userText,
+      });
+      assistantTurnRef.current = result.turn;
+      setAssistantTurn(result.turn);
+      setAnnouncement('Claude is queued to consider that change.');
+      return result.turn;
+    } catch (nextError) {
+      if (nextError instanceof DayPlanApiConflict) acceptPlan(nextError.currentPlan);
+      const message = nextError instanceof Error
+        ? nextError.message
+        : "Forge couldn't queue that request.";
+      setAssistantError(message);
+      throw nextError;
+    } finally {
+      assistantSubmittingRef.current = false;
+      setAssistantSubmitting(false);
+    }
+  }, [acceptPlan]);
+
+  const configureExecution = useCallback(async (
+    itemId: string,
+    mode: DayPlanExecutionMode,
+    modelAlias: DayPlanModelAlias,
+    workspaceId?: string,
+    budgetUsd?: number,
+  ) => {
+    const current = planRef.current;
+    if (!current) throw new Error('The day plan is not ready.');
+    setExecutionBusyItemIds((items) => new Set(items).add(itemId));
+    setExecutionError(undefined);
+    try {
+      assertAutonomousSetup(
+        mode,
+        executionStateRef.current,
+        workspaceId,
+        budgetUsd,
+      );
+      const result = await configureDayPlanExecution({
+        planId: current.id,
+        itemId,
+        expectedVersion: current.version,
+        mutationId: `configure:${current.id}:${itemId}:${mode}:${modelAlias}:${workspaceId ?? 'none'}:${budgetUsd ?? 'none'}:${current.version}`,
+        mode,
+        modelAlias,
+        workspaceId: mode === 'autonomous' ? workspaceId : undefined,
+        budgetUsd: mode === 'autonomous' ? budgetUsd : undefined,
+      });
+      const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
+      acceptExecutionState({
+        ...previous,
+        items: [
+          ...previous.items.filter((item) => item.itemId !== itemId),
+          { itemId, config: result.config, readiness: result.readiness },
+        ],
+      });
+      setAnnouncement(result.readiness.ready
+        ? 'Claude execution is ready to queue.'
+        : 'Execution mode saved, but the brief still needs attention.');
+      return result;
+    } catch (nextError) {
+      if (nextError instanceof DayPlanApiConflict) acceptPlan(nextError.currentPlan);
+      const message = nextError instanceof Error
+        ? nextError.message
+        : "Forge couldn't save that execution mode.";
+      setExecutionError(message);
+      throw nextError;
+    } finally {
+      setExecutionBusyItemIds((items) => {
+        const next = new Set(items);
+        next.delete(itemId);
+        return next;
+      });
+    }
+  }, [acceptExecutionState, acceptPlan]);
+
+  const kickoffExecution = useCallback(async (
+    itemId: string,
+    mode: DayPlanExecutionMode,
+    modelAlias: DayPlanModelAlias,
+    workspaceId?: string,
+    budgetUsd?: number,
+  ) => {
+    const current = planRef.current;
+    if (!current) throw new Error('The day plan is not ready.');
+    setExecutionBusyItemIds((items) => new Set(items).add(itemId));
+    setExecutionError(undefined);
+    try {
+      assertAutonomousSetup(
+        mode,
+        executionStateRef.current,
+        workspaceId,
+        budgetUsd,
+      );
+      let itemState = executionStateRef.current?.items.find((item) => item.itemId === itemId);
+      const needsConfiguration =
+        !itemState?.config ||
+        itemState.config.mode !== mode ||
+        itemState.config.modelAlias !== modelAlias ||
+        (mode === 'autonomous' && itemState.config.workspaceId !== workspaceId) ||
+        (mode === 'autonomous' && itemState.config.budgetUsd !== budgetUsd) ||
+        itemState.readiness.codes.includes('brief_changed');
+      if (needsConfiguration) {
+        const configured = await configureDayPlanExecution({
+          planId: current.id,
+          itemId,
+          expectedVersion: current.version,
+          mutationId: `configure:${current.id}:${itemId}:${mode}:${modelAlias}:${workspaceId ?? 'none'}:${budgetUsd ?? 'none'}:${current.version}`,
+          mode,
+          modelAlias,
+          workspaceId: mode === 'autonomous' ? workspaceId : undefined,
+          budgetUsd: mode === 'autonomous' ? budgetUsd : undefined,
+        });
+        itemState = { itemId, config: configured.config, readiness: configured.readiness };
+        const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
+        acceptExecutionState({
+          ...previous,
+          items: [...previous.items.filter((item) => item.itemId !== itemId), itemState],
+        });
+      }
+      if (!itemState?.readiness.ready) {
+        setAnnouncement('That task is not ready to queue yet.');
+        return undefined;
+      }
+
+      const result = await kickoffDayPlanItem({
+        planId: current.id,
+        itemId,
+        expectedVersion: current.version,
+        mutationId: `kickoff:${current.id}:${itemId}:${mode}:${modelAlias}:${workspaceId ?? 'none'}:${budgetUsd ?? 'none'}:${current.version}`,
+      });
+      acceptPlan(result.plan);
+      if (result.run) {
+        const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
+        acceptExecutionState({
+          ...previous,
+          runs: [...previous.runs.filter((run) => run.id !== result.run!.id), result.run],
+        });
+        setAnnouncement(result.worker?.workerAvailable === false
+          ? 'Claude work is queued, but the Claude worker needs attention.'
+          : 'Claude work is queued.');
+      } else {
+        setAnnouncement('That task is not ready to queue yet.');
+      }
+      return result.run;
+    } catch (nextError) {
+      if (nextError instanceof DayPlanApiConflict) acceptPlan(nextError.currentPlan);
+      const message = nextError instanceof Error
+        ? nextError.message
+        : "Forge couldn't queue that task.";
+      setExecutionError(message);
+      throw nextError;
+    } finally {
+      setExecutionBusyItemIds((items) => {
+        const next = new Set(items);
+        next.delete(itemId);
+        return next;
+      });
+    }
+  }, [acceptExecutionState, acceptPlan]);
+
+  const cancelExecution = useCallback(async (runId: string) => {
+    const run = executionStateRef.current?.runs.find((candidate) => candidate.id === runId);
+    if (!run) throw new Error('That Claude run is no longer available.');
+    setExecutionBusyItemIds((items) => new Set(items).add(run.itemId));
+    setExecutionError(undefined);
+    try {
+      const result = await cancelDayPlanExecutionRun(runId);
+      const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
+      acceptExecutionState({
+        ...previous,
+        runs: [...previous.runs.filter((candidate) => candidate.id !== runId), result.run],
+      });
+      setAnnouncement(result.run.status === 'cancelling'
+        ? 'Cancellation requested.'
+        : 'Claude run cancelled.');
+      return result.run;
+    } catch (nextError) {
+      const message = nextError instanceof Error
+        ? nextError.message
+        : "Forge couldn't cancel that Claude run.";
+      setExecutionError(message);
+      throw nextError;
+    } finally {
+      setExecutionBusyItemIds((items) => {
+        const next = new Set(items);
+        next.delete(run.itemId);
+        return next;
+      });
+    }
+  }, [acceptExecutionState]);
+
   const startDay = useCallback(async (): Promise<string | undefined> => {
     const current = planRef.current;
     if (!current) throw new Error('The day plan is not ready.');
@@ -354,16 +703,68 @@ export default function useDayRitual({
     const firstItem = result.plan.items.find(
       (item) => item.id === result.plan.recommendedFirstItemId,
     );
-    setTransitionMessage(firstItem
-      ? firstItem.owner === 'me'
-        ? `Your day is set. Start with ${firstItem.title}.`
-        : `Your day is set. Start with the brief for ${firstItem.title}. Claude execution is not active yet.`
-      : 'Your day is set. Living Current is ready.');
+    const executionRuns = result.executionRuns ?? [];
+    const queuedCount = result.worker?.queuedRuns ?? executionRuns.filter((run) =>
+      run.status === 'queued'
+    ).length;
+    const startingCount = executionRuns.filter((run) => run.status === 'starting').length;
+    const workingCount = executionRuns.filter((run) => run.status === 'running').length;
+    const readyCount = executionRuns.filter((run) =>
+      run.status === 'plan_ready' ||
+      run.status === 'ready_to_join' ||
+      run.status === 'awaiting_review'
+    ).length;
+    const attentionCount = executionRuns.length -
+      executionRuns.filter((run) => run.status === 'queued').length -
+      startingCount - workingCount - readyCount;
+    const unreadyCount = result.unreadyItems?.length ?? 0;
+    const parts = ['Your day is set.'];
+    if (queuedCount > 0) {
+      parts.push(`${queuedCount} Claude ${queuedCount === 1 ? 'task is' : 'tasks are'} queued.`);
+      if (result.worker?.available === false) {
+        parts.push('The Claude worker needs attention.');
+      }
+    }
+    if (startingCount > 0) {
+      parts.push(`Claude is starting ${startingCount} ${startingCount === 1 ? 'task' : 'tasks'}.`);
+    }
+    if (workingCount > 0) {
+      parts.push(`Claude is already working on ${workingCount} ${workingCount === 1 ? 'task' : 'tasks'}.`);
+    }
+    if (readyCount > 0) {
+      parts.push(`${readyCount} Claude ${readyCount === 1 ? 'result is' : 'results are'} ready.`);
+    }
+    if (attentionCount > 0) {
+      parts.push(`${attentionCount} Claude ${attentionCount === 1 ? 'task needs' : 'tasks need'} attention.`);
+    }
+    if (unreadyCount > 0) {
+      parts.push(`${unreadyCount === 1 ? 'One needs' : `${unreadyCount} need`} more context.`);
+    }
+    if (firstItem) {
+      parts.push(firstItem.owner === 'me'
+        ? `Start with ${firstItem.title}.`
+        : `Start with the brief for ${firstItem.title}.`);
+    } else {
+      parts.push('Living Current is ready.');
+    }
+    setTransitionMessage(parts.join(' '));
+    if (result.executionRuns?.length) {
+      const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
+      acceptExecutionState({
+        ...previous,
+        runs: [
+          ...previous.runs.filter(
+            (run) => !result.executionRuns!.some((queued) => queued.id === run.id),
+          ),
+          ...result.executionRuns,
+        ],
+      });
+    }
     setView('transition');
     await new Promise((resolve) => window.setTimeout(resolve, 1200));
     setView('none');
     return result.plan.recommendedFirstTaskId;
-  }, [enqueueMutation]);
+  }, [acceptExecutionState, enqueueMutation]);
 
   const openSettlement = useCallback(async () => {
     const current = planRef.current;
@@ -471,6 +872,13 @@ export default function useDayRitual({
     error,
     announcement,
     transitionMessage,
+    assistantTurn,
+    assistantSubmitting,
+    assistantError,
+    executionState,
+    executionLoading,
+    executionBusyItemIds,
+    executionError,
     ritualOpen: view === 'arrival' || view === 'transition' || view === 'settlement',
     openArrival,
     snooze,
@@ -479,6 +887,11 @@ export default function useDayRitual({
     setOwner,
     reorder,
     dismissItem,
+    submitAssistantPrompt,
+    configureExecution,
+    kickoffExecution,
+    cancelExecution,
+    refreshExecution,
     startDay,
     openSettlement,
     cancelSettlement,
