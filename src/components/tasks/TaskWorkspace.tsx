@@ -55,7 +55,11 @@ export default function TaskWorkspace() {
         </p>
       )}
       <div className="min-h-0 flex-1">
-        {view === 'today' ? <TodayView /> : <KanbanBoard />}
+        {view === 'today' ? (
+          <TodayView onOpenAllWork={() => setView('all-work')} />
+        ) : (
+          <KanbanBoard />
+        )}
       </div>
     </div>
   );

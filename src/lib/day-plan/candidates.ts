@@ -1,0 +1,170 @@
+import type {
+  DayPlanOwner,
+  RecommendationCandidate,
+  RecommendationSourceRef,
+} from "./types";
+
+export type CandidateTaskInput = {
+  id: string;
+  title: string;
+  description?: string;
+  priority: "low" | "medium" | "high";
+  dueAt?: string | null;
+  position: number;
+  column: "today" | "in_flight";
+  status: "open" | "done" | "archived";
+  updatedAt: string;
+  refreshedAt: string;
+  freshness?: RecommendationSourceRef["freshness"];
+  owner?: DayPlanOwner;
+  outcome?: string;
+  outcomeKey?: string;
+  definitionOfDone?: string;
+  project?: string;
+  humanDecisionEventIds?: string[];
+};
+
+export type BuildDayPlanCandidatesInput = {
+  localDate: string;
+  timezone: string;
+  tasks: CandidateTaskInput[];
+};
+
+const PRIORITY_WEIGHT = { high: 0, medium: 1, low: 2 } as const;
+
+function validDate(value: string): boolean {
+  return !Number.isNaN(new Date(value).getTime());
+}
+function localDateFor(value: string, timezone: string): string | undefined {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function clean(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function candidateForTask(
+  task: CandidateTaskInput,
+  localDate: string,
+  timezone: string,
+): RecommendationCandidate | undefined {
+  const title = clean(task.title);
+  if (
+    !title ||
+    task.status !== "open" ||
+    !Number.isFinite(task.position) ||
+    !validDate(task.updatedAt) ||
+    !validDate(task.refreshedAt) ||
+    (task.freshness && task.freshness !== "current")
+  ) {
+    return undefined;
+  }
+
+  const dueDate = task.dueAt ? localDateFor(task.dueAt, timezone) : undefined;
+  const isOverdue = Boolean(dueDate && dueDate < localDate);
+  const isDueToday = dueDate === localDate;
+  const supports: RecommendationSourceRef["supports"] = ["commitment", "priority"];
+  const rankReasons = [
+    task.column === "in_flight" ? "accepted_in_flight" : "accepted_today",
+    `priority_${task.priority}`,
+  ];
+  let whyToday = task.column === "in_flight"
+    ? "This is accepted work already in flight."
+    : "This is accepted work already committed for today.";
+
+  if (isOverdue || isDueToday) {
+    supports.push("deadline");
+    rankReasons.unshift(isOverdue ? "verified_overdue" : "verified_due_today");
+    whyToday = isOverdue
+      ? "This accepted commitment has a verified overdue date."
+      : "This accepted commitment has a verified due date today.";
+  }
+
+  return {
+    candidateId: `task:${task.id}`,
+    taskId: task.id,
+    outcomeKey: clean(task.outcomeKey) ?? `task:${task.id}`,
+    title,
+    outcome: clean(task.outcome) ?? clean(task.description) ?? title,
+    definitionOfDone: clean(task.definitionOfDone),
+    project: clean(task.project),
+    owner: task.owner ?? "me",
+    commitment: "ink",
+    whyToday,
+    priority: task.priority,
+    dueAt: task.dueAt && validDate(task.dueAt) ? task.dueAt : undefined,
+    sourceRefs: [
+      {
+        sourceType: "task",
+        recordId: task.id,
+        sourceUpdatedAt: task.updatedAt,
+        refreshedAt: task.refreshedAt,
+        freshness: "current",
+        supports,
+      },
+    ],
+    newestSourceRefreshAt: task.refreshedAt,
+    conflicts: [],
+    humanDecisionEventIds: [...new Set(task.humanDecisionEventIds ?? [])],
+    rankReasons,
+  };
+}
+
+/**
+ * Builds a small, deterministic arrival set from accepted task records only.
+ * It intentionally does not infer urgency, ownership, duration, or people
+ * waiting from prose. New source types can be added only with their own
+ * freshness and evidence rules.
+ */
+export function buildDayPlanCandidates(
+  input: BuildDayPlanCandidatesInput,
+): RecommendationCandidate[] {
+  const candidates = input.tasks
+    .map((task) => ({
+      task,
+      candidate: candidateForTask(task, input.localDate, input.timezone),
+    }))
+    .filter(
+      (entry): entry is { task: CandidateTaskInput; candidate: RecommendationCandidate } =>
+        Boolean(entry.candidate),
+    )
+    .sort((left, right) => {
+      const leftDue = left.candidate.rankReasons[0]?.startsWith("verified_") ? 0 : 1;
+      const rightDue = right.candidate.rankReasons[0]?.startsWith("verified_") ? 0 : 1;
+      const leftColumn = left.task.column === "in_flight" ? 0 : 1;
+      const rightColumn = right.task.column === "in_flight" ? 0 : 1;
+      return (
+        leftDue - rightDue ||
+        PRIORITY_WEIGHT[left.task.priority] - PRIORITY_WEIGHT[right.task.priority] ||
+        leftColumn - rightColumn ||
+        left.task.position - right.task.position ||
+        left.task.id.localeCompare(right.task.id)
+      );
+    });
+
+  const seenTasks = new Set<string>();
+  const seenOutcomes = new Set<string>();
+  const result: RecommendationCandidate[] = [];
+  for (const { candidate } of candidates) {
+    if (seenTasks.has(candidate.taskId) || seenOutcomes.has(candidate.outcomeKey)) continue;
+    seenTasks.add(candidate.taskId);
+    seenOutcomes.add(candidate.outcomeKey);
+    result.push(candidate);
+    if (result.length === 3) break;
+  }
+  return result;
+}

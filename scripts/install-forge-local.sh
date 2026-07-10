@@ -88,6 +88,8 @@ cat > "$SERVER_PLIST" <<EOF
     <string>$NODE_BIN:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
     <key>NODE_ENV</key>
     <string>production</string>
+    <key>FORGE_DAY_PLAN_ACCESS_MODE</key>
+    <string>loopback</string>
   </dict>
 </dict>
 </plist>

@@ -24,8 +24,8 @@
 
 ---
 
-**Last updated:** 2026-07-10 (Living Current T1-T3 deployed and canary-verified)
-**State:** Alex's live Supabase-backed Forge and the Jarvis Pro local-first client track now share the Living Current as the primary Today experience. The Mac Mini serves the merged build over Tailscale; email triage remains a separate Mini service and was not changed by this release.
+**Last updated:** 2026-07-10 (Morning Command Center Phase 0 / 1A dogfood slice built)
+**State:** Living Current remains the deployed Today experience. The Morning Arrival and Day Settlement slice is complete on `codex/morning-command-center` for guarded local dogfood, but it is not deployed and the 8 a.m. trigger is not installed. Email triage remains a separate Mini service and was not changed.
 
 ## North Star Goal
 Make Forge the source of truth for Alex's day-to-day execution: tasks, email action items, CRM context, and daily priorities in one operating surface.
@@ -38,6 +38,20 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - Closed tasks require direct evidence before marking done.
 
 ## Current State
+
+### 2026-07-10 Morning Command Center Phase 0 / 1A dogfood slice implemented
+
+- Branch `codex/morning-command-center` now adds a durable SQLite Day Plan, append-only decision events, Day Snapshots, and a task-reconciliation ledger with expected-version and idempotency controls.
+- Morning Arrival is a translucent guided layer over Living Current. It uses up to three current Today / In Flight tasks, explains the recommendation, shows project and ownership, supports pointer and keyboard reordering, expansion, Snooze, Skip, bypass, and a non-destructive Not today action. Cards remain `preselected` until Start My Day records the actual human confirmation.
+- Start My Day gives one truthful transition and routes Living Current to a real Me / Together focus or an honest Claude handoff brief. No Claude execution, kickoff, overnight work, or fake working state exists in this slice.
+- Day Settlement is manually available with Carry, Defer, and Drop. Drop explicitly archives the underlying task. Defer moves work to Not Started and durably schedules it to resurface in Today after seven days. Interrupted task reconciliation retries from the ledger. A missed prior-day Settlement opens before the next Morning Arrival rather than suppressing or misdating it.
+- The macOS arrival trigger exists only as a reversible dry-run spike. It is not installed or wired into the main installer. It models an 08:00 LaunchAgent pulse, wake/login catch-up, workdays and quiet dates, receipts, snooze, prior-day recovery, and fail-closed behavior. Duplicate-tab behavior and live launch reliability still require supervised testing.
+- Day-plan routes deny access when no server-owned access mode is configured. Local dogfood explicitly uses `FORGE_DAY_PLAN_ACCESS_MODE=loopback` while the server is bound to `127.0.0.1`. Non-loopback access requires session mode plus a separate proxy-injected secret in addition to trusted-host and CSRF checks; the browser does not inject that secret yet.
+- Validation is green: 66 state/API/schedule tests, TypeScript, scoped ESLint, production builds, desktop and 390px browser QA, focus trapping, reload persistence, Not today preservation, Start My Day routing, Settlement reconciliation, overdue defer/resurface ordering, and missed-day recovery.
+- QA incident: the first browser harness inherited the build's Supabase runtime and created three clearly named QA tasks in the live task API. Those exact three IDs were immediately deleted and verified absent; no existing task was edited. Later browser runs rebuilt in local mode and used isolated SQLite files.
+- Not included yet: installed 8 a.m. launch behavior, scheduled Settlement, prompt-box refinement, direct Edit / Later controls, Claude session kickoff, autonomous runs, and overnight execution.
+
+Next gate: rebuild and rebootstrap the loopback-bound local Forge agent so it receives the explicit access mode, then run supervised trigger dry-runs. After that, Alex dogfoods both rituals on four of five workdays and measures time from open to intentional first work. Do not install the trigger or deploy this branch to clients before that observation.
 
 ### 2026-07-10 Living Current T1-T3 deployed and canary-verified
 

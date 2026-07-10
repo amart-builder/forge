@@ -1452,3 +1452,48 @@ input, textarea, select {
 .current-river-surface.is-ambient-paused .current-water-drift {
   animation-play-state: paused;
 }
+
+[data-day-ritual-layer] {
+  background:
+    radial-gradient(circle at 50% 8%, color-mix(in srgb, var(--current-water-blue) 24%, transparent), transparent 46%),
+    color-mix(in srgb, var(--background) 34%, transparent);
+  backdrop-filter: saturate(128%) blur(18px);
+  -webkit-backdrop-filter: saturate(128%) blur(18px);
+  animation: day-ritual-arrive 320ms cubic-bezier(.2, .78, .22, 1) both;
+}
+
+[data-day-ritual-layer] [data-day-plan-id] {
+  border-color: color-mix(in srgb, white 48%, var(--border));
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--card) 88%, transparent), color-mix(in srgb, var(--background) 72%, transparent));
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.64) inset,
+    0 34px 110px rgba(28, 52, 62, 0.22),
+    0 8px 30px rgba(28, 52, 62, 0.09);
+  backdrop-filter: saturate(148%) blur(34px);
+  -webkit-backdrop-filter: saturate(148%) blur(34px);
+}
+
+[data-day-ritual-layer] [data-day-plan-id] > div > header,
+[data-day-ritual-layer] [data-day-plan-id] > div > footer {
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  backdrop-filter: saturate(142%) blur(26px);
+  -webkit-backdrop-filter: saturate(142%) blur(26px);
+}
+
+@keyframes day-ritual-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(.992);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-day-ritual-layer] {
+    animation: none !important;
+  }
+}

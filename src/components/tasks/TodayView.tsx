@@ -26,8 +26,23 @@ import {
   type ArrivalTaskStatus,
 } from '@/lib/quiet-current/arrival-cache';
 import { realTimeLabel } from '@/lib/quiet-current/presentation';
+import { buildDayPlanCandidates } from '@/lib/day-plan/candidates';
+import {
+  firstCarriedItem,
+  moveDayPlanItem,
+  reorderDayPlanItems,
+} from '@/lib/day-plan/presentation';
+import {
+  planTaskReconciliation,
+  reconciliationStateMatches,
+  type ReconciliationTaskState,
+} from '@/lib/day-plan/reconciliation';
+import MorningArrival, { type MorningArrivalItem } from './MorningArrival';
+import DaySettlement from './DaySettlement';
+import DayRitualLayer from './DayRitualLayer';
 import CurrentCanvas, { type CurrentPoint, type Tributary } from './CurrentCanvas';
 import TaskDetail from './TaskDetail';
+import useDayRitual from './useDayRitual';
 
 type TaskStatus = ArrivalTaskStatus;
 type ColumnData = ArrivalColumn;
@@ -53,16 +68,27 @@ type UpdateTaskInput = {
   status?: TaskStatus;
 };
 
+type CandidateEvidence = {
+  refreshedAt: string;
+  freshness: 'current' | 'stale';
+};
+
 interface TodayExperienceProps {
   columns: ColumnData[];
   tasks: TaskData[];
+  candidateEvidence?: CandidateEvidence;
   loading: boolean;
   error?: string;
   retry: () => Promise<void>;
   createTask: (input: CreateTaskInput) => Promise<string>;
-  updateTask: (id: string, patch: UpdateTaskInput) => Promise<void>;
+  updateTask: (id: string, patch: UpdateTaskInput) => Promise<TaskData>;
   deleteTask: (id: string) => Promise<void>;
+  onOpenAllWork?: () => void;
 }
+
+type TodayViewProps = {
+  onOpenAllWork?: () => void;
+};
 
 type UndoAction = {
   message: string;
@@ -70,6 +96,7 @@ type UndoAction = {
 };
 
 const TODAY_ALIASES = new Set(['Must happen today', 'Needs to happen today', 'Today']);
+const NOT_STARTED_ALIASES = new Set(['Not Started', 'To Do', 'Backlog']);
 const IN_FLIGHT_ALIASES = new Set(['In Flight / Waiting', 'In Progress']);
 const DONE_ALIASES = new Set(['Done', 'Completed']);
 const JARVIS_HELD_TAG = 'jarvis-held';
@@ -245,13 +272,14 @@ function toRestPatch(patch: UpdateTaskInput): Partial<RestTask> {
   };
 }
 
-export default function TodayView() {
-  return <RestTodayView />;
+export default function TodayView({ onOpenAllWork }: TodayViewProps) {
+  return <RestTodayView onOpenAllWork={onOpenAllWork} />;
 }
 
-function RestTodayView() {
+function RestTodayView({ onOpenAllWork }: TodayViewProps) {
   const [columns, setColumns] = useState<ColumnData[]>([]);
   const [tasks, setTasks] = useState<TaskData[]>([]);
+  const [candidateEvidence, setCandidateEvidence] = useState<CandidateEvidence>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const columnsRef = useRef<ColumnData[]>([]);
@@ -340,6 +368,10 @@ function RestTodayView() {
       ) {
         setTasks(normalizedTasks);
         persistSnapshot(normalizedColumns, normalizedTasks);
+        setCandidateEvidence({
+          refreshedAt: new Date().toISOString(),
+          freshness: 'current',
+        });
       } else {
         refreshAfterMutationsRef.current = true;
         if (inFlightMutationsRef.current === 0) {
@@ -392,6 +424,7 @@ function RestTodayView() {
     confirmedTasksRef.current = cached.tasks;
     setColumns(cached.columns);
     setTasks(cached.tasks);
+    setCandidateEvidence({ refreshedAt: cached.savedAt, freshness: 'stale' });
     setLoading(false);
   }, []);
 
@@ -403,6 +436,7 @@ function RestTodayView() {
     <TodayExperience
       columns={columns}
       tasks={tasks}
+      candidateEvidence={candidateEvidence}
       loading={loading}
       error={error}
       retry={reload}
@@ -469,6 +503,7 @@ function RestTodayView() {
           } else {
             forceRefresh = true;
           }
+          return normalized;
         } catch (nextError) {
           if (taskMutationRevisionsRef.current.get(id) === taskRevision) {
             const confirmedTask = confirmedTasksRef.current.find((task) => task._id === id);
@@ -522,6 +557,7 @@ function RestTodayView() {
           await settleMutation(forceRefresh);
         }
       }}
+      onOpenAllWork={onOpenAllWork}
     />
   );
 }
@@ -529,12 +565,14 @@ function RestTodayView() {
 function TodayExperience({
   columns,
   tasks,
+  candidateEvidence,
   loading,
   error,
   retry,
   createTask,
   updateTask,
   deleteTask,
+  onOpenAllWork,
 }: TodayExperienceProps) {
   const [suggestions, setSuggestions] = useState<WorkSuggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(true);
@@ -563,6 +601,7 @@ function TodayExperience({
   const [dismissMenuId, setDismissMenuId] = useState<string | null>(null);
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
   const [suggestionDraft, setSuggestionDraft] = useState({ title: '', description: '' });
+  const [expandedArrivalItemId, setExpandedArrivalItemId] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>(() => {
     try {
       return JSON.parse(readLocalValue(NOTES_KEY) ?? '{}') as Record<string, string>;
@@ -571,11 +610,14 @@ function TodayExperience({
     }
   });
   const focusHeadingRef = useRef<HTMLHeadingElement>(null);
+  const livingCurrentRef = useRef<HTMLDivElement>(null);
   const searchDialogRef = useRef<HTMLDivElement>(null);
   const searchReturnFocusRef = useRef<HTMLElement | null>(null);
   const undoRunningRef = useRef(false);
+  const reconciliationRunningRef = useRef(false);
 
   const todayColumn = findColumn(columns, TODAY_ALIASES);
+  const notStartedColumn = findColumn(columns, NOT_STARTED_ALIASES);
   const inFlightColumn = findColumn(columns, IN_FLIGHT_ALIASES);
   const doneColumn = findColumn(columns, DONE_ALIASES);
 
@@ -615,6 +657,46 @@ function TodayExperience({
         return leftFlight - rightFlight || left.position - right.position;
       });
   }, [inFlightColumn?._id, openTasks, todayColumn?._id]);
+
+  const dayPlanCandidates = useMemo(() => {
+    const refreshedAt = candidateEvidence?.refreshedAt ?? new Date(0).toISOString();
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const localDateParts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const dateValues = Object.fromEntries(
+      localDateParts.map((part) => [part.type, part.value]),
+    );
+    const localDate = `${dateValues.year}-${dateValues.month}-${dateValues.day}`;
+    return buildDayPlanCandidates({
+      localDate,
+      timezone,
+      tasks: commitments.map((task) => ({
+        id: task._id,
+        title: task.title,
+        description: task.description,
+        outcome: task.description || task.title,
+        priority: task.priority,
+        dueAt: task.dueAt,
+        position: task.position,
+        column: task.columnId === inFlightColumn?._id ? 'in_flight' : 'today',
+        status: task.status ?? 'open',
+        updatedAt: task.updatedAt > 0 ? new Date(task.updatedAt).toISOString() : refreshedAt,
+        refreshedAt,
+        freshness: candidateEvidence?.freshness ?? 'stale',
+        project: task.tags[0],
+      })),
+    });
+  }, [candidateEvidence, commitments, inFlightColumn?._id]);
+
+  const dayRitual = useDayRitual({
+    enabled: !loading && Boolean(todayColumn && doneColumn),
+    candidates: dayPlanCandidates,
+    candidatesReady: candidateEvidence?.freshness === 'current',
+  });
 
   const doneToday = useMemo(() => {
     const today = new Date();
@@ -692,11 +774,17 @@ function TodayExperience({
   }, []);
 
   useEffect(() => {
-    if (loading || focusedTask || commitments.length === 0) return;
+    if (
+      loading ||
+      dayRitual.view === 'checking' ||
+      dayRitual.ritualOpen ||
+      focusedTask ||
+      commitments.length === 0
+    ) return;
     const first = commitments[0];
     setFocusedTaskId(first._id);
     writeLocalValue(FOCUS_KEY, first._id);
-  }, [commitments, focusedTask, loading]);
+  }, [commitments, dayRitual.ritualOpen, dayRitual.view, focusedTask, loading]);
 
   useEffect(() => {
     if (!undo || undoPaused) return;
@@ -754,8 +842,188 @@ function TodayExperience({
     [focusedTaskId],
   );
 
+  const closeTransientSurfaces = useCallback(() => {
+    setCaptureOpen(false);
+    setDetailTaskId(null);
+    setExpandedSuggestionId(null);
+    setEditingSuggestionId(null);
+    if (searchOpen) closeSearch(false);
+  }, [closeSearch, searchOpen]);
+
+  const openMorningArrival = useCallback(async () => {
+    closeTransientSurfaces();
+    setSurfaceError(undefined);
+    try {
+      await dayRitual.openArrival();
+    } catch (nextError) {
+      setSurfaceError(
+        nextError instanceof Error ? nextError.message : "Forge couldn't open Morning Arrival.",
+      );
+    }
+  }, [closeTransientSurfaces, dayRitual]);
+
+  const openDaySettlement = useCallback(async () => {
+    closeTransientSurfaces();
+    setSurfaceError(undefined);
+    try {
+      await dayRitual.openSettlement();
+    } catch (nextError) {
+      setSurfaceError(
+        nextError instanceof Error ? nextError.message : "Forge couldn't open Day Settlement.",
+      );
+    }
+  }, [closeTransientSurfaces, dayRitual]);
+
+  const startPlannedDay = useCallback(async () => {
+    setSurfaceError(undefined);
+    try {
+      const taskId = await dayRitual.startDay();
+      if (taskId) focusTask(taskId, 'start_my_day');
+    } catch (nextError) {
+      setSurfaceError(
+        nextError instanceof Error ? nextError.message : "Forge couldn't start the planned day.",
+      );
+    }
+  }, [dayRitual, focusTask]);
+
+  const reconcileDayPlanActions = useCallback(async (
+    reconciliations = dayRitual.pendingReconciliations,
+  ) => {
+    if (reconciliationRunningRef.current || reconciliations.length === 0) return;
+    if (candidateEvidence?.freshness !== 'current') {
+      throw new Error('Forge needs a fresh task refresh before reconciling the closed day.');
+    }
+    reconciliationRunningRef.current = true;
+    try {
+      const taskStateById = new Map<string, ReconciliationTaskState>(
+        tasks.map((task) => [
+          task._id,
+          { columnId: task.columnId, status: task.status },
+        ]),
+      );
+      for (const reconciliation of reconciliations) {
+        const currentState = taskStateById.get(reconciliation.taskId);
+        const step = planTaskReconciliation(reconciliation.action, currentState, {
+          notStartedId: notStartedColumn?._id,
+          todayId: todayColumn?._id,
+        });
+        if (step.patch) {
+          const updated = await updateTask(reconciliation.taskId, step.patch);
+          taskStateById.set(reconciliation.taskId, {
+            columnId: updated.columnId,
+            status: updated.status,
+          });
+        } else if (step.nextState) {
+          taskStateById.set(reconciliation.taskId, step.nextState);
+        }
+        if (!reconciliationStateMatches(
+          taskStateById.get(reconciliation.taskId),
+          step.nextState,
+        )) {
+          throw new Error('Forge could not verify the task reconciliation result.');
+        }
+        await dayRitual.acknowledgeReconciliation(reconciliation.id);
+      }
+    } finally {
+      reconciliationRunningRef.current = false;
+    }
+  }, [candidateEvidence?.freshness, dayRitual, notStartedColumn, tasks, todayColumn, updateTask]);
+
+  const closeSettledDay = useCallback(async () => {
+    const currentPlan = dayRitual.plan;
+    if (!currentPlan) return;
+    if (candidateEvidence?.freshness !== 'current') {
+      setSurfaceError('Refresh Forge before closing the day so task state is current.');
+      return;
+    }
+    if (
+      !notStartedColumn &&
+      currentPlan.items.some((item) => item.settlementDecision?.disposition === 'defer')
+    ) {
+      setSurfaceError('Forge needs a Not Started or To Do list before it can defer work. Choose Carry or Drop instead.');
+      return;
+    }
+    const completedHumanTaskIds = currentPlan.items
+      .filter((item) => {
+        if (item.decision !== 'accepted') return false;
+        const task = tasks.find((candidate) => candidate._id === item.taskId);
+        return Boolean(task && (task.status === 'done' || task.columnId === doneColumn?._id));
+      })
+      .map((item) => item.taskId);
+    setSurfaceError(undefined);
+    try {
+      const result = await dayRitual.commitSettlement(completedHumanTaskIds);
+      const reconciliations = result.pendingReconciliations ?? [];
+      await reconcileDayPlanActions(reconciliations);
+      const excludedTaskIds = new Set(
+        reconciliations
+          .filter(
+            (reconciliation) =>
+              reconciliation.action === 'defer' || reconciliation.action === 'drop',
+          )
+          .map((reconciliation) => reconciliation.taskId),
+      );
+      await dayRitual.openCurrentDayAfterSettlement(
+        currentPlan.localDate,
+        excludedTaskIds,
+      );
+    } catch (nextError) {
+      setSurfaceError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Forge couldn't finish reconciling the closed day.",
+      );
+    }
+  }, [candidateEvidence?.freshness, dayRitual, doneColumn?._id, notStartedColumn, reconcileDayPlanActions, tasks]);
+
+  useEffect(() => {
+    if (
+      loading ||
+      candidateEvidence?.freshness !== 'current' ||
+      dayRitual.pendingReconciliations.length === 0 ||
+      reconciliationRunningRef.current
+    ) return;
+    const pending = dayRitual.pendingReconciliations;
+    const latestSnapshot = dayRitual.latestSnapshot;
+    const openCurrentDayAfterSettlement = dayRitual.openCurrentDayAfterSettlement;
+    void (async () => {
+      try {
+        await reconcileDayPlanActions(pending);
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        if (latestSnapshot) {
+          const excludedTaskIds = new Set(
+            pending
+              .filter(
+                (reconciliation) =>
+                  reconciliation.action === 'defer' || reconciliation.action === 'drop',
+              )
+              .map((reconciliation) => reconciliation.taskId),
+          );
+          await openCurrentDayAfterSettlement(
+            latestSnapshot.localDate,
+            excludedTaskIds,
+          );
+        }
+      } catch (nextError) {
+        setSurfaceError(
+          nextError instanceof Error
+            ? `The day is closed, but Forge still needs to reconcile a task: ${nextError.message}`
+            : 'The day is closed, but Forge still needs to reconcile a task.',
+        );
+      }
+    })();
+  }, [
+    candidateEvidence?.freshness,
+    dayRitual.latestSnapshot,
+    dayRitual.openCurrentDayAfterSettlement,
+    dayRitual.pendingReconciliations,
+    loading,
+    reconcileDayPlanActions,
+  ]);
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (dayRitual.view === 'checking' || dayRitual.ritualOpen) return;
       const target = event.target as HTMLElement | null;
       const isTyping =
         target?.tagName === 'INPUT' ||
@@ -809,7 +1077,7 @@ function TodayExperience({
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [closeSearch, commitments, dismissMenuId, focusTask, focusedTaskId, openSearch, searchOpen]);
+  }, [closeSearch, commitments, dayRitual.ritualOpen, dayRitual.view, dismissMenuId, focusTask, focusedTaskId, openSearch, searchOpen]);
 
   async function handleCapture(event: React.FormEvent) {
     event.preventDefault();
@@ -1198,7 +1466,90 @@ function TodayExperience({
     })
     .slice(0, 8);
 
-  if (loading) {
+  const orderedPlanItems = useMemo(
+    () => [...(dayRitual.plan?.items ?? [])].sort((left, right) => left.position - right.position),
+    [dayRitual.plan?.items],
+  );
+  const arrivalPlanItems = useMemo(
+    () => orderedPlanItems.filter(
+      (item) => item.decision === 'preselected' || item.decision === 'accepted',
+    ),
+    [orderedPlanItems],
+  );
+  const arrivalItems = useMemo<MorningArrivalItem[]>(
+    () => arrivalPlanItems.map((item) => ({
+      item,
+      title: item.title,
+      outcome: item.outcome,
+      whyToday: item.whyToday,
+      definitionOfDone: item.definitionOfDone,
+      project: item.project,
+      deadline: item.dueAt
+        ? new Date(item.dueAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        : undefined,
+      stateLabel: item.decision === 'accepted' ? 'Confirmed for today' : 'Suggested for today',
+    })),
+    [arrivalPlanItems],
+  );
+  const recommendation = arrivalPlanItems[0]
+    ? `Start with ${arrivalPlanItems[0].title}. ${arrivalPlanItems[0].whyToday}`
+    : 'Forge does not have enough current evidence to choose your first move yet.';
+  const planEvidenceRefreshedAt = dayRitual.plan?.items
+    .flatMap((item) => item.sourceRefs.map((source) => source.refreshedAt))
+    .map((value) => new Date(value).getTime())
+    .filter(Number.isFinite)
+    .reduce<number | undefined>(
+      (latest, value) => latest === undefined ? value : Math.max(latest, value),
+      undefined,
+    );
+  const morningRecap = useMemo(() => {
+    const snapshot = dayRitual.latestSnapshot;
+    if (!snapshot) return undefined;
+    const completed = snapshot.body.completedHumanTaskIds.length;
+    const carried = snapshot.body.unresolvedItems.filter(
+      (item) => item.disposition === 'carry',
+    ).length;
+    const parts = [
+      completed > 0 ? `${completed} essential ${completed === 1 ? 'outcome was' : 'outcomes were'} completed` : undefined,
+      carried > 0 ? `${carried} ${carried === 1 ? 'commitment carries' : 'commitments carry'} forward` : undefined,
+    ].filter(Boolean);
+    return parts.length > 0 ? `${parts.join('. ')}.` : undefined;
+  }, [dayRitual.latestSnapshot]);
+  const planTaskIds = useMemo(
+    () => new Set(
+      orderedPlanItems
+        .filter((item) => item.decision === 'accepted')
+        .map((item) => item.taskId),
+    ),
+    [orderedPlanItems],
+  );
+  const completedForSettlement = tasks
+    .filter(
+      (task) =>
+        planTaskIds.has(task._id) &&
+        (task.status === 'done' || task.columnId === doneColumn?._id),
+    )
+    .map((task) => ({
+      id: task._id,
+      title: task.title,
+      detail: task.updatedAt > 0
+        ? `Completed ${new Date(task.updatedAt).toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            timeZone: dayRitual.plan?.timezone,
+          })}`
+        : 'Marked complete',
+    }));
+  const completedPlanTaskIds = new Set(completedForSettlement.map((item) => item.id));
+  const unresolvedForSettlement = orderedPlanItems
+    .filter((item) => item.decision === 'accepted' && !completedPlanTaskIds.has(item.taskId))
+    .map((item) => ({ item, title: item.title, outcome: item.outcome }));
+  const settlementDecisions = Object.fromEntries(
+    orderedPlanItems.map((item) => [item.id, item.settlementDecision?.disposition]),
+  );
+  const proposedTomorrow = firstCarriedItem(orderedPlanItems, settlementDecisions);
+
+  if (loading || dayRitual.view === 'checking') {
     return (
       <div className="quiet-current-surface current-river-surface is-day h-full overflow-hidden" aria-busy="true">
         <div className="current-water-plane" aria-hidden="true">
@@ -1263,7 +1614,11 @@ function TodayExperience({
   }
 
   return (
-    <div className={`quiet-current-surface current-river-surface is-${waterTone} ${ambientPaused ? 'is-ambient-paused' : ''} h-full overflow-y-auto`}>
+    <div className="relative h-full overflow-hidden">
+      <div
+        ref={livingCurrentRef}
+        className={`quiet-current-surface current-river-surface is-${waterTone} ${ambientPaused || dayRitual.ritualOpen ? 'is-ambient-paused' : ''} h-full overflow-y-auto`}
+      >
       <div className="current-water-plane" aria-hidden="true">
         <span className="current-water-drift current-water-drift-one" />
         <span className="current-water-drift current-water-drift-two" />
@@ -1275,15 +1630,37 @@ function TodayExperience({
             <p className="current-today-label">Today</p>
             <time className="current-time" dateTime={now.toISOString()}>{timeLabel}</time>
             <p className="current-greeting">{greeting}</p>
-            <button
-              type="button"
-              className="current-capture-toggle"
-              aria-expanded={captureOpen}
-              onClick={() => setCaptureOpen((current) => !current)}
-            >
-              <span aria-hidden="true">＋</span>
-              What changed?
-            </button>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="current-capture-toggle"
+                aria-expanded={captureOpen}
+                onClick={() => setCaptureOpen((current) => !current)}
+              >
+                <span aria-hidden="true">＋</span>
+                What changed?
+              </button>
+              <button
+                type="button"
+                className="current-capture-toggle"
+                disabled={
+                  !dayRitual.plan ||
+                  dayRitual.busy ||
+                  dayRitual.plan.state !== 'proposed'
+                }
+                onClick={() => void openMorningArrival()}
+              >
+                Morning Arrival
+              </button>
+              <button
+                type="button"
+                className="current-capture-toggle"
+                disabled={!dayRitual.plan || dayRitual.busy || dayRitual.plan.state === 'settled'}
+                onClick={() => void openDaySettlement()}
+              >
+                Close My Day
+              </button>
+            </div>
             {captureOpen && (
               <form onSubmit={handleCapture} className="current-capture-form">
                 <label htmlFor="quiet-capture" className="sr-only">Add missing work or context</label>
@@ -1331,7 +1708,7 @@ function TodayExperience({
             tributaries={tributaries}
             focusPoint={focusPoint}
             completing={Boolean(completingTaskId)}
-            ambientPaused={ambientPaused}
+            ambientPaused={ambientPaused || dayRitual.ritualOpen}
           />
 
           {doneToday.length > 0 && (
@@ -1624,6 +2001,103 @@ function TodayExperience({
           onSaveTask={saveDetail}
           onDeleteTask={deleteDetail}
         />
+      )}
+      </div>
+
+      {dayRitual.view === 'arrival' && dayRitual.plan && (
+        <MorningArrival
+          plan={dayRitual.plan}
+          items={arrivalItems}
+          recommendation={recommendation}
+          recap={morningRecap}
+          freshnessLabel={planEvidenceRefreshedAt
+            ? `Evidence refreshed ${new Date(planEvidenceRefreshedAt).toLocaleTimeString([], {
+                hour: 'numeric',
+                minute: '2-digit',
+              })}`
+            : 'Using the latest verified task evidence'}
+          expandedItemId={expandedArrivalItemId}
+          announcement={dayRitual.announcement}
+          busy={dayRitual.busy}
+          error={dayRitual.error}
+          inertTargetRef={livingCurrentRef}
+          onExpand={(itemId) => setExpandedArrivalItemId((current) => current === itemId ? null : itemId)}
+          onOwnerChange={(itemId, owner) => dayRitual.setOwner(itemId, owner)}
+          onMove={async (itemId, direction) => {
+            const next = moveDayPlanItem(arrivalPlanItems, itemId, direction);
+            const position = next.findIndex((item) => item.id === itemId);
+            const title = next[position]?.title ?? 'Task';
+            if (position >= 0) await dayRitual.reorder(itemId, position, title);
+          }}
+          onDragReorder={async (activeId, overId) => {
+            const next = reorderDayPlanItems(arrivalPlanItems, activeId, overId);
+            const position = next.findIndex((item) => item.id === activeId);
+            const title = next[position]?.title ?? 'Task';
+            if (position >= 0) await dayRitual.reorder(activeId, position, title);
+          }}
+          onDismiss={dayRitual.dismissItem}
+          onSnooze={() => dayRitual.snooze().catch(() => undefined)}
+          onSkip={() => dayRitual.skip().catch(() => undefined)}
+          onBypass={() => dayRitual.bypass().catch(() => undefined)}
+          onStartDay={startPlannedDay}
+          onAddWhatChanged={() => {
+            void dayRitual.bypass().then(() => setCaptureOpen(true)).catch(() => undefined);
+          }}
+          onOpenAllWork={onOpenAllWork ? () => {
+            void dayRitual.bypass().then(onOpenAllWork).catch(() => undefined);
+          } : undefined}
+        />
+      )}
+
+      {dayRitual.view === 'settlement' && dayRitual.plan && (
+        <DaySettlement
+          plan={dayRitual.plan}
+          completed={completedForSettlement}
+          unresolved={unresolvedForSettlement}
+          decisions={settlementDecisions}
+          proposedTomorrowTitle={proposedTomorrow?.title}
+          savingItemIds={dayRitual.savingItemIds}
+          closing={dayRitual.busy}
+          announcement={dayRitual.announcement}
+          error={dayRitual.error}
+          canDefer={Boolean(notStartedColumn)}
+          inertTargetRef={livingCurrentRef}
+          onDecision={(itemId, disposition) => {
+            if (disposition === 'defer' && !notStartedColumn) {
+              setSurfaceError('Forge needs a Not Started or To Do list before it can defer work.');
+              return;
+            }
+            return dayRitual.decideSettlement(itemId, disposition);
+          }}
+          onCancel={dayRitual.cancelSettlement}
+          onCloseDay={closeSettledDay}
+        />
+      )}
+
+      {dayRitual.view === 'transition' && dayRitual.plan && (
+        <DayRitualLayer
+          labelledBy="day-start-transition-title"
+          inertTargetRef={livingCurrentRef}
+          onEscape={() => undefined}
+        >
+          <div
+            className="mx-auto w-full max-w-xl rounded-3xl border bg-background px-6 py-12 text-center shadow-2xl sm:px-10"
+            data-day-plan-id={dayRitual.plan.id}
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              Living Current
+            </p>
+            <h1
+              id="day-start-transition-title"
+              className="mt-3 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl"
+            >
+              {dayRitual.transitionMessage}
+            </h1>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Bringing your first focus into view.
+            </p>
+          </div>
+        </DayRitualLayer>
       )}
     </div>
   );
