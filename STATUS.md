@@ -24,8 +24,8 @@
 
 ---
 
-**Last updated:** 2026-07-10 (Morning Arrival Claude planning and execution layer live locally)
-**State:** The MacBook's loopback-only `com.forge.web` now serves the wide Morning Arrival with bounded Claude refinement, explicit execution modes, durable background runs, and reviewable results. `com.forge.claude-worker` is installed and healthy for prompt refinement and plan sessions. Autonomous execution remains disabled until an allowlisted project is deliberately configured. The 8 a.m. trigger is still not installed. Email triage remains a separate Mini service and was not changed.
+**Last updated:** 2026-07-10 (Morning Arrival multi-change replanning live locally)
+**State:** The MacBook's loopback-only `com.forge.web` now serves the wide Morning Arrival with Claude-powered task creation, completion, editing, ownership, and reprioritization, plus explicit execution modes, durable background runs, and reviewable results. `com.forge.claude-worker` is installed and healthy. Autonomous execution remains disabled until an allowlisted project is deliberately configured. The 8 a.m. trigger is still not installed. Email triage remains a separate Mini service and was not changed.
 
 ## North Star Goal
 Make Forge the source of truth for Alex's day-to-day execution: tasks, email action items, CRM context, and daily priorities in one operating surface.
@@ -41,16 +41,18 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 
 ### 2026-07-10 Morning Arrival Claude execution layer implemented and dogfood-ready
 
-- Morning Arrival now includes a live Claude prompt below the three priorities. Claude can propose and atomically apply only title, outcome, definition of done, owner, and order changes. Evidence, deadlines, task IDs, execution settings, and underlying Supabase tasks remain outside that boundary.
+- Morning Arrival now launches a headless Claude session from the Forge project, loads the project's `CLAUDE.md`, and explicitly invokes `.claude/skills/forge-refine-today`. The skill translates one natural-language replan into bounded create, complete, edit, owner, and position operations. Forge validates the structured result; Claude never writes storage directly.
+- Task-backed changes use a durable SQLite mutation ledger before the browser reconciles them to Supabase. Explicit task IDs make creates idempotent, completions move the real task to Done, edits preserve the full outcome and definition of done, and the ledger is acknowledged only after the task API succeeds.
 - Claude and Together cards require an explicit execution mode before anything launches. Plan mode creates a real resumable Claude session with no file tools. Together always uses Plan. Autonomous is available only after selecting an allowlisted clean Git project, setting a capped budget, and enabling the separate execution switch; it has no Bash or network tool and stops at Awaiting review.
 - Assistant turns, execution configuration, and run state live in separate SQLite tables. Exact brief and authorization hashes bind a run to its approved mode, model, workspace, and budget. Configuration changes cancel stale queued work, failed or cancelled runs can be retried as a new attempt, duplicate clicks remain idempotent, and Start My Day queues ready cards atomically while reporting unready ones.
 - The supervised `com.forge.claude-worker` LaunchAgent is installed locally with a fresh heartbeat, private 0600 logs, cancellation, stale-process recovery, TERM-to-KILL escalation, and truthful Queued / Working / Plan ready / Ready to join / Awaiting review states. The browser API omits local paths and process IDs.
 - Successful Claude output is stored as a bounded public result summary and rendered for review on the card. Exit 0 never marks the underlying task complete.
 - Real isolated acceptance passed against Claude Code 2.1.202: bounded prompt refinement applied an owner change, a resumable Plan session reached Plan ready, and an Autonomous run in a throwaway clean repository created only its requested marker file and stopped at Awaiting review. No live Forge task or Atlas repository was used for these runs.
-- Production build and local services are healthy. Browser QA at 1440 by 900 confirmed all three cards, the prompt composer, and Start My Day fit in one screen with no horizontal overflow or console errors. The live plan was not mutated during browser verification.
-- Verification is green with 98 tests, TypeScript, scoped/full ESLint with only two unrelated existing warnings, installer syntax, host rejection, service heartbeat checks, and independent security re-review.
+- Production build and local services are healthy. Browser QA confirmed all three visible priorities, the prompt composer, and Start My Day fit in one screen with no horizontal overflow or console errors.
+- The previously failing real prompt was replayed successfully: Supernova is priority one with all three generator subtasks, client-call scheduling is priority two, Jarvis Pro marketing is priority three, Dan Martin prep is Done, and the intake task contains the Jarvis Pro setup and Gary Gersh context. The task mutation queue is empty after verified Supabase reconciliation.
+- Verification is green with the 99-test suite plus 17 focused post-review tests, TypeScript, full ESLint with only two unrelated existing warnings, production build, live headless Claude skill invocation, service health checks, and browser acceptance.
 
-Next gate: use the prompt and Plan kickoff on one real morning task, review the returned plan in Forge, and observe whether the controls feel too dense. Do not enable Autonomous for a real project until that repository is clean, explicitly allowlisted, and the task has a concrete definition of done. A direct one-click Terminal resume action remains optional polish; the resumable session and plan are already created and the bounded result is visible in Forge.
+Next gate: choose Claude or Together on one of the new real priorities, run a Plan kickoff, and judge whether the resulting task brief contains enough context to start useful work without another setup conversation. Do not enable Autonomous for a real project until that repository is clean, explicitly allowlisted, and the task has a concrete definition of done. A direct one-click Terminal resume action remains optional polish.
 
 ### 2026-07-10 Local Morning Command Center dogfood gate prepared
 

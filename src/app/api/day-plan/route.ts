@@ -82,6 +82,7 @@ const LOOPBACK_ACCESS_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 type ParsedPost =
   | { action: "ensure"; input: EnsureDayPlanInput }
   | { action: "reconciliation_applied"; reconciliationId: string }
+  | { action: "task_mutation_applied"; mutationId: string }
   | { action: DayPlanMutationAction; input: DayPlanMutationInput };
 
 export function hasDayPlanRouteAccess(
@@ -372,6 +373,12 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
       })!,
     };
   }
+  if (action === "task_mutation_applied") {
+    return {
+      action,
+      mutationId: stringValue(body.mutationId, "mutationId", { required: true, max: 200 })!,
+    };
+  }
 
   if (!action || !ACTIONS.has(action as DayPlanMutationAction)) {
     throw new Error("Unknown day-plan action.");
@@ -459,6 +466,8 @@ export async function POST(request: NextRequest) {
       ? store.ensureDayPlan(parsed.input)
       : parsed.action === "reconciliation_applied"
         ? store.acknowledgeReconciliation(parsed.reconciliationId)
+        : parsed.action === "task_mutation_applied"
+          ? store.acknowledgeTaskMutation(parsed.mutationId)
         : store.mutateDayPlan(parsed.input);
     const queuedRuns = parsed.action === "start_day" && "executionRuns" in result
       ? result.executionRuns?.filter((run) => run.status === "queued").length ?? 0

@@ -32,6 +32,7 @@ export type DayPlanItemDecision =
   | "pending"
   | "preselected"
   | "accepted"
+  | "completed"
   | "later"
   | "dismissed";
 export type SettlementDisposition = "carry" | "defer" | "drop";
@@ -239,6 +240,27 @@ export type DayPlanReadModel = {
   currentPlan?: DayPlan;
   latestSnapshot?: DaySnapshot;
   pendingReconciliations: DayPlanReconciliation[];
+  pendingTaskMutations: DayPlanTaskMutation[];
+};
+
+export type DayPlanTaskMutation = {
+  id: string;
+  dayPlanId: string;
+  assistantTurnId: string;
+  taskId: string;
+  action: "create" | "update" | "complete";
+  title?: string;
+  description?: string;
+  priority?: "low" | "medium" | "high";
+  project?: string;
+  state: "pending" | "applied";
+  createdAt: string;
+  appliedAt?: string;
+};
+
+export type DayPlanTaskMutationResult = {
+  mutation: DayPlanTaskMutation;
+  replayed: boolean;
 };
 
 export type DayPlanAssistantOperation =
@@ -248,11 +270,27 @@ export type DayPlanAssistantOperation =
       title?: string;
       outcome?: string;
       definitionOfDone?: string | null;
+      position?: number;
     }
   | {
       operation: "set_owner";
       itemId: string;
       owner: DayPlanOwner;
+    }
+  | {
+      operation: "create_item";
+      clientId: string;
+      title: string;
+      outcome: string;
+      definitionOfDone?: string;
+      project?: string;
+      owner?: DayPlanOwner;
+      priority?: "low" | "medium" | "high";
+      position: number;
+    }
+  | {
+      operation: "complete_item";
+      itemId: string;
     }
   | {
       operation: "reorder";

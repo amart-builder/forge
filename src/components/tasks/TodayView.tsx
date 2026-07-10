@@ -51,6 +51,7 @@ type ColumnData = ArrivalColumn;
 type TaskData = ArrivalTask;
 
 type CreateTaskInput = {
+  id?: string;
   columnId: string;
   title: string;
   description?: string;
@@ -451,6 +452,7 @@ function RestTodayView({ onOpenAllWork }: TodayViewProps) {
               .filter((task) => task.columnId === input.columnId)
               .reduce((maximum, task) => Math.max(maximum, task.position), -1) + 1;
           const created = await createRestTask({
+            id: input.id,
             column_id: input.columnId,
             title: input.title,
             description: input.description,
@@ -617,6 +619,7 @@ function TodayExperience({
   const searchReturnFocusRef = useRef<HTMLElement | null>(null);
   const undoRunningRef = useRef(false);
   const reconciliationRunningRef = useRef(false);
+  const taskMutationRunningRef = useRef(false);
 
   const todayColumn = findColumn(columns, TODAY_ALIASES);
   const notStartedColumn = findColumn(columns, NOT_STARTED_ALIASES);
@@ -930,6 +933,55 @@ function TodayExperience({
       reconciliationRunningRef.current = false;
     }
   }, [candidateEvidence?.freshness, dayRitual, notStartedColumn, tasks, todayColumn, updateTask]);
+
+  const reconcileAssistantTaskMutations = useCallback(async () => {
+    const mutations = dayRitual.pendingTaskMutations;
+    if (taskMutationRunningRef.current || mutations.length === 0 || !todayColumn || !doneColumn) return;
+    if (candidateEvidence?.freshness !== 'current') return;
+    taskMutationRunningRef.current = true;
+    try {
+      for (const mutation of mutations) {
+        const existing = tasks.find((task) => task._id === mutation.taskId);
+        if (mutation.action === 'create') {
+          if (!existing) {
+            const createdId = await createTask({
+              id: mutation.taskId,
+              columnId: todayColumn._id,
+              title: mutation.title ?? 'Untitled priority',
+              description: mutation.description,
+              priority: mutation.priority,
+              tags: mutation.project ? [mutation.project] : [],
+            });
+            if (createdId !== mutation.taskId) throw new Error('Forge could not preserve the new task identity.');
+          }
+        } else if (mutation.action === 'update') {
+          if (!existing) throw new Error('The task Claude tried to update no longer exists.');
+          await updateTask(mutation.taskId, {
+            title: mutation.title,
+            description: mutation.description,
+          });
+        } else if (existing && (existing.status !== 'done' || existing.columnId !== doneColumn._id)) {
+          await updateTask(mutation.taskId, {
+            columnId: doneColumn._id,
+            status: 'done',
+            position: tasks.filter((task) => task.columnId === doneColumn._id).length,
+          });
+        }
+        await dayRitual.acknowledgeTaskMutation(mutation.id);
+      }
+    } finally {
+      taskMutationRunningRef.current = false;
+    }
+  }, [candidateEvidence?.freshness, createTask, dayRitual, doneColumn, tasks, todayColumn, updateTask]);
+
+  useEffect(() => {
+    if (loading || dayRitual.pendingTaskMutations.length === 0) return;
+    void reconcileAssistantTaskMutations().catch((nextError) => {
+      setSurfaceError(nextError instanceof Error
+        ? `Forge updated the plan but still needs to sync a task: ${nextError.message}`
+        : 'Forge updated the plan but still needs to sync a task.');
+    });
+  }, [dayRitual.pendingTaskMutations, loading, reconcileAssistantTaskMutations]);
 
   const closeSettledDay = useCallback(async () => {
     const currentPlan = dayRitual.plan;

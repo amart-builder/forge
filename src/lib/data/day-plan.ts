@@ -10,6 +10,7 @@ import type {
   DayPlanMutationResult,
   DayPlanReadModel,
   DayPlanReconciliationResult,
+  DayPlanTaskMutationResult,
   EnsureDayPlanInput,
   KickoffDayPlanItemInput,
   KickoffDayPlanItemResult,
@@ -117,6 +118,15 @@ export function acknowledgeDayPlanReconciliation(
   return postDayPlan<DayPlanReconciliationResult>({
     action: "reconciliation_applied",
     reconciliationId,
+  });
+}
+
+export function acknowledgeDayPlanTaskMutation(
+  mutationId: string,
+): Promise<DayPlanTaskMutationResult> {
+  return postDayPlan<DayPlanTaskMutationResult>({
+    action: "task_mutation_applied",
+    mutationId,
   });
 }
 

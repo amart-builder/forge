@@ -107,11 +107,12 @@ test('planner command is the exact bounded no-tools JSON invocation', (t) => {
   const command = buildAssistantPlannerCommand({ claudePath: '/fake/claude', plan, turn });
   assert.equal(command.executable, '/fake/claude');
   assert.deepEqual(command.args, [
-    '-p', '--safe-mode', '--no-session-persistence', '--permission-mode', 'plan',
+    '-p', '--no-session-persistence', '--permission-mode', 'plan',
     '--tools', '', '--model', 'sonnet', '--effort', 'medium', '--output-format',
     'json', '--json-schema', ASSISTANT_PROPOSAL_JSON_SCHEMA, '--max-budget-usd', '0.25',
   ]);
   assert.match(command.stdin, /untrusted data/);
+  assert.match(command.stdin, /^\/forge-refine-today/);
   assert.doesNotMatch(command.stdin, /change external systems/i);
 });
 
@@ -134,9 +135,11 @@ test('assistant worker claims once, validates the proposal, and applies the boun
   assert.equal(store.getPlan(plan.id).items[0].owner, 'claude');
   assert.equal(await runOneAssistantTurn(workerOptions(dir, store, fake.executable)), false);
   const captured = JSON.parse(readFileSync(fake.capture, 'utf8'));
-  assert.deepEqual(captured.args.slice(0, 7), [
-    '-p', '--safe-mode', '--no-session-persistence', '--permission-mode', 'plan', '--tools', '',
+  assert.deepEqual(captured.args.slice(0, 6), [
+    '-p', '--no-session-persistence', '--permission-mode', 'plan', '--tools', '',
   ]);
+  assert.match(captured.input, /^\/forge-refine-today/);
+  assert.equal(captured.cwd, realpathSync(dir));
 });
 
 test('plan-review worker uses a resumable safe session and stops at plan_ready', async (t) => {

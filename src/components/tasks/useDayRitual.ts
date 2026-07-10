@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   acknowledgeDayPlanReconciliation,
+  acknowledgeDayPlanTaskMutation,
   cancelDayPlanExecutionRun,
   configureDayPlanExecution,
   createDayPlanAssistantTurn,
@@ -27,6 +28,7 @@ import type {
   DayPlanMutationResult,
   DayPlanOwner,
   DayPlanReconciliation,
+  DayPlanTaskMutation,
   DaySnapshot,
   RecommendationCandidate,
   SettlementDisposition,
@@ -105,6 +107,7 @@ export default function useDayRitual({
   const [plan, setPlan] = useState<DayPlan>();
   const [latestSnapshot, setLatestSnapshot] = useState<DaySnapshot>();
   const [pendingReconciliations, setPendingReconciliations] = useState<DayPlanReconciliation[]>([]);
+  const [pendingTaskMutations, setPendingTaskMutations] = useState<DayPlanTaskMutation[]>([]);
   const [view, setView] = useState<DayRitualView>(enabled ? 'checking' : 'none');
   const [busy, setBusy] = useState(false);
   const [savingItemIds, setSavingItemIds] = useState<Set<string>>(new Set());
@@ -139,6 +142,7 @@ export default function useDayRitual({
     const readModel = await getDayPlanState();
     setLatestSnapshot(readModel.latestSnapshot);
     setPendingReconciliations(readModel.pendingReconciliations);
+    setPendingTaskMutations(readModel.pendingTaskMutations);
     if (readModel.currentPlan) acceptPlan(readModel.currentPlan, readModel.latestSnapshot);
     return readModel.currentPlan;
   }, [acceptPlan]);
@@ -186,6 +190,7 @@ export default function useDayRitual({
         if (cancelled) return;
         setLatestSnapshot(readModel.latestSnapshot);
         setPendingReconciliations(readModel.pendingReconciliations);
+        setPendingTaskMutations(readModel.pendingTaskMutations);
 
         let nextPlan = readModel.currentPlan;
         if (!nextPlan) {
@@ -862,10 +867,16 @@ export default function useDayRitual({
     );
   }, []);
 
+  const acknowledgeTaskMutation = useCallback(async (mutationId: string) => {
+    await acknowledgeDayPlanTaskMutation(mutationId);
+    setPendingTaskMutations((current) => current.filter((mutation) => mutation.id !== mutationId));
+  }, []);
+
   return {
     plan,
     latestSnapshot,
     pendingReconciliations,
+    pendingTaskMutations,
     view,
     busy,
     savingItemIds,
@@ -899,5 +910,6 @@ export default function useDayRitual({
     commitSettlement,
     openCurrentDayAfterSettlement,
     acknowledgeReconciliation,
+    acknowledgeTaskMutation,
   };
 }

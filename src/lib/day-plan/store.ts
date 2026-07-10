@@ -20,6 +20,8 @@ import type {
   DayPlanMutationResult,
   DayPlanReconciliation,
   DayPlanReconciliationResult,
+  DayPlanTaskMutation,
+  DayPlanTaskMutationResult,
   DayPlanReadModel,
   DaySnapshot,
   DaySnapshotBody,
@@ -110,6 +112,19 @@ type AssistantTurnRow = {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  applied_at: string | null;
+};
+
+type TaskMutationRow = {
+  id: string;
+  day_plan_id: string;
+  assistant_turn_id: string;
+  task_id: string;
+  action: DayPlanTaskMutation["action"];
+  sequence: number;
+  payload_json: string;
+  state: DayPlanTaskMutation["state"];
+  created_at: string;
   applied_at: string | null;
 };
 
@@ -237,6 +252,23 @@ CREATE TABLE IF NOT EXISTS day_plan_assistant_turns (
 );
 CREATE INDEX IF NOT EXISTS day_plan_assistant_turns_queue
   ON day_plan_assistant_turns(state, created_at, id);
+CREATE TABLE IF NOT EXISTS day_plan_task_mutations (
+  id TEXT PRIMARY KEY,
+  day_plan_id TEXT NOT NULL,
+  assistant_turn_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  action TEXT NOT NULL CHECK (action IN ('create','update','complete')),
+  sequence INTEGER NOT NULL,
+  payload_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending','applied')),
+  created_at TEXT NOT NULL,
+  applied_at TEXT,
+  UNIQUE (assistant_turn_id, task_id, action),
+  FOREIGN KEY (day_plan_id) REFERENCES day_plans(id),
+  FOREIGN KEY (assistant_turn_id) REFERENCES day_plan_assistant_turns(id)
+);
+CREATE INDEX IF NOT EXISTS day_plan_task_mutations_pending
+  ON day_plan_task_mutations(state, created_at, id);
 CREATE TABLE IF NOT EXISTS day_plan_execution_configs (
   day_plan_id TEXT NOT NULL,
   item_id TEXT NOT NULL,
@@ -389,6 +421,20 @@ function assistantTurnFromRow(row: AssistantTurnRow): DayPlanAssistantTurn {
   };
 }
 
+function taskMutationFromRow(row: TaskMutationRow): DayPlanTaskMutation {
+  return {
+    id: row.id,
+    dayPlanId: row.day_plan_id,
+    assistantTurnId: row.assistant_turn_id,
+    taskId: row.task_id,
+    action: row.action,
+    ...parseJson<Omit<DayPlanTaskMutation, "id" | "dayPlanId" | "assistantTurnId" | "taskId" | "action" | "state" | "createdAt" | "appliedAt">>(row.payload_json, "task mutation payload"),
+    state: row.state,
+    createdAt: row.created_at,
+    appliedAt: row.applied_at ?? undefined,
+  };
+}
+
 function executionConfigFromRow(row: ExecutionConfigRow): DayPlanExecutionConfig {
   return {
     dayPlanId: row.day_plan_id,
@@ -509,6 +555,14 @@ export function createDayPlanStore(options: {
   if (!executionConfigColumns.has("authorization_hash")) {
     db.exec("ALTER TABLE day_plan_execution_configs ADD COLUMN authorization_hash TEXT NOT NULL DEFAULT ''");
   }
+  const taskMutationColumns = new Set(
+    (db.pragma("table_info(day_plan_task_mutations)") as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  if (!taskMutationColumns.has("sequence")) {
+    db.exec("ALTER TABLE day_plan_task_mutations ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0");
+  }
 
   const selectPlan = db.prepare("SELECT * FROM day_plans WHERE id = ?");
   const selectOpenPlan = db.prepare("SELECT * FROM day_plans WHERE open_slot = 1 LIMIT 1");
@@ -528,6 +582,10 @@ export function createDayPlanStore(options: {
   );
   const selectAssistantTurn = db.prepare(
     "SELECT * FROM day_plan_assistant_turns WHERE id = ?",
+  );
+  const selectTaskMutation = db.prepare("SELECT * FROM day_plan_task_mutations WHERE id = ?");
+  const selectPendingTaskMutations = db.prepare(
+    "SELECT * FROM day_plan_task_mutations WHERE state = 'pending' ORDER BY created_at, sequence, id",
   );
   const selectNextAssistantTurn = db.prepare(
     `SELECT * FROM day_plan_assistant_turns
@@ -580,6 +638,10 @@ export function createDayPlanStore(options: {
     return (selectPendingReconciliations.all(now().toISOString()) as ReconciliationRow[]).map(
       reconciliationFromRow,
     );
+  }
+
+  function listPendingTaskMutations(): DayPlanTaskMutation[] {
+    return (selectPendingTaskMutations.all() as TaskMutationRow[]).map(taskMutationFromRow);
   }
 
   function appendEvent(input: {
@@ -1082,7 +1144,60 @@ export function createDayPlanStore(options: {
       }
 
       const before = clonePlan(plan);
-      applyAssistantProposal(plan, proposal);
+      applyAssistantProposal(plan, proposal, { now: finishedAt, idFactory: randomUUID });
+      const beforeIds = new Set(before.items.map((item) => item.id));
+      const createdItems = plan.items.filter((item) => !beforeIds.has(item.id));
+      const descriptionFor = (item: DayPlanItem) => [
+        item.outcome,
+        item.definitionOfDone ? `Done means: ${item.definitionOfDone}` : undefined,
+      ].filter(Boolean).join("\n\n");
+      const taskMutations: Array<{
+        taskId: string;
+        action: DayPlanTaskMutation["action"];
+        payload: Record<string, unknown>;
+      }> = createdItems.map((item) => ({
+        taskId: item.taskId,
+        action: "create" as const,
+        payload: {
+          title: item.title,
+          description: descriptionFor(item),
+          priority: item.priority,
+          project: item.project,
+        },
+      }));
+      for (const operation of proposal.operations) {
+        if (operation.operation === "edit_item") {
+          const item = plan.items.find((candidate) => candidate.id === operation.itemId)!;
+          const payload: Record<string, unknown> = {};
+          if (operation.title !== undefined) payload.title = item.title;
+          if (operation.outcome !== undefined || operation.definitionOfDone !== undefined) {
+            payload.description = descriptionFor(item);
+          }
+          if (Object.keys(payload).length > 0) {
+            taskMutations.push({ taskId: item.taskId, action: "update", payload });
+          }
+        } else if (operation.operation === "complete_item") {
+          const item = plan.items.find((candidate) => candidate.id === operation.itemId)!;
+          taskMutations.push({ taskId: item.taskId, action: "complete", payload: {} });
+        }
+      }
+      const insertTaskMutation = db.prepare(
+        `INSERT INTO day_plan_task_mutations
+          (id, day_plan_id, assistant_turn_id, task_id, action, sequence, payload_json, state, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      );
+      for (const [sequence, mutation] of taskMutations.entries()) {
+        insertTaskMutation.run(
+          randomUUID(),
+          plan.id,
+          row.id,
+          mutation.taskId,
+          mutation.action,
+          sequence,
+          JSON.stringify(mutation.payload),
+          finishedAt,
+        );
+      }
       for (const item of plan.items) invalidateQueuedRunsForItem(plan, item, finishedAt);
       const eventId = `assistant:${row.id}`;
       plan.version += 1;
@@ -1962,6 +2077,24 @@ export function createDayPlanStore(options: {
     });
   }
 
+  function acknowledgeTaskMutation(mutationId: string): DayPlanTaskMutationResult {
+    return immediate(() => {
+      const row = selectTaskMutation.get(mutationId) as TaskMutationRow | undefined;
+      if (!row) throw new DayPlanInvalidTransition("Day-plan task mutation not found.");
+      if (row.state === "applied") {
+        return { mutation: taskMutationFromRow(row), replayed: true };
+      }
+      const appliedAt = now().toISOString();
+      db.prepare(
+        "UPDATE day_plan_task_mutations SET state = 'applied', applied_at = ? WHERE id = ? AND state = 'pending'",
+      ).run(appliedAt, mutationId);
+      return {
+        mutation: taskMutationFromRow(selectTaskMutation.get(mutationId) as TaskMutationRow),
+        replayed: false,
+      };
+    });
+  }
+
   function getReadModel(): DayPlanReadModel {
     const open = selectOpenPlan.get() as DayPlanRow | undefined;
     const latestSnapshot = selectLatestSnapshot.get() as SnapshotRow | undefined;
@@ -1969,6 +2102,7 @@ export function createDayPlanStore(options: {
       currentPlan: open ? planFromRow(open) : undefined,
       latestSnapshot: latestSnapshot ? snapshotFromRow(latestSnapshot) : undefined,
       pendingReconciliations: listPendingReconciliations(),
+      pendingTaskMutations: listPendingTaskMutations(),
     };
   }
 
@@ -2012,11 +2146,13 @@ export function createDayPlanStore(options: {
       return itemReadiness(plan, requireItem(plan, itemId));
     },
     acknowledgeReconciliation,
+    acknowledgeTaskMutation,
     getReadModel,
     getPlan,
     getSnapshot,
     listEvents,
     listPendingReconciliations,
+    listPendingTaskMutations,
     close: () => {
       if (db.open) db.close();
     },

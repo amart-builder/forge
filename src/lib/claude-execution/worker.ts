@@ -262,6 +262,7 @@ export async function runOneAssistantTurn(options: ClaudeWorkerOptions): Promise
     claudePath: options.claudePath,
     plan,
     turn,
+    cwd: options.fallbackCwd,
   });
   const result = await spawnCommand(command, {
     spawnImpl: options.spawnImpl ?? spawn,

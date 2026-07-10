@@ -120,6 +120,58 @@ test('assistant clarification does not mutate the plan', (t) => {
   assert.equal(store.getPlan(plan.id).version, plan.version);
 });
 
+test('assistant can create, complete, update, and reprioritize task-backed work atomically', (t) => {
+  const { store, plan } = setup(t);
+  const completedItem = plan.items[0];
+  const retainedItem = plan.items[1];
+  const turn = store.createAssistantTurn({
+    id: 'assistant-turn-replan',
+    planId: plan.id,
+    expectedVersion: plan.version,
+    userText: 'Finish the old prep, add Supernova and client scheduling, then move the retained work third.',
+  }).turn;
+  store.claimNextAssistantTurn();
+
+  const result = store.completeAssistantTurn(turn.id, {
+    assistantText: 'I completed the prep and rebuilt the priority order.',
+    needsClarification: false,
+    operations: [
+      { operation: 'complete_item', itemId: completedItem.id },
+      {
+        operation: 'create_item',
+        clientId: 'supernova',
+        title: 'Finish the Supernova content generator',
+        outcome: 'Finish the Twitter, LinkedIn, and newsletter generators; make the newsletter ready for client use.',
+        definitionOfDone: 'All three generators work and the newsletter flow is client-ready.',
+        project: 'supernova',
+        priority: 'high',
+        position: 0,
+      },
+      {
+        operation: 'create_item',
+        clientId: 'client-days',
+        title: 'Standardize client call days',
+        outcome: 'Decide whether Tuesday and Wednesday should be client days and create suitable Calendly links.',
+        position: 1,
+      },
+      { operation: 'edit_item', itemId: retainedItem.id, position: 2 },
+    ],
+  });
+
+  assert.equal(result.turn.state, 'applied');
+  assert.deepEqual(
+    result.plan.items.filter((item) => item.decision !== 'completed').map((item) => item.title),
+    ['Finish the Supernova content generator', 'Standardize client call days', 'Task b'],
+  );
+  assert.equal(result.plan.items.find((item) => item.id === completedItem.id).decision, 'completed');
+  const mutations = store.listPendingTaskMutations();
+  assert.deepEqual(mutations.map((mutation) => mutation.action), ['create', 'create', 'complete']);
+  const supernova = mutations.find((mutation) => mutation.title === 'Finish the Supernova content generator');
+  assert.match(supernova.description, /Twitter, LinkedIn, and newsletter/);
+  assert.equal(store.acknowledgeTaskMutation(supernova.id).mutation.state, 'applied');
+  assert.equal(store.listPendingTaskMutations().length, 2);
+});
+
 test('assistant conflict and unsupported edits never partially mutate the plan', (t) => {
   const { store, plan } = setup(t);
   const conflict = store.createAssistantTurn({
