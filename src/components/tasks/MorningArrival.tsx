@@ -23,7 +23,6 @@ import type {
   DayPlanOwner as DayOwner,
 } from '@/lib/day-plan/types';
 import {
-  ownerDescription,
   ownerLabel,
   selectEssentialItems,
 } from '@/lib/day-plan/presentation';
@@ -108,7 +107,16 @@ function SortableArrivalCard({
       <article
         aria-labelledby={titleId}
         aria-describedby={`${contextId} ${metadataId}`}
-        className="flex h-full flex-col rounded-2xl border bg-card p-4 shadow-sm sm:p-5"
+        className={`flex h-full cursor-pointer flex-col rounded-2xl border bg-card p-4 shadow-sm transition-[transform,box-shadow,border-color] duration-200 ease-out motion-reduce:transform-none motion-reduce:transition-none sm:p-5 ${
+          isDragging
+            ? 'shadow-lg'
+            : 'hover:-translate-y-1 hover:scale-[1.01] hover:shadow-lg focus-within:-translate-y-1 focus-within:scale-[1.01] focus-within:border-accent-blue/30 focus-within:shadow-lg'
+        }`}
+        onClick={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest('button, input, label, a, select, textarea')) return;
+          onExpand(view.item.id);
+        }}
       >
         <span id={contextId} className="sr-only">
           Priority {index + 1} of {total}. Owner {ownerLabel(view.item.owner)}.
@@ -126,43 +134,67 @@ function SortableArrivalCard({
             <span aria-hidden="true">↔</span>
           </button>
 
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              {view.project && <span className="rounded-full bg-muted px-2 py-1">{view.project}</span>}
-            </div>
-            <h2
-              id={titleId}
-              className={`${view.project ? 'mt-2' : ''} text-base font-semibold leading-snug text-foreground sm:text-lg`}
-            >
-              {view.title}
-            </h2>
-            {view.summary && (
-              <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
-                {view.summary}
-              </p>
-            )}
-            <span id={metadataId} className="sr-only">{view.whyToday}</span>
-          </div>
-        </div>
-
-        <div className="mt-auto flex flex-wrap items-center gap-2 border-t pt-3">
           <button
             ref={(node) => setDisclosureRef(view.item.id, node)}
             type="button"
-            className="ml-auto min-h-11 rounded-xl px-3 text-sm font-medium text-foreground hover:bg-muted"
-            aria-label={`${expanded ? 'Hide' : 'Show'} details for ${view.title}`}
+            className="min-w-0 flex-1 rounded-xl text-left outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/40"
+            aria-label={`${expanded ? 'Collapse' : 'Expand'} details for ${view.title}`}
             aria-expanded={expanded}
             aria-controls={`arrival-details-${view.item.id}`}
             onClick={() => onExpand(view.item.id)}
           >
-            {expanded ? 'Hide details' : 'Show details'}
+            <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              {view.project && <span className="rounded-full bg-muted px-2 py-1">{view.project}</span>}
+            </span>
+            <span
+              id={titleId}
+              role="heading"
+              aria-level={2}
+              className={`${view.project ? 'mt-2' : ''} block text-base font-semibold leading-snug text-foreground sm:text-lg`}
+            >
+              {view.title}
+            </span>
+            {view.summary && (
+              <span className="mt-2 block line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+                {view.summary}
+              </span>
+            )}
+            <span id={metadataId} className="sr-only">{view.whyToday}</span>
           </button>
         </div>
+
+        <fieldset className="mt-auto pt-4">
+          <legend className="sr-only">Owner</legend>
+          <div className="grid grid-cols-3 gap-1.5">
+            {OWNERS.map((owner) => (
+              <label
+                key={owner}
+                className={`flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-xl border px-2 text-xs font-medium focus-within:ring-2 focus-within:ring-accent-blue/40 ${
+                  view.item.owner === owner ? 'border-accent-blue bg-accent-blue/5 text-foreground' : 'text-muted-foreground'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name={`owner-${view.item.id}`}
+                  value={owner}
+                  checked={view.item.owner === owner}
+                  disabled={busy}
+                  onChange={() => void onOwnerChange(view.item.id, owner)}
+                  className="h-4 w-4 accent-[var(--accent-blue)]"
+                />
+                {ownerLabel(owner)}
+              </label>
+            ))}
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground" role="status">
+            {view.item.owner === 'me' ? 'You own this.' : 'Execution has not started.'}
+          </p>
+        </fieldset>
 
         {expanded && (
           <div
             id={`arrival-details-${view.item.id}`}
-            className="mt-3 max-h-64 space-y-3 overflow-y-auto rounded-xl bg-muted/60 p-4 text-sm"
+            className="mt-3 max-h-72 space-y-3 overflow-y-auto rounded-xl border-t bg-muted/60 p-4 text-sm"
           >
             {view.description && view.description.trim() !== view.title.trim() && (
               <div>
@@ -179,42 +211,17 @@ function SortableArrivalCard({
               <p className="text-muted-foreground">No definition of done has been added yet.</p>
             )}
             {view.deadline && <p className="mt-2"><span className="font-semibold">Deadline:</span> {view.deadline}</p>}
-            <fieldset className="border-t pt-3">
-              <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Owner</legend>
-              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                {OWNERS.map((owner) => (
-                  <label
-                    key={owner}
-                    className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border px-3 text-sm font-medium focus-within:ring-2 focus-within:ring-accent-blue/40 ${
-                      view.item.owner === owner ? 'border-accent-blue bg-accent-blue/5 text-foreground' : 'text-muted-foreground'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name={`owner-${view.item.id}`}
-                      value={owner}
-                      checked={view.item.owner === owner}
-                      disabled={busy}
-                      onChange={() => void onOwnerChange(view.item.id, owner)}
-                      className="h-4 w-4 accent-[var(--accent-blue)]"
-                    />
-                    {ownerLabel(owner)}
-                  </label>
-                ))}
-              </div>
-              <p className="mt-2 text-xs leading-relaxed text-muted-foreground" role="status">
-                {ownerDescription(view.item.owner)}
-              </p>
-            </fieldset>
-            <button
-              type="button"
-              className="min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-background hover:text-foreground disabled:opacity-40"
-              aria-label={`Remove ${view.title} from today’s essentials`}
-              disabled={busy}
-              onClick={() => void onDismiss(view.item.id, view.title)}
-            >
-              Not today
-            </button>
+            <div className="border-t pt-2">
+              <button
+                type="button"
+                className="min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-background hover:text-foreground disabled:opacity-40"
+                aria-label={`Remove ${view.title} from today’s essentials`}
+                disabled={busy}
+                onClick={() => void onDismiss(view.item.id, view.title)}
+              >
+                Not today
+              </button>
+            </div>
           </div>
         )}
       </article>
