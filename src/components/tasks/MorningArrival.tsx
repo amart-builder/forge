@@ -793,15 +793,12 @@ export default function MorningArrival({
                 <button
                   type="submit"
                   disabled={!assistantPrompt.trim() || assistantSubmitting || assistantActive}
-                  className="min-h-11 rounded-xl bg-foreground px-4 text-sm font-semibold text-background disabled:opacity-40"
+                  aria-label={assistantSubmitting || assistantActive ? 'Claude is working' : 'Send'}
+                  className="min-h-11 min-w-20 rounded-xl bg-foreground px-4 text-sm font-semibold text-background transition-colors disabled:bg-muted-foreground/25 disabled:text-foreground/50 disabled:opacity-100"
                 >
-                  {assistantSubmitting
-                    ? 'Queueing…'
-                    : assistantTurn?.state === 'queued'
-                      ? 'Queued'
-                      : assistantTurn?.state === 'running'
-                        ? 'Claude is working…'
-                        : 'Send'}
+                  {assistantSubmitting || assistantActive
+                    ? <span aria-hidden="true" className="inline-block size-1.5 rounded-full bg-current opacity-50 motion-safe:animate-pulse" />
+                    : 'Send'}
                 </button>
               </form>
               {(assistantTurn || assistantError) && (
@@ -812,8 +809,19 @@ export default function MorningArrival({
                   aria-atomic="true"
                 >
                   {assistantTurn && (
-                    <p className="font-medium text-foreground">
-                      {assistantTurnStatusLabel(assistantTurn)}
+                    <p className="flex items-center gap-2 font-medium text-foreground">
+                      {assistantActive && (
+                        <span className="inline-flex items-center gap-1" aria-hidden="true">
+                          {[0, 1, 2].map((dot) => (
+                            <span
+                              key={dot}
+                              className="size-1.5 rounded-full bg-current opacity-35 motion-safe:animate-pulse"
+                              style={{ animationDelay: `${dot * 180}ms` }}
+                            />
+                          ))}
+                        </span>
+                      )}
+                      {assistantActive ? 'Claude is working' : assistantTurnStatusLabel(assistantTurn)}
                     </p>
                   )}
                   {assistantTurn?.proposal?.assistantText && (
