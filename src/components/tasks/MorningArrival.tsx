@@ -597,6 +597,7 @@ export default function MorningArrival({
   const descriptionId = useId();
   const assistantHeadingId = useId();
   const [assistantPrompt, setAssistantPrompt] = useState('');
+  const assistantPromptRef = useRef<HTMLTextAreaElement>(null);
   const draggingRef = useRef(false);
   const disclosureRefs = useRef(new Map<string, HTMLButtonElement>());
   const visibleItems = selectEssentialItems(items.map((view) => view.item), 3)
@@ -615,6 +616,10 @@ export default function MorningArrival({
     if (!userText || assistantSubmitting || assistantActive) return;
     try {
       await onAssistantSubmit(userText);
+      setAssistantPrompt('');
+      window.requestAnimationFrame(() => {
+        if (assistantPromptRef.current) assistantPromptRef.current.style.height = 'auto';
+      });
     } catch {
       // Keep the typed prompt so the user can retry or revise it.
     }
@@ -771,14 +776,19 @@ export default function MorningArrival({
                   Changes for today’s plan
                 </label>
                 <textarea
+                  ref={assistantPromptRef}
                   id={`${assistantHeadingId}-prompt`}
                   value={assistantPrompt}
                   maxLength={4000}
                   rows={2}
                   disabled={assistantSubmitting || assistantActive}
-                  className="min-h-11 min-w-0 flex-1 resize-y rounded-xl border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-accent-blue/40 disabled:opacity-60"
+                  className="max-h-40 min-h-11 min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-accent-blue/40 disabled:opacity-60"
                   placeholder="Add context or change the order…"
-                  onChange={(event) => setAssistantPrompt(event.target.value)}
+                  onChange={(event) => {
+                    setAssistantPrompt(event.target.value);
+                    event.currentTarget.style.height = 'auto';
+                    event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 160)}px`;
+                  }}
                 />
                 <button
                   type="submit"
