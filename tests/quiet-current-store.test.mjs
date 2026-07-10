@@ -242,6 +242,34 @@ test('Later does not revive a suggestion after its real deadline', (t) => {
   );
 });
 
+test('a late read expires deferred work even when its deadline followed the return seam', (t) => {
+  isolatedStore(t);
+  setQuietCurrentNowForTests(new Date('2026-07-10T12:00:00.000Z'));
+  const suggestion = createWorkSuggestion({
+    title: 'Review the follow-up tomorrow morning',
+    reason: 'The follow-up should not linger past tomorrow afternoon.',
+    source: 'email',
+    expiresAt: '2026-07-11T19:00:00.000Z',
+  });
+  const deferred = resolveWorkSuggestion(suggestion.id, {
+    state: 'deferred',
+    source: 'human',
+  });
+  assert.ok(new Date(suggestion.expiresAt) > new Date(deferred.deferredUntil));
+
+  setQuietCurrentNowForTests(new Date('2026-07-11T20:00:00.000Z'));
+  const expired = getQuietCurrentSnapshot().suggestions.find(
+    (item) => item.id === suggestion.id,
+  );
+  assert.equal(expired?.state, 'expired');
+  assert.equal(
+    getQuietCurrentSnapshot().decisionEvents.some(
+      (event) => event.eventType === 'suggestion_resurface',
+    ),
+    false,
+  );
+});
+
 test('undo after the morning seam is idempotent when Later already returned', (t) => {
   isolatedStore(t);
   setQuietCurrentNowForTests(new Date('2026-07-10T12:00:00.000Z'));

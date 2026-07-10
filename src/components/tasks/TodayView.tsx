@@ -113,6 +113,42 @@ function savedCurrentDescription(savedAt?: string): string {
   return `the current saved ${label}`;
 }
 
+function proposalCommitError(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (
+    message ===
+    "Forge couldn't accept that proposal or fully restore the task. Open All Work to check the task before trying again."
+  ) {
+    return message;
+  }
+  return "Forge couldn't add that proposal to your current. Open All Work to check the task, then try again.";
+}
+
+function readLocalValue(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalValue(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Focus and working notes remain usable in memory when storage is unavailable.
+  }
+}
+
+function removeLocalValue(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // The in-memory focus state is still authoritative for this session.
+  }
+}
+
 function toEpoch(value: string | null | undefined): number {
   const parsed = value ? new Date(value).getTime() : Number.NaN;
   return Number.isNaN(parsed) ? 0 : parsed;
@@ -220,6 +256,9 @@ function RestTodayView() {
   const [error, setError] = useState<string>();
   const columnsRef = useRef<ColumnData[]>([]);
   const tasksRef = useRef<TaskData[]>([]);
+  const confirmedTasksRef = useRef<TaskData[]>([]);
+  const taskMutationRevisionsRef = useRef(new Map<string, number>());
+  const confirmedTaskRevisionsRef = useRef(new Map<string, number>());
   const hasCredibleDataRef = useRef(false);
   const mutationRevisionRef = useRef(0);
   const inFlightMutationsRef = useRef(0);
@@ -229,28 +268,36 @@ function RestTodayView() {
 
   const writeSnapshot = useCallback((nextColumns: ColumnData[], nextTasks: TaskData[]) => {
     const savedAt = new Date();
-    if (writeArrivalSnapshot(window.localStorage, nextColumns, nextTasks, savedAt)) {
-      lastSnapshotSavedAtRef.current = savedAt.toISOString();
+    try {
+      if (writeArrivalSnapshot(window.localStorage, nextColumns, nextTasks, savedAt)) {
+        lastSnapshotSavedAtRef.current = savedAt.toISOString();
+      }
+    } catch {
+      // Storage can be unavailable in private or locked-down browser contexts.
     }
   }, []);
 
   const persistSnapshot = useCallback((nextColumns: ColumnData[], nextTasks: TaskData[]) => {
     columnsRef.current = nextColumns;
     tasksRef.current = nextTasks;
+    confirmedTasksRef.current = nextTasks;
     writeSnapshot(nextColumns, nextTasks);
   }, [writeSnapshot]);
 
-  const updateCachedTasks = useCallback(
+  const updateVisibleTasks = useCallback(
     (updater: (current: TaskData[]) => TaskData[]) => {
       const next = updater(tasksRef.current);
       tasksRef.current = next;
       setTasks(next);
-      if (hasCredibleDataRef.current) {
-        writeSnapshot(columnsRef.current, next);
-      }
     },
-    [writeSnapshot],
+    [],
   );
+
+  const persistConfirmedSnapshot = useCallback(() => {
+    if (hasCredibleDataRef.current) {
+      writeSnapshot(columnsRef.current, confirmedTasksRef.current);
+    }
+  }, [writeSnapshot]);
 
   const reload = useCallback(async () => {
     const requestRevision = mutationRevisionRef.current;
@@ -327,7 +374,12 @@ function RestTodayView() {
   }, []);
 
   useLayoutEffect(() => {
-    const cached = readArrivalSnapshot(window.localStorage);
+    let cached: ReturnType<typeof readArrivalSnapshot>;
+    try {
+      cached = readArrivalSnapshot(window.localStorage);
+    } catch {
+      return;
+    }
     if (!cached) return;
     const hasRequiredColumns = Boolean(
       findColumn(cached.columns, TODAY_ALIASES) && findColumn(cached.columns, DONE_ALIASES),
@@ -337,6 +389,7 @@ function RestTodayView() {
     lastSnapshotSavedAtRef.current = cached.savedAt;
     columnsRef.current = cached.columns;
     tasksRef.current = cached.tasks;
+    confirmedTasksRef.current = cached.tasks;
     setColumns(cached.columns);
     setTasks(cached.tasks);
     setLoading(false);
@@ -374,7 +427,12 @@ function RestTodayView() {
             source_type: 'quiet_current',
           });
           const normalized = normalizeRestTask(created);
-          updateCachedTasks((current) => upsertArrivalTask(current, normalized));
+          confirmedTasksRef.current = upsertArrivalTask(
+            confirmedTasksRef.current,
+            normalized,
+          );
+          updateVisibleTasks((current) => upsertArrivalTask(current, normalized));
+          persistConfirmedSnapshot();
           return normalized._id;
         } catch (nextError) {
           forceRefresh = true;
@@ -386,15 +444,41 @@ function RestTodayView() {
       updateTask={async (id, patch) => {
         beginMutation();
         let forceRefresh = false;
-        updateCachedTasks((current) =>
-          current.map((task) => (task._id === id ? applyPatch(task, patch) : task)),
+        const taskRevision = (taskMutationRevisionsRef.current.get(id) ?? 0) + 1;
+        taskMutationRevisionsRef.current.set(id, taskRevision);
+        updateVisibleTasks(
+          (current) =>
+            current.map((task) => (task._id === id ? applyPatch(task, patch) : task)),
         );
         try {
           const updated = await updateRestTask(id, toRestPatch(patch));
-          updateCachedTasks((current) =>
-            current.map((task) => (task._id === id ? normalizeRestTask(updated) : task)),
-          );
+          const normalized = normalizeRestTask(updated);
+          const confirmedRevision = confirmedTaskRevisionsRef.current.get(id) ?? 0;
+          if (taskRevision > confirmedRevision) {
+            confirmedTaskRevisionsRef.current.set(id, taskRevision);
+            confirmedTasksRef.current = upsertArrivalTask(
+              confirmedTasksRef.current,
+              normalized,
+            );
+            persistConfirmedSnapshot();
+          }
+          if (taskMutationRevisionsRef.current.get(id) === taskRevision) {
+            updateVisibleTasks((current) =>
+              current.map((task) => (task._id === id ? normalized : task)),
+            );
+          } else {
+            forceRefresh = true;
+          }
         } catch (nextError) {
+          if (taskMutationRevisionsRef.current.get(id) === taskRevision) {
+            const confirmedTask = confirmedTasksRef.current.find((task) => task._id === id);
+            if (confirmedTask) {
+              updateVisibleTasks((current) => upsertArrivalTask(current, confirmedTask));
+            } else {
+              updateVisibleTasks((current) => current.filter((task) => task._id !== id));
+            }
+            persistConfirmedSnapshot();
+          }
           forceRefresh = true;
           throw nextError;
         } finally {
@@ -404,10 +488,34 @@ function RestTodayView() {
       deleteTask={async (id) => {
         beginMutation();
         let forceRefresh = false;
-        updateCachedTasks((current) => current.filter((task) => task._id !== id));
+        const taskRevision = (taskMutationRevisionsRef.current.get(id) ?? 0) + 1;
+        taskMutationRevisionsRef.current.set(id, taskRevision);
+        updateVisibleTasks((current) => current.filter((task) => task._id !== id));
         try {
           await deleteRestTask(id);
+          const confirmedRevision = confirmedTaskRevisionsRef.current.get(id) ?? 0;
+          if (taskRevision > confirmedRevision) {
+            confirmedTaskRevisionsRef.current.set(id, taskRevision);
+            confirmedTasksRef.current = confirmedTasksRef.current.filter(
+              (task) => task._id !== id,
+            );
+            persistConfirmedSnapshot();
+          }
+          if (taskMutationRevisionsRef.current.get(id) === taskRevision) {
+            updateVisibleTasks((current) => current.filter((task) => task._id !== id));
+          } else {
+            forceRefresh = true;
+          }
         } catch (nextError) {
+          if (taskMutationRevisionsRef.current.get(id) === taskRevision) {
+            const confirmedTask = confirmedTasksRef.current.find((task) => task._id === id);
+            if (confirmedTask) {
+              updateVisibleTasks((current) => upsertArrivalTask(current, confirmedTask));
+            } else {
+              updateVisibleTasks((current) => current.filter((task) => task._id !== id));
+            }
+            persistConfirmedSnapshot();
+          }
           forceRefresh = true;
           throw nextError;
         } finally {
@@ -437,8 +545,7 @@ function TodayExperience({
     return document.hidden || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   });
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return null;
-    return window.localStorage.getItem(FOCUS_KEY);
+    return readLocalValue(FOCUS_KEY);
   });
   const [capture, setCapture] = useState('');
   const [capturing, setCapturing] = useState(false);
@@ -457,9 +564,8 @@ function TodayExperience({
   const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
   const [suggestionDraft, setSuggestionDraft] = useState({ title: '', description: '' });
   const [notes, setNotes] = useState<Record<string, string>>(() => {
-    if (typeof window === 'undefined') return {};
     try {
-      return JSON.parse(window.localStorage.getItem(NOTES_KEY) ?? '{}') as Record<string, string>;
+      return JSON.parse(readLocalValue(NOTES_KEY) ?? '{}') as Record<string, string>;
     } catch {
       return {};
     }
@@ -589,7 +695,7 @@ function TodayExperience({
     if (loading || focusedTask || commitments.length === 0) return;
     const first = commitments[0];
     setFocusedTaskId(first._id);
-    window.localStorage.setItem(FOCUS_KEY, first._id);
+    writeLocalValue(FOCUS_KEY, first._id);
   }, [commitments, focusedTask, loading]);
 
   useEffect(() => {
@@ -629,7 +735,7 @@ function TodayExperience({
       const previous = focusedTaskId;
       setFocusExpanded(false);
       setFocusedTaskId(taskId);
-      window.localStorage.setItem(FOCUS_KEY, taskId);
+      writeLocalValue(FOCUS_KEY, taskId);
       void recordDecision({
         eventType: 'focus_change',
         entityId: taskId,
@@ -727,8 +833,8 @@ function TodayExperience({
       setCapture('');
       setCaptureOpen(false);
       focusTask(taskId, 'capture');
-    } catch (nextError) {
-      setSurfaceError(nextError instanceof Error ? nextError.message : String(nextError));
+    } catch {
+      setSurfaceError("Forge couldn't finish that addition. Refresh the current to confirm the task, then try again.");
     } finally {
       setCapturing(false);
     }
@@ -746,8 +852,8 @@ function TodayExperience({
     setUndo(null);
     try {
       await action.run();
-    } catch (nextError) {
-      setSurfaceError(nextError instanceof Error ? nextError.message : String(nextError));
+    } catch {
+      setSurfaceError("Forge couldn't undo that change. Open All Work to check the task, then try again.");
     } finally {
       undoRunningRef.current = false;
     }
@@ -818,9 +924,9 @@ function TodayExperience({
       } catch (resolutionError) {
         try {
           await rollBackTaskMutation();
-        } catch (rollbackError) {
+        } catch {
           throw new Error(
-            `Forge couldn't accept that proposal or fully restore the task. Open All Work to check the task before trying again. ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+            "Forge couldn't accept that proposal or fully restore the task. Open All Work to check the task before trying again.",
           );
         } finally {
           setFocusedTaskId(commitments[0]?._id ?? null);
@@ -848,7 +954,7 @@ function TodayExperience({
         },
       });
     } catch (nextError) {
-      setSurfaceError(nextError instanceof Error ? nextError.message : String(nextError));
+      setSurfaceError(proposalCommitError(nextError));
     }
   }
 
@@ -862,8 +968,8 @@ function TodayExperience({
       });
       setEditingSuggestionId(null);
       await loadSuggestions();
-    } catch (nextError) {
-      setSurfaceError(nextError instanceof Error ? nextError.message : String(nextError));
+    } catch {
+      setSurfaceError("Forge couldn't finish saving that wording. Refresh the current to confirm it, then try again.");
     }
   }
 
@@ -882,8 +988,8 @@ function TodayExperience({
           setUndo(null);
         },
       });
-    } catch (nextError) {
-      setSurfaceError(nextError instanceof Error ? nextError.message : String(nextError));
+    } catch {
+      setSurfaceError("Forge couldn't finish setting that aside. Refresh the current to confirm it, then try again.");
     }
   }
 
@@ -906,8 +1012,8 @@ function TodayExperience({
           setUndo(null);
         },
       });
-    } catch (nextError) {
-      setSurfaceError(nextError instanceof Error ? nextError.message : String(nextError));
+    } catch {
+      setSurfaceError("Forge couldn't finish dismissing that suggestion. Refresh the current to confirm it, then try again.");
     }
   }
 
@@ -931,8 +1037,8 @@ function TodayExperience({
       });
       const nextTask = commitments.find((candidate) => candidate._id !== task._id);
       setFocusedTaskId(nextTask?._id ?? null);
-      if (nextTask) window.localStorage.setItem(FOCUS_KEY, nextTask._id);
-      else window.localStorage.removeItem(FOCUS_KEY);
+      if (nextTask) writeLocalValue(FOCUS_KEY, nextTask._id);
+      else removeLocalValue(FOCUS_KEY);
       showUndo({
         message: 'Completed',
         run: async () => {
@@ -951,8 +1057,8 @@ function TodayExperience({
           setUndo(null);
         },
       });
-    } catch (nextError) {
-      setSurfaceError(nextError instanceof Error ? nextError.message : String(nextError));
+    } catch {
+      setSurfaceError("Forge couldn't finish completing that task. Refresh the current to confirm its state, then try again.");
     } finally {
       setCompletingTaskId(null);
     }
@@ -979,8 +1085,8 @@ function TodayExperience({
           setUndo(null);
         },
       });
-    } catch (nextError) {
-      setSurfaceError(nextError instanceof Error ? nextError.message : String(nextError));
+    } catch {
+      setSurfaceError("Forge couldn't finish moving that task to the Jarvis shelf. Refresh the current to confirm its state, then try again.");
     }
   }
 
@@ -995,15 +1101,15 @@ function TodayExperience({
         source: 'human',
       });
       focusTask(task._id, 'pluck_back');
-    } catch (nextError) {
-      setSurfaceError(nextError instanceof Error ? nextError.message : String(nextError));
+    } catch {
+      setSurfaceError("Forge couldn't finish bringing that task back. Refresh the current to confirm its state, then try again.");
     }
   }
 
   function updateWorkingNote(taskId: string, value: string) {
     const nextNotes = { ...notes, [taskId]: value };
     setNotes(nextNotes);
-    window.localStorage.setItem(NOTES_KEY, JSON.stringify(nextNotes));
+    writeLocalValue(NOTES_KEY, JSON.stringify(nextNotes));
   }
 
   async function saveDetail(patch: UpdateTaskInput) {
@@ -1016,7 +1122,22 @@ function TodayExperience({
         status: patch.columnId === doneColumn?._id ? 'done' : 'open',
       };
     }
-    await updateTask(detailTask._id, nextPatch);
+    try {
+      await updateTask(detailTask._id, nextPatch);
+    } catch (error) {
+      setSurfaceError("Forge couldn't save those task details. Try again.");
+      throw error;
+    }
+  }
+
+  async function deleteDetail() {
+    if (!detailTask) return;
+    try {
+      await deleteTask(detailTask._id);
+    } catch (error) {
+      setSurfaceError("Forge couldn't confirm that deletion. Refresh All Work to check the task, then try again.");
+      throw error;
+    }
   }
 
   const timeLabel = new Intl.DateTimeFormat('en-US', {
@@ -1501,7 +1622,7 @@ function TodayExperience({
           onClose={() => setDetailTaskId(null)}
           onDeleted={() => setDetailTaskId(null)}
           onSaveTask={saveDetail}
-          onDeleteTask={() => deleteTask(detailTask._id)}
+          onDeleteTask={deleteDetail}
         />
       )}
     </div>

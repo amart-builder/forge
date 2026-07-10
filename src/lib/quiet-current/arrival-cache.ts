@@ -112,7 +112,11 @@ export function readArrivalSnapshot(
   storage: StorageReader,
   now = new Date(),
 ): ArrivalSnapshot | undefined {
-  return parseArrivalSnapshot(storage.getItem(ARRIVAL_CACHE_KEY), now);
+  try {
+    return parseArrivalSnapshot(storage.getItem(ARRIVAL_CACHE_KEY), now);
+  } catch {
+    return undefined;
+  }
 }
 
 export function canApplyArrivalRefresh(input: {

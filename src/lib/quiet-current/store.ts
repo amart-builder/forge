@@ -179,11 +179,13 @@ function resurfaceDeferredSuggestions(store: QuietCurrentStore): boolean {
       suggestion.deferredUntil &&
         new Date(suggestion.expiresAt).getTime() <= deferredReturnAt,
     );
+    const isStillCurrent = new Date(suggestion.expiresAt).getTime() > now.getTime();
     if (
       suggestion.state === "deferred" &&
       !suggestion.resurfacedFromDeferredAt &&
       deferredReturnAt <= now.getTime() &&
-      !expiresBeforeReturn
+      !expiresBeforeReturn &&
+      isStillCurrent
     ) {
       const before = { ...suggestion };
       suggestion.state = suggestion.deferredReturnState ?? "proposed";
@@ -213,18 +215,8 @@ function expireSuggestions(store: QuietCurrentStore): boolean {
   let changed = false;
 
   for (const suggestion of store.suggestions) {
-    const expiresBeforeDeferredReturn = Boolean(
-      suggestion.state === "deferred" &&
-        !suggestion.resurfacedFromDeferredAt &&
-        suggestion.deferredUntil &&
-        new Date(suggestion.expiresAt).getTime() <=
-          new Date(suggestion.deferredUntil).getTime(),
-    );
-    const expiresWhileHidden =
-      suggestion.state === "deferred" &&
-      (Boolean(suggestion.resurfacedFromDeferredAt) || expiresBeforeDeferredReturn);
     if (
-      (ACTIVE_STATES.has(suggestion.state) || expiresWhileHidden) &&
+      (ACTIVE_STATES.has(suggestion.state) || suggestion.state === "deferred") &&
       new Date(suggestion.expiresAt).getTime() <= now.getTime()
     ) {
       const previousState = suggestion.state;

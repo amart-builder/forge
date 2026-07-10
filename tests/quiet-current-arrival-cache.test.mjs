@@ -72,6 +72,14 @@ test('cache storage failure stays non-authoritative', () => {
     },
   };
   assert.equal(writeArrivalSnapshot(storage, columns, tasks), false);
+  assert.equal(
+    readArrivalSnapshot({
+      getItem: () => {
+        throw new Error('storage disabled');
+      },
+    }),
+    undefined,
+  );
 });
 
 test('arrival cache rejects stale and implausibly future snapshots', () => {
