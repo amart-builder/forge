@@ -10,6 +10,7 @@ import {
   type SuggestionPriority,
   type SuggestionState,
 } from "@/lib/quiet-current/store";
+import { isTrustedForgeRequest } from "@/lib/request-security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,8 +45,11 @@ function stringValue(
   return trimmed;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    if (!isTrustedForgeRequest(request)) {
+      return NextResponse.json({ error: "Untrusted request host." }, { status: 403 });
+    }
     return NextResponse.json({
       ...getQuietCurrentSnapshot(),
       csrfToken: getQuietCurrentCsrfToken(),
@@ -60,9 +64,8 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
-    const origin = request.headers.get("origin");
-    if (origin && origin !== request.nextUrl.origin) {
-      return NextResponse.json({ error: "Untrusted request origin." }, { status: 403 });
+    if (!isTrustedForgeRequest(request)) {
+      return NextResponse.json({ error: "Untrusted request host." }, { status: 403 });
     }
     const body = (await request.json()) as Record<string, unknown>;
     const action = stringValue(body.action, "action", { required: true, max: 40 });
