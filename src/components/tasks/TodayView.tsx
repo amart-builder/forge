@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   createTask as createRestTask,
   deleteTask as deleteRestTask,
@@ -16,34 +16,22 @@ import {
   resolveSuggestion,
   type WorkSuggestion,
 } from '@/lib/data/quiet-current';
+import {
+  canApplyArrivalRefresh,
+  readArrivalSnapshot,
+  upsertArrivalTask,
+  writeArrivalSnapshot,
+  type ArrivalColumn,
+  type ArrivalTask,
+  type ArrivalTaskStatus,
+} from '@/lib/quiet-current/arrival-cache';
 import { realTimeLabel } from '@/lib/quiet-current/presentation';
 import CurrentCanvas, { type CurrentPoint, type Tributary } from './CurrentCanvas';
 import TaskDetail from './TaskDetail';
 
-type TaskStatus = 'open' | 'done' | 'archived';
-
-interface ColumnData {
-  _id: string;
-  name: string;
-  position: number;
-  createdAt: number;
-}
-
-interface TaskData {
-  _id: string;
-  columnId: string;
-  title: string;
-  description: string;
-  priority: 'low' | 'medium' | 'high';
-  dueDate?: string;
-  dueAt?: string;
-  tags: string[];
-  status?: TaskStatus;
-  blocked: boolean;
-  position: number;
-  createdAt: number;
-  updatedAt: number;
-}
+type TaskStatus = ArrivalTaskStatus;
+type ColumnData = ArrivalColumn;
+type TaskData = ArrivalTask;
 
 type CreateTaskInput = {
   columnId: string;
@@ -70,6 +58,7 @@ interface TodayExperienceProps {
   tasks: TaskData[];
   loading: boolean;
   error?: string;
+  retry: () => Promise<void>;
   createTask: (input: CreateTaskInput) => Promise<string>;
   updateTask: (id: string, patch: UpdateTaskInput) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
@@ -110,6 +99,18 @@ function hasNormalizedTag(tags: string[], tag: string): boolean {
 
 function findColumn(columns: ColumnData[], aliases: Set<string>): ColumnData | undefined {
   return columns.find((column) => aliases.has(column.name));
+}
+
+function savedCurrentDescription(savedAt?: string): string {
+  if (!savedAt) return 'your last saved current';
+  const saved = new Date(savedAt);
+  const label = saved.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `the current saved ${label}`;
 }
 
 function toEpoch(value: string | null | undefined): number {
@@ -217,19 +218,128 @@ function RestTodayView() {
   const [tasks, setTasks] = useState<TaskData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
+  const columnsRef = useRef<ColumnData[]>([]);
+  const tasksRef = useRef<TaskData[]>([]);
+  const hasCredibleDataRef = useRef(false);
+  const mutationRevisionRef = useRef(0);
+  const inFlightMutationsRef = useRef(0);
+  const refreshAfterMutationsRef = useRef(false);
+  const lastSnapshotSavedAtRef = useRef<string | undefined>(undefined);
+  const reloadRef = useRef<() => Promise<void>>(async () => undefined);
+
+  const writeSnapshot = useCallback((nextColumns: ColumnData[], nextTasks: TaskData[]) => {
+    const savedAt = new Date();
+    if (writeArrivalSnapshot(window.localStorage, nextColumns, nextTasks, savedAt)) {
+      lastSnapshotSavedAtRef.current = savedAt.toISOString();
+    }
+  }, []);
+
+  const persistSnapshot = useCallback((nextColumns: ColumnData[], nextTasks: TaskData[]) => {
+    columnsRef.current = nextColumns;
+    tasksRef.current = nextTasks;
+    writeSnapshot(nextColumns, nextTasks);
+  }, [writeSnapshot]);
+
+  const updateCachedTasks = useCallback(
+    (updater: (current: TaskData[]) => TaskData[]) => {
+      const next = updater(tasksRef.current);
+      tasksRef.current = next;
+      setTasks(next);
+      if (hasCredibleDataRef.current) {
+        writeSnapshot(columnsRef.current, next);
+      }
+    },
+    [writeSnapshot],
+  );
 
   const reload = useCallback(async () => {
-    setLoading(true);
+    const requestRevision = mutationRevisionRef.current;
+    const hadCredibleData = hasCredibleDataRef.current;
+    if (!hadCredibleData) setLoading(true);
     setError(undefined);
     try {
       const [nextColumns, nextTasks] = await Promise.all([listTaskColumns(), listTasks()]);
-      setColumns(nextColumns.map(normalizeRestColumn));
-      setTasks(nextTasks.map(normalizeRestTask));
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      const normalizedColumns = nextColumns.map(normalizeRestColumn);
+      const normalizedTasks = nextTasks.map(normalizeRestTask);
+      const hasRequiredColumns = Boolean(
+        findColumn(normalizedColumns, TODAY_ALIASES) &&
+          findColumn(normalizedColumns, DONE_ALIASES),
+      );
+
+      if (!hasRequiredColumns) {
+        if (!hadCredibleData) {
+          columnsRef.current = normalizedColumns;
+          tasksRef.current = normalizedTasks;
+          setColumns(normalizedColumns);
+          setTasks(normalizedTasks);
+        }
+        setError(
+          hadCredibleData
+            ? `Forge couldn't refresh because the Today or Done list is missing. You're still seeing ${savedCurrentDescription(lastSnapshotSavedAtRef.current)}. Open All Work to restore the list.`
+            : 'Forge needs both a Today list and a Done list. Open All Work to restore them, then try again.',
+        );
+        return;
+      }
+
+      hasCredibleDataRef.current = true;
+      columnsRef.current = normalizedColumns;
+      setColumns(normalizedColumns);
+      if (
+        canApplyArrivalRefresh({
+          requestRevision,
+          currentRevision: mutationRevisionRef.current,
+          inFlightMutations: inFlightMutationsRef.current,
+        })
+      ) {
+        setTasks(normalizedTasks);
+        persistSnapshot(normalizedColumns, normalizedTasks);
+      } else {
+        refreshAfterMutationsRef.current = true;
+        if (inFlightMutationsRef.current === 0) {
+          refreshAfterMutationsRef.current = false;
+          window.setTimeout(() => void reloadRef.current(), 0);
+        }
+      }
+    } catch {
+      setError(
+        hadCredibleData
+          ? `Forge couldn't refresh. You're seeing ${savedCurrentDescription(lastSnapshotSavedAtRef.current)}.`
+          : "Forge couldn't load your tasks. Check that Forge is running, then try again.",
+      );
     } finally {
       setLoading(false);
     }
+  }, [persistSnapshot]);
+  reloadRef.current = reload;
+
+  const beginMutation = useCallback(() => {
+    mutationRevisionRef.current += 1;
+    inFlightMutationsRef.current += 1;
+  }, []);
+
+  const settleMutation = useCallback(async (forceRefresh: boolean) => {
+    inFlightMutationsRef.current = Math.max(0, inFlightMutationsRef.current - 1);
+    if (forceRefresh) refreshAfterMutationsRef.current = true;
+    if (inFlightMutationsRef.current === 0 && refreshAfterMutationsRef.current) {
+      refreshAfterMutationsRef.current = false;
+      await reloadRef.current();
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    const cached = readArrivalSnapshot(window.localStorage);
+    if (!cached) return;
+    const hasRequiredColumns = Boolean(
+      findColumn(cached.columns, TODAY_ALIASES) && findColumn(cached.columns, DONE_ALIASES),
+    );
+    if (!hasRequiredColumns) return;
+    hasCredibleDataRef.current = true;
+    lastSnapshotSavedAtRef.current = cached.savedAt;
+    columnsRef.current = cached.columns;
+    tasksRef.current = cached.tasks;
+    setColumns(cached.columns);
+    setTasks(cached.tasks);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -242,48 +352,66 @@ function RestTodayView() {
       tasks={tasks}
       loading={loading}
       error={error}
+      retry={reload}
       createTask={async (input) => {
-        const nextPosition =
-          tasks
-            .filter((task) => task.columnId === input.columnId)
-            .reduce((maximum, task) => Math.max(maximum, task.position), -1) + 1;
-        const created = await createRestTask({
-          column_id: input.columnId,
-          title: input.title,
-          description: input.description,
-          priority: input.priority,
-          due_at: input.dueDate
-            ? new Date(`${input.dueDate}T00:00:00`).toISOString()
-            : undefined,
-          tags: input.tags,
-          position: nextPosition,
-          source_type: 'quiet_current',
-        });
-        const normalized = normalizeRestTask(created);
-        setTasks((current) => [...current, normalized]);
-        return normalized._id;
+        beginMutation();
+        let forceRefresh = false;
+        try {
+          const nextPosition =
+            tasksRef.current
+              .filter((task) => task.columnId === input.columnId)
+              .reduce((maximum, task) => Math.max(maximum, task.position), -1) + 1;
+          const created = await createRestTask({
+            column_id: input.columnId,
+            title: input.title,
+            description: input.description,
+            priority: input.priority,
+            due_at: input.dueDate
+              ? new Date(`${input.dueDate}T00:00:00`).toISOString()
+              : undefined,
+            tags: input.tags,
+            position: nextPosition,
+            source_type: 'quiet_current',
+          });
+          const normalized = normalizeRestTask(created);
+          updateCachedTasks((current) => upsertArrivalTask(current, normalized));
+          return normalized._id;
+        } catch (nextError) {
+          forceRefresh = true;
+          throw nextError;
+        } finally {
+          await settleMutation(forceRefresh);
+        }
       }}
       updateTask={async (id, patch) => {
-        setTasks((current) =>
+        beginMutation();
+        let forceRefresh = false;
+        updateCachedTasks((current) =>
           current.map((task) => (task._id === id ? applyPatch(task, patch) : task)),
         );
         try {
           const updated = await updateRestTask(id, toRestPatch(patch));
-          setTasks((current) =>
+          updateCachedTasks((current) =>
             current.map((task) => (task._id === id ? normalizeRestTask(updated) : task)),
           );
         } catch (nextError) {
-          await reload();
+          forceRefresh = true;
           throw nextError;
+        } finally {
+          await settleMutation(forceRefresh);
         }
       }}
       deleteTask={async (id) => {
-        setTasks((current) => current.filter((task) => task._id !== id));
+        beginMutation();
+        let forceRefresh = false;
+        updateCachedTasks((current) => current.filter((task) => task._id !== id));
         try {
           await deleteRestTask(id);
         } catch (nextError) {
-          await reload();
+          forceRefresh = true;
           throw nextError;
+        } finally {
+          await settleMutation(forceRefresh);
         }
       }}
     />
@@ -295,6 +423,7 @@ function TodayExperience({
   tasks,
   loading,
   error,
+  retry,
   createTask,
   updateTask,
   deleteTask,
@@ -411,6 +540,14 @@ function TodayExperience({
     : null;
   const activeSuggestions = suggestions
     .filter((suggestion) => suggestion.state === 'proposed' || suggestion.state === 'refined')
+    .sort((left, right) => {
+      const leftResurfaced = left.resurfacedFromDeferredAt ? 1 : 0;
+      const rightResurfaced = right.resurfacedFromDeferredAt ? 1 : 0;
+      return (
+        rightResurfaced - leftResurfaced ||
+        new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()
+      );
+    })
     .slice(0, 3);
 
   const loadSuggestions = useCallback(async () => {
@@ -418,8 +555,8 @@ function TodayExperience({
       const snapshot = await getQuietCurrent();
       setSuggestions(snapshot.suggestions);
       setSurfaceError(undefined);
-    } catch (nextError) {
-      setSurfaceError(nextError instanceof Error ? nextError.message : String(nextError));
+    } catch {
+      setSurfaceError("Forge couldn't refresh Jarvis suggestions. This doesn't touch your committed tasks.");
     } finally {
       setSuggestionsLoading(false);
     }
@@ -683,7 +820,7 @@ function TodayExperience({
           await rollBackTaskMutation();
         } catch (rollbackError) {
           throw new Error(
-            `The proposal could not be accepted, and Forge could not restore the task: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+            `Forge couldn't accept that proposal or fully restore the task. Open All Work to check the task before trying again. ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
           );
         } finally {
           setFocusedTaskId(commitments[0]?._id ?? null);
@@ -835,7 +972,7 @@ function TodayExperience({
       const nextTask = commitments.find((candidate) => candidate._id !== task._id);
       setFocusedTaskId(nextTask?._id ?? null);
       showUndo({
-        message: 'Jarvis is carrying it',
+        message: 'Held for Jarvis',
         run: async () => {
           await updateTask(task._id, { tags: task.tags });
           focusTask(task._id, 'pluck_back');
@@ -942,20 +1079,63 @@ function TodayExperience({
 
   if (loading) {
     return (
-      <div className="quiet-current-surface flex h-full items-center justify-center">
-        <div className="quiet-loading-orb" aria-label="Loading your current" />
+      <div className="quiet-current-surface current-river-surface is-day h-full overflow-hidden" aria-busy="true">
+        <div className="current-water-plane" aria-hidden="true">
+          <span className="current-water-drift current-water-drift-one" />
+          <span className="current-water-drift current-water-drift-two" />
+        </div>
+        <div className="current-river-shell">
+          <header className="current-arrival" aria-label="Preparing Today">
+            <div className="current-arrival-copy">
+              <p className="current-today-label">Today</p>
+              <time className="current-time" dateTime={now.toISOString()} suppressHydrationWarning>
+                {timeLabel}
+              </time>
+              <p className="current-greeting">Gathering your current.</p>
+            </div>
+            <div className="current-day-arc" aria-hidden="true">
+              <svg viewBox="0 0 324 132">
+                <path d="M 18 112 C 116 116, 244 76, 306 18" />
+                <circle cx="162" cy="88" r="6" />
+                <g className="current-sun" transform="translate(306 18)">
+                  <circle r="9" />
+                </g>
+              </svg>
+            </div>
+          </header>
+          <section className="current-river-stage" style={{ height: 900 }} aria-label="Preparing your current">
+            <CurrentCanvas
+              height={900}
+              points={[
+                { x: 540, y: 0 },
+                { x: 468, y: 128 },
+                { x: 522, y: 224 },
+                { x: 500, y: 330 },
+                { x: 500, y: 900 },
+              ]}
+              tributaries={[]}
+              focusPoint={{ x: 500, y: 330 }}
+              completing={false}
+              ambientPaused={ambientPaused}
+            />
+            <div className="current-empty-now" style={{ top: 330 }} role="status">
+              <p>Preparing what matters now.</p>
+            </div>
+          </section>
+        </div>
       </div>
     );
   }
 
-  if (error || !todayColumn || !doneColumn) {
+  if (!todayColumn || !doneColumn) {
     return (
       <div className="quiet-current-surface flex h-full items-center justify-center p-6">
         <div className="quiet-error-card max-w-lg">
-          <p className="text-sm font-semibold">Today could not form.</p>
+          <p className="text-sm font-semibold">Forge couldn&apos;t load Today.</p>
           <p className="mt-2 text-sm text-muted-foreground">
-            {error || 'Forge needs its Today and Done columns before Quiet Current can open.'}
+            {error || 'The Today or Done list is missing. Open All Work to restore it, then try again.'}
           </p>
+          <button type="button" className="quiet-error-action" onClick={() => void retry()}>Try again</button>
         </div>
       </div>
     );
@@ -997,6 +1177,12 @@ function TodayExperience({
               </form>
             )}
             {surfaceError && <p role="alert" className="current-surface-error">{surfaceError}</p>}
+            {error && (
+              <div role="alert" className="current-refresh-warning">
+                <span>{error}</span>
+                <button type="button" onClick={() => void retry()}>Try again</button>
+              </div>
+            )}
           </div>
 
           <div className="current-day-arc" aria-hidden="true">
@@ -1058,7 +1244,7 @@ function TodayExperience({
                   onClick={() => setFocusExpanded((current) => !current)}
                 >
                   <span className="current-now-kicker">
-                    {focusedIsWithJarvis ? 'With Jarvis' : focusedIsBrief ? 'Brief' : 'Now'}
+                    {focusedIsWithJarvis ? 'Held for Jarvis' : focusedIsBrief ? 'Email brief' : 'Now'}
                     {focusedTask.blocked ? ' · Waiting' : ''}
                     {focusedIsOutsideToday && !focusedIsWithJarvis && !focusedIsBrief ? ' · Outside today' : ''}
                   </span>
@@ -1099,12 +1285,12 @@ function TodayExperience({
                     <dl>
                       <div><dt>Priority</dt><dd className="capitalize">{focusedTask.priority}</dd></div>
                       <div><dt>Due</dt><dd>{focusedTask.dueDate ? new Date(`${focusedTask.dueDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Open'}</dd></div>
-                      <div><dt>State</dt><dd>{focusedIsWithJarvis ? 'With Jarvis' : 'Ink'}</dd></div>
+                      <div><dt>State</dt><dd>{focusedIsWithJarvis ? 'Held for Jarvis' : 'Committed'}</dd></div>
                     </dl>
                   </div>
                   <div className="current-focus-actions">
                     <button type="button" onClick={() => setDetailTaskId(focusedTask._id)}>Edit details</button>
-                    {!focusedIsWithJarvis && <button type="button" onClick={() => void handToJarvis(focusedTask)}>Hand to Jarvis</button>}
+                    {!focusedIsWithJarvis && <button type="button" onClick={() => void handToJarvis(focusedTask)}>Hold for Jarvis</button>}
                     <button type="button" onClick={openSearch}>Find other work <kbd>⌘K</kbd></button>
                   </div>
                 </div>
@@ -1157,21 +1343,21 @@ function TodayExperience({
           <aside className="current-jarvis-current" aria-labelledby="jarvis-lane-title">
             <div className="current-jarvis-heading">
               <span>Second current</span>
-              <h2 id="jarvis-lane-title">With Jarvis</h2>
+              <h2 id="jarvis-lane-title">Jarvis shelf</h2>
               <i aria-hidden="true" />
             </div>
             <div className="current-jarvis-nodes">
               {jarvisTasks.length > 0 ? jarvisTasks.slice(0, 3).map((task) => (
                 <article key={task._id} className={focusedTaskId === task._id ? 'is-focused' : ''}>
                   <button type="button" onClick={() => isEmailDigest(task) ? setDetailTaskId(task._id) : focusTask(task._id, 'jarvis_current')}>
-                    <span>{isEmailDigest(task) ? 'Brief ready' : 'Jarvis is carrying this'}</span>
+                    <span>{isEmailDigest(task) ? 'Email brief ready' : 'Held for Jarvis'}</span>
                     <strong>{task.title}</strong>
                   </button>
                 </article>
               )) : <p className="current-jarvis-empty">The second current is quiet.</p>}
               {jarvisTasks.length > 3 && (
                 <button type="button" className="current-jarvis-more" onClick={openSearch}>
-                  +{jarvisTasks.length - 3} more with Jarvis
+                  +{jarvisTasks.length - 3} more on the shelf
                 </button>
               )}
             </div>
@@ -1191,7 +1377,10 @@ function TodayExperience({
               >
                 <span className="current-pencil-mark">Pencil</span>
                 <strong>{suggestion.title}</strong>
-                <span>{suggestion.reason}</span>
+                <span>
+                  {suggestion.resurfacedFromDeferredAt ? 'You set this aside. ' : ''}
+                  {suggestion.reason}
+                </span>
               </button>
 
               {expanded && (
@@ -1215,7 +1404,9 @@ function TodayExperience({
                         <button type="button" onClick={() => void commitSuggestion(suggestion, 'explicit_accept')} className="quiet-pencil-action is-primary">Accept</button>
                         <button type="button" onClick={() => void commitSuggestion(suggestion, 'began_work')} className="quiet-pencil-action">Begin</button>
                         <button type="button" onClick={() => { setEditingSuggestionId(suggestion.id); setSuggestionDraft({ title: suggestion.title, description: suggestion.description }); }} className="quiet-pencil-action">Edit</button>
-                        <button type="button" onClick={() => void deferSuggestion(suggestion)} className="quiet-pencil-action">Later</button>
+                        {!suggestion.resurfacedFromDeferredAt && (
+                          <button type="button" onClick={() => void deferSuggestion(suggestion)} className="quiet-pencil-action">Later</button>
+                        )}
                         <div className="quiet-dismiss-menu relative" data-dismiss-menu={suggestion.id}>
                           <button type="button" aria-haspopup="menu" aria-expanded={dismissMenuId === suggestion.id} onClick={() => setDismissMenuId((current) => current === suggestion.id ? null : suggestion.id)} className="quiet-pencil-action">Dismiss</button>
                           {dismissMenuId === suggestion.id && <div className="quiet-dismiss-popover" role="menu">
@@ -1291,7 +1482,7 @@ function TodayExperience({
                   >
                     <span className="min-w-0 flex-1 truncate text-left">{task.title}</span>
                     <span className="text-[10px] text-muted-foreground">
-                      {withJarvis ? 'With Jarvis' : brief ? 'Brief' : inCurrent ? 'In current' : 'Outside today'}
+                      {withJarvis ? 'Held for Jarvis' : brief ? 'Email brief' : inCurrent ? 'In current' : 'Outside today'}
                     </span>
                   </button>
                 );
