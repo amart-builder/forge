@@ -164,30 +164,11 @@ test('brief edits invalidate execution configuration and prevent kickoff', (t) =
   assert.equal(runs[0].errorCode, 'brief_changed');
 });
 
-test('Start My Day atomically queues ready configured cards and reports unready cards', (t) => {
+test('Start My Day routes the latest agent cards and reports autonomous setup gaps', (t) => {
   const { store, plan: original } = setup(t);
   let plan = original;
-  for (const item of plan.items) {
-    plan = mutate(store, plan, 'item_owner', { itemId: item.id, owner: 'claude' });
-  }
-  store.configureExecution({
-    planId: plan.id,
-    itemId: plan.items[0].id,
-    expectedVersion: plan.version,
-    mutationId: 'configure:start:ready',
-    mode: 'plan_review',
-    modelAlias: 'sonnet',
-  });
-  store.configureExecution({
-    planId: plan.id,
-    itemId: plan.items[1].id,
-    expectedVersion: plan.version,
-    mutationId: 'configure:start:blocked',
-    mode: 'autonomous',
-    modelAlias: 'sonnet',
-    workspaceId: 'missing',
-    budgetUsd: 1,
-  });
+  plan = mutate(store, plan, 'item_owner', { itemId: plan.items[0].id, owner: 'together' });
+  plan = mutate(store, plan, 'item_owner', { itemId: plan.items[1].id, owner: 'claude' });
   const started = store.mutateDayPlan({
     planId: plan.id,
     expectedVersion: plan.version,
@@ -197,6 +178,8 @@ test('Start My Day atomically queues ready configured cards and reports unready 
   assert.equal(started.plan.state, 'active');
   assert.equal(started.executionRuns.length, 1);
   assert.equal(started.executionRuns[0].itemId, plan.items[0].id);
+  assert.equal(started.executionRuns[0].mode, 'plan_review');
+  assert.equal(started.executionRuns[0].modelAlias, 'opus');
   assert.equal(started.unreadyItems.length, 1);
   assert.equal(started.unreadyItems[0].itemId, plan.items[1].id);
   assert.equal(store.listExecutionRuns(plan.id).length, 1);

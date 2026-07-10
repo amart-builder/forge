@@ -9,6 +9,11 @@ import type {
   DayPlanReadinessCode,
 } from "./types";
 
+export function selectExecutionModel(item: DayPlanItem): DayPlanExecutionConfig["modelAlias"] {
+  const contextSize = JSON.stringify(normalizedBrief(item)).length;
+  return item.owner === "together" || contextSize >= 900 ? "opus" : "sonnet";
+}
+
 export type ForgeExecutionWorkspace = {
   id: string;
   path: string;

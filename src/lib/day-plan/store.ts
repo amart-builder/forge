@@ -36,6 +36,7 @@ import {
   dayPlanExecutionAuthorizationHash,
   dayPlanItemBriefHash,
   loadForgeExecutionEnvironment,
+  selectExecutionModel,
   type ForgeExecutionEnvironment,
 } from "./execution-readiness";
 import { applyAssistantProposal, validateAssistantProposal } from "./assistant-patch";
@@ -1822,9 +1823,53 @@ export function createDayPlanStore(options: {
           plan.confirmedAt = changedAt;
           for (const item of accepted) {
             if (item.owner !== "claude" && item.owner !== "together") continue;
-            const config = getExecutionConfig(plan.id, item.id);
+            const existingConfig = getExecutionConfig(plan.id, item.id);
+            const mode: DayPlanExecutionMode = item.owner === "together"
+              ? "plan_review"
+              : "autonomous";
+            const modelAlias = selectExecutionModel(item);
+            const provisional: DayPlanExecutionConfig = {
+              dayPlanId: plan.id,
+              itemId: item.id,
+              mode,
+              modelAlias,
+              workspaceId: mode === "autonomous" ? existingConfig?.workspaceId : undefined,
+              budgetUsd: mode === "autonomous" ? existingConfig?.budgetUsd : undefined,
+              briefHash: dayPlanItemBriefHash(item),
+              authorizationHash: "",
+              lastMutationId: `${input.mutationId}:route:${item.id}`,
+              configuredAt: existingConfig?.configuredAt ?? changedAt,
+              updatedAt: changedAt,
+            };
+            const provisionalReadiness = itemReadiness(plan, item, provisional);
+            const config: DayPlanExecutionConfig = {
+              ...provisional,
+              authorizationHash: dayPlanExecutionAuthorizationHash({
+                briefHash: provisional.briefHash,
+                mode: provisional.mode,
+                modelAlias: provisional.modelAlias,
+                workspaceId: provisional.workspaceId,
+                workspacePath: provisionalReadiness.workspacePath,
+                budgetUsd: provisional.budgetUsd,
+              }),
+            };
+            db.prepare(
+              `INSERT INTO day_plan_execution_configs
+                (day_plan_id, item_id, mode, model_alias, workspace_id, budget_usd,
+                 brief_hash, authorization_hash, last_mutation_id, configured_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(day_plan_id, item_id) DO UPDATE SET
+                 mode = excluded.mode, model_alias = excluded.model_alias,
+                 workspace_id = excluded.workspace_id, budget_usd = excluded.budget_usd,
+                 brief_hash = excluded.brief_hash, authorization_hash = excluded.authorization_hash,
+                 last_mutation_id = excluded.last_mutation_id, updated_at = excluded.updated_at`,
+            ).run(
+              config.dayPlanId, config.itemId, config.mode, config.modelAlias,
+              config.workspaceId ?? null, config.budgetUsd ?? null, config.briefHash,
+              config.authorizationHash, config.lastMutationId, config.configuredAt, config.updatedAt,
+            );
             const readiness = itemReadiness(plan, item, config);
-            if (!readiness.ready || !config) {
+            if (!readiness.ready) {
               unreadyItems.push({
                 itemId: item.id,
                 taskId: item.taskId,
