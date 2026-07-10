@@ -4,12 +4,12 @@ import {
   allSettlementDecisionsMade,
   combineSurfaceErrors,
   firstCarriedItem,
-  moveAnnouncement,
-  moveDayPlanItem,
+  helpfulProjectLabel,
   ownerDescription,
   reorderDayPlanItems,
   selectEssentialItems,
   selectRecommendedHumanFocus,
+  shortArrivalSummary,
 } from '../src/lib/day-plan/presentation.ts';
 import {
   planTaskReconciliation,
@@ -27,18 +27,6 @@ test('arrival shows no more than three real plan items without padding', () => {
     selectEssentialItems([...two, item('c'), item('d')]).map((entry) => entry.id),
     ['a', 'b', 'c'],
   );
-});
-
-test('Move Up and Move Down reorder only the day plan sequence', () => {
-  const original = [item('a', 'me', 0), item('b', 'me', 1), item('c', 'me', 2)];
-  const movedUp = moveDayPlanItem(original, 'b', -1);
-  const movedDown = moveDayPlanItem(original, 'b', 1);
-  assert.deepEqual(movedUp.map((entry) => entry.id), ['b', 'a', 'c']);
-  assert.deepEqual(movedUp.map((entry) => entry.position), [0, 1, 2]);
-  assert.deepEqual(movedDown.map((entry) => entry.id), ['a', 'c', 'b']);
-  assert.deepEqual(movedDown.map((entry) => entry.position), [0, 1, 2]);
-  assert.deepEqual(moveDayPlanItem(original, 'a', -1).map((entry) => entry.id), ['a', 'b', 'c']);
-  assert.deepEqual(original.map((entry) => entry.id), ['a', 'b', 'c']);
 });
 
 test('drag reorder produces the same ordered plan without mutating input', () => {
@@ -70,11 +58,19 @@ test('settlement derives tomorrow from the first carried item', () => {
   assert.equal(allSettlementDecisionsMade(items, { a: 'carry' }), false);
 });
 
-test('move announcements include title and the new one-based position', () => {
-  assert.equal(
-    moveAnnouncement('Prepare the proposal', 1, 3),
-    'Prepare the proposal moved to priority 2 of 3.',
-  );
+test('arrival summaries stay genuinely short while preserving the stored description elsewhere', () => {
+  const description = 'Review the complete client proposal, resolve the open pricing question, and prepare the final version for the decision meeting tomorrow morning.';
+  const summary = shortArrivalSummary(description, 'Finalize the proposal');
+  assert.ok(summary);
+  assert.ok(summary.length <= 96);
+  assert.match(summary, /…$/);
+  assert.equal(shortArrivalSummary('Finalize the proposal', 'Finalize the proposal'), undefined);
+});
+
+test('project pills suppress operational tags and overlong labels', () => {
+  assert.equal(helpfulProjectLabel('Catalyst'), 'Catalyst');
+  assert.equal(helpfulProjectLabel('captured-today'), undefined);
+  assert.equal(helpfulProjectLabel('x'.repeat(33)), undefined);
 });
 
 test('an overdue defer is applied before its resurface against updated task state', () => {

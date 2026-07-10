@@ -24,8 +24,8 @@
 
 ---
 
-**Last updated:** 2026-07-10 (local Morning Command Center dogfood gate prepared)
-**State:** The MacBook's `com.forge.web` now serves the Morning Arrival and Day Settlement branch on loopback only for guarded local dogfood. The 8 a.m. trigger is still not installed. Email triage remains a separate Mini service and was not changed.
+**Last updated:** 2026-07-10 (Morning Arrival priority comparison refined from live dogfood)
+**State:** The MacBook's `com.forge.web` now serves a simplified wide Morning Arrival and Day Settlement branch on loopback only for guarded local dogfood. The 8 a.m. trigger is still not installed. Email triage remains a separate Mini service and was not changed.
 
 ## North Star Goal
 Make Forge the source of truth for Alex's day-to-day execution: tasks, email action items, CRM context, and daily priorities in one operating surface.
@@ -47,9 +47,11 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - Supervised dry-run pulses passed for valid config, before-time suppression, a due morning, quiet-date suppression, overlapping-run locking, and unavailable-server fail-closed behavior. No receipt, persistent config, browser open, or arrival LaunchAgent was created.
 - The first live dogfood load exposed one real boundary mismatch: a 2,685-character task description exceeded the Day Plan API's 1,200-character outcome limit, so Arrival failed before opening. Candidate display prose now shortens to the API contract with an ellipsis while preserving the underlying task; oversized identity metadata falls back safely instead of collapsing tasks, and ritual initialization errors remain visible alongside other warnings.
 - Fresh verification passed with 69 tests, TypeScript, scoped ESLint, production build, live candidate parsing, and an independent delta review. The first real Morning Arrival is now open locally with three task-backed recommendations.
+- Second dogfood refinement: desktop Morning Arrival now shows all three priorities left-to-right in one wide pane. Collapsed cards contain the title, a bounded short summary, optional useful project pill, a drag handle, and Details. Full source task descriptions, owner controls, rationale, deadline, and Not today live behind Details. Suggested labels and Move up/down controls are gone.
+- Browser acceptance passed at a 1440 by 900 desktop viewport and the narrower fallback: all three cards are simultaneously visible on desktop, the live 2,685-character description remains readable in Details, Escape closes Details and returns focus without bypassing the ritual, and keyboard drag persistence was verified before restoring the original priority order.
 - Recovery copies are retained at `~/Library/LaunchAgents/com.forge.web.plist.before-morning-command-center.20260710-135843` and `~/Library/Application Support/Forge/backups/.next.before-morning-command-center.20260710-135843` until dogfood is stable.
 
-Next gate: begin the first real Morning Arrival locally, then dogfood Morning Arrival and Day Settlement on four of five workdays. Measure time from laptop open to intentional first work and record any moment where Forge feels interruptive, unclear, or untrustworthy. Do not install the 8 a.m. trigger yet.
+Next gate: use the refined Morning Arrival to start the first real planned day, then dogfood Morning Arrival and Day Settlement on four of five workdays. Measure time from laptop open to intentional first work and record any moment where Forge feels interruptive, unclear, or untrustworthy. Do not install the 8 a.m. trigger yet.
 
 ### 2026-07-10 Morning Command Center Phase 0 / 1A dogfood slice implemented
 

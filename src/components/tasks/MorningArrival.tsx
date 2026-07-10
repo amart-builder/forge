@@ -11,12 +11,12 @@ import {
 } from '@dnd-kit/core';
 import {
   SortableContext,
+  rectSortingStrategy,
   sortableKeyboardCoordinates,
   useSortable,
-  verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useId, type RefObject } from 'react';
+import { useId, useRef, type RefObject } from 'react';
 import type {
   DayPlan,
   DayPlanItem,
@@ -26,7 +26,6 @@ import {
   ownerDescription,
   ownerLabel,
   selectEssentialItems,
-  type MoveDirection,
 } from '@/lib/day-plan/presentation';
 import DayRitualLayer from './DayRitualLayer';
 
@@ -35,12 +34,12 @@ const OWNERS: DayOwner[] = ['me', 'claude', 'together'];
 export type MorningArrivalItem = {
   item: DayPlanItem;
   title: string;
-  outcome?: string;
+  summary?: string;
+  description?: string;
   whyToday: string;
   definitionOfDone?: string;
   project?: string;
   deadline?: string;
-  stateLabel?: string;
 };
 
 interface MorningArrivalProps {
@@ -56,7 +55,6 @@ interface MorningArrivalProps {
   inertTargetRef?: RefObject<HTMLElement | null>;
   onExpand: (itemId: string) => void;
   onOwnerChange: (itemId: string, owner: DayOwner) => void | Promise<void>;
-  onMove: (itemId: string, direction: MoveDirection) => void | Promise<void>;
   onDragReorder: (activeId: string, overId: string) => void | Promise<void>;
   onDismiss: (itemId: string, title: string) => void | Promise<void>;
   onSnooze: () => void | Promise<void>;
@@ -75,8 +73,8 @@ type SortableArrivalCardProps = {
   busy: boolean;
   onExpand: MorningArrivalProps['onExpand'];
   onOwnerChange: MorningArrivalProps['onOwnerChange'];
-  onMove: MorningArrivalProps['onMove'];
   onDismiss: MorningArrivalProps['onDismiss'];
+  setDisclosureRef: (itemId: string, node: HTMLButtonElement | null) => void;
 };
 
 function SortableArrivalCard({
@@ -87,8 +85,8 @@ function SortableArrivalCard({
   busy,
   onExpand,
   onOwnerChange,
-  onMove,
   onDismiss,
+  setDisclosureRef,
 }: SortableArrivalCardProps) {
   const titleId = useId();
   const contextId = useId();
@@ -102,11 +100,15 @@ function SortableArrivalCard({
   };
 
   return (
-    <li ref={setNodeRef} style={style} className={isDragging ? 'relative z-10 opacity-80' : ''}>
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={`min-w-0 ${isDragging ? 'relative z-10 opacity-80' : ''}`}
+    >
       <article
         aria-labelledby={titleId}
         aria-describedby={`${contextId} ${metadataId}`}
-        className="rounded-2xl border bg-card p-4 shadow-sm sm:p-5"
+        className="flex h-full flex-col rounded-2xl border bg-card p-4 shadow-sm sm:p-5"
       >
         <span id={contextId} className="sr-only">
           Priority {index + 1} of {total}. Owner {ownerLabel(view.item.owner)}.
@@ -121,84 +123,33 @@ function SortableArrivalCard({
             {...attributes}
             {...listeners}
           >
-            <span aria-hidden="true">↕</span>
+            <span aria-hidden="true">↔</span>
           </button>
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>Priority {index + 1} of {total}</span>
               {view.project && <span className="rounded-full bg-muted px-2 py-1">{view.project}</span>}
-              {view.stateLabel && <span>{view.stateLabel}</span>}
             </div>
-            <h2 id={titleId} className="mt-2 text-base font-semibold leading-snug text-foreground sm:text-lg">
+            <h2
+              id={titleId}
+              className={`${view.project ? 'mt-2' : ''} text-base font-semibold leading-snug text-foreground sm:text-lg`}
+            >
               {view.title}
             </h2>
-            {view.outcome && <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{view.outcome}</p>}
-            <p id={metadataId} className="mt-2 text-sm text-foreground">
-              <span className="font-medium">Why today:</span> {view.whyToday}
-            </p>
+            {view.summary && (
+              <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+                {view.summary}
+              </p>
+            )}
+            <span id={metadataId} className="sr-only">{view.whyToday}</span>
           </div>
         </div>
 
-        <fieldset className="mt-4">
-          <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Owner</legend>
-          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-            {OWNERS.map((owner) => (
-              <label
-                key={owner}
-                className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border px-3 text-sm font-medium focus-within:ring-2 focus-within:ring-accent-blue/40 ${
-                  view.item.owner === owner ? 'border-accent-blue bg-accent-blue/5 text-foreground' : 'text-muted-foreground'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name={`owner-${view.item.id}`}
-                  value={owner}
-                  checked={view.item.owner === owner}
-                  disabled={busy}
-                  onChange={() => void onOwnerChange(view.item.id, owner)}
-                  className="h-4 w-4 accent-[var(--accent-blue)]"
-                />
-                {ownerLabel(owner)}
-              </label>
-            ))}
-          </div>
-          <p className="mt-2 text-xs leading-relaxed text-muted-foreground" role="status">
-            {ownerDescription(view.item.owner)}
-          </p>
-        </fieldset>
-
-        <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-3">
+        <div className="mt-auto flex flex-wrap items-center gap-2 border-t pt-3">
           <button
+            ref={(node) => setDisclosureRef(view.item.id, node)}
             type="button"
-            className="min-h-11 rounded-xl border px-3 text-sm text-foreground hover:bg-muted disabled:opacity-40"
-            aria-label={`Move ${view.title} up`}
-            disabled={busy || index === 0}
-            onClick={() => void onMove(view.item.id, -1)}
-          >
-            Move up
-          </button>
-          <button
-            type="button"
-            className="min-h-11 rounded-xl border px-3 text-sm text-foreground hover:bg-muted disabled:opacity-40"
-            aria-label={`Move ${view.title} down`}
-            disabled={busy || index === total - 1}
-            onClick={() => void onMove(view.item.id, 1)}
-          >
-            Move down
-          </button>
-          <button
-            type="button"
-            className="min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
-            aria-label={`Remove ${view.title} from today’s essentials`}
-            disabled={busy}
-            onClick={() => void onDismiss(view.item.id, view.title)}
-          >
-            Not today
-          </button>
-          <button
-            type="button"
-            className="ml-auto min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="ml-auto min-h-11 rounded-xl px-3 text-sm font-medium text-foreground hover:bg-muted"
             aria-label={`${expanded ? 'Hide' : 'Show'} details for ${view.title}`}
             aria-expanded={expanded}
             aria-controls={`arrival-details-${view.item.id}`}
@@ -209,13 +160,61 @@ function SortableArrivalCard({
         </div>
 
         {expanded && (
-          <div id={`arrival-details-${view.item.id}`} className="mt-3 rounded-xl bg-muted/60 p-4 text-sm">
+          <div
+            id={`arrival-details-${view.item.id}`}
+            className="mt-3 max-h-64 space-y-3 overflow-y-auto rounded-xl bg-muted/60 p-4 text-sm"
+          >
+            {view.description && view.description.trim() !== view.title.trim() && (
+              <div>
+                <h3 className="font-semibold">Description</h3>
+                <p className="mt-1 whitespace-pre-wrap leading-relaxed text-muted-foreground">
+                  {view.description}
+                </p>
+              </div>
+            )}
+            <p><span className="font-semibold">Why today:</span> {view.whyToday}</p>
             {view.definitionOfDone ? (
               <p><span className="font-semibold">Done means:</span> {view.definitionOfDone}</p>
             ) : (
               <p className="text-muted-foreground">No definition of done has been added yet.</p>
             )}
             {view.deadline && <p className="mt-2"><span className="font-semibold">Deadline:</span> {view.deadline}</p>}
+            <fieldset className="border-t pt-3">
+              <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Owner</legend>
+              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {OWNERS.map((owner) => (
+                  <label
+                    key={owner}
+                    className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-xl border px-3 text-sm font-medium focus-within:ring-2 focus-within:ring-accent-blue/40 ${
+                      view.item.owner === owner ? 'border-accent-blue bg-accent-blue/5 text-foreground' : 'text-muted-foreground'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name={`owner-${view.item.id}`}
+                      value={owner}
+                      checked={view.item.owner === owner}
+                      disabled={busy}
+                      onChange={() => void onOwnerChange(view.item.id, owner)}
+                      className="h-4 w-4 accent-[var(--accent-blue)]"
+                    />
+                    {ownerLabel(owner)}
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground" role="status">
+                {ownerDescription(view.item.owner)}
+              </p>
+            </fieldset>
+            <button
+              type="button"
+              className="min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-background hover:text-foreground disabled:opacity-40"
+              aria-label={`Remove ${view.title} from today’s essentials`}
+              disabled={busy}
+              onClick={() => void onDismiss(view.item.id, view.title)}
+            >
+              Not today
+            </button>
           </div>
         )}
       </article>
@@ -236,7 +235,6 @@ export default function MorningArrival({
   inertTargetRef,
   onExpand,
   onOwnerChange,
-  onMove,
   onDragReorder,
   onDismiss,
   onSnooze,
@@ -248,6 +246,8 @@ export default function MorningArrival({
 }: MorningArrivalProps) {
   const titleId = useId();
   const descriptionId = useId();
+  const draggingRef = useRef(false);
+  const disclosureRefs = useRef(new Map<string, HTMLButtonElement>());
   const visibleItems = selectEssentialItems(items.map((view) => view.item), 3)
     .map((item) => items.find((view) => view.item.id === item.id))
     .filter((view): view is MorningArrivalItem => Boolean(view));
@@ -257,8 +257,36 @@ export default function MorningArrival({
   );
 
   function handleDragEnd(event: DragEndEvent) {
+    draggingRef.current = false;
     if (!event.over || event.active.id === event.over.id) return;
     void onDragReorder(String(event.active.id), String(event.over.id));
+  }
+
+  function setDisclosureRef(itemId: string, node: HTMLButtonElement | null) {
+    if (node) disclosureRefs.current.set(itemId, node);
+    else disclosureRefs.current.delete(itemId);
+  }
+
+  function focusDisclosure(itemId: string | undefined) {
+    if (!itemId) return;
+    window.requestAnimationFrame(() => disclosureRefs.current.get(itemId)?.focus());
+  }
+
+  function handleEscape() {
+    if (draggingRef.current) return;
+    if (expandedItemId) {
+      onExpand(expandedItemId);
+      focusDisclosure(expandedItemId);
+      return;
+    }
+    void onBypass();
+  }
+
+  async function handleDismiss(itemId: string, title: string) {
+    const nextItemId = visibleItems.find((view) => view.item.id !== itemId)?.item.id;
+    if (expandedItemId === itemId) onExpand(itemId);
+    await onDismiss(itemId, title);
+    focusDisclosure(nextItemId);
   }
 
   return (
@@ -267,7 +295,8 @@ export default function MorningArrival({
       describedBy={descriptionId}
       announcement={announcement}
       inertTargetRef={inertTargetRef}
-      onEscape={() => void onBypass()}
+      width="wide"
+      onEscape={handleEscape}
     >
       <div
         className="my-auto overflow-hidden rounded-3xl border bg-background shadow-2xl"
@@ -280,31 +309,49 @@ export default function MorningArrival({
               Choose where your attention goes.
             </h1>
             <p id={descriptionId} className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-              Confirm up to three outcomes, assign an owner, and choose one clear place to begin.
+              Compare three outcomes, drag them into priority order, and choose one clear place to begin.
             </p>
             {freshnessLabel && <p className="mt-2 text-xs text-muted-foreground">{freshnessLabel}</p>}
           </header>
 
-          <div className="space-y-5 px-4 py-5 sm:px-7">
-            {recap && (
-              <section aria-labelledby={`${titleId}-recap`} className="rounded-2xl border bg-card p-4">
-                <h2 id={`${titleId}-recap`} className="text-sm font-semibold">Since the last close</h2>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{recap}</p>
-              </section>
-            )}
+          <div className="space-y-4 px-4 py-4 sm:px-7">
+            <div className={`grid gap-3 ${recap ? 'md:grid-cols-2' : ''}`}>
+              {recap && (
+                <section aria-labelledby={`${titleId}-recap`} className="rounded-2xl border bg-card p-4">
+                  <h2 id={`${titleId}-recap`} className="text-sm font-semibold">Since the last close</h2>
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{recap}</p>
+                </section>
+              )}
 
-            <section aria-labelledby={`${titleId}-recommendation`}>
-              <h2 id={`${titleId}-recommendation`} className="text-sm font-semibold">Recommendation</h2>
-              <p className="mt-1 text-base leading-relaxed text-foreground">{recommendation}</p>
-            </section>
+              <section
+                aria-labelledby={`${titleId}-recommendation`}
+                className="rounded-2xl border bg-card p-4"
+              >
+                <h2 id={`${titleId}-recommendation`} className="text-sm font-semibold">Recommendation</h2>
+                <p className="mt-1 text-sm leading-relaxed text-foreground">{recommendation}</p>
+              </section>
+            </div>
 
             {visibleItems.length > 0 ? (
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragStart={() => {
+                  draggingRef.current = true;
+                }}
+                onDragCancel={() => {
+                  draggingRef.current = false;
+                }}
+                onDragEnd={handleDragEnd}
+              >
                 <SortableContext
                   items={visibleItems.map((view) => view.item.id)}
-                  strategy={verticalListSortingStrategy}
+                  strategy={rectSortingStrategy}
                 >
-                  <ol className="space-y-3" aria-label="Essential outcomes in priority order">
+                  <ol
+                    className="grid gap-3 lg:grid-cols-3"
+                    aria-label="Essential outcomes in priority order"
+                  >
                     {visibleItems.map((view, index) => (
                       <SortableArrivalCard
                         key={view.item.id}
@@ -315,8 +362,8 @@ export default function MorningArrival({
                         busy={busy}
                         onExpand={onExpand}
                         onOwnerChange={onOwnerChange}
-                        onMove={onMove}
-                        onDismiss={onDismiss}
+                        onDismiss={handleDismiss}
+                        setDisclosureRef={setDisclosureRef}
                       />
                     ))}
                   </ol>

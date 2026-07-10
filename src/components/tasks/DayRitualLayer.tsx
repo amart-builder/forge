@@ -17,6 +17,7 @@ interface DayRitualLayerProps {
   announcement?: string;
   initialFocusRef?: RefObject<HTMLElement | null>;
   inertTargetRef?: RefObject<HTMLElement | null>;
+  width?: 'default' | 'wide';
   onEscape: () => void;
   children: ReactNode;
 }
@@ -27,6 +28,7 @@ export default function DayRitualLayer({
   announcement,
   initialFocusRef,
   inertTargetRef,
+  width = 'default',
   onEscape,
   children,
 }: DayRitualLayerProps) {
@@ -103,7 +105,9 @@ export default function DayRitualLayer({
         aria-labelledby={labelledBy}
         aria-describedby={describedBy}
         tabIndex={-1}
-        className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center outline-none"
+        className={`mx-auto flex min-h-full w-full flex-col justify-center outline-none ${
+          width === 'wide' ? 'max-w-7xl' : 'max-w-3xl'
+        }`}
       >
         {children}
       </section>

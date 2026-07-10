@@ -30,8 +30,9 @@ import { buildDayPlanCandidates } from '@/lib/day-plan/candidates';
 import {
   combineSurfaceErrors,
   firstCarriedItem,
-  moveDayPlanItem,
+  helpfulProjectLabel,
   reorderDayPlanItems,
+  shortArrivalSummary,
 } from '@/lib/day-plan/presentation';
 import {
   planTaskReconciliation,
@@ -1478,19 +1479,23 @@ function TodayExperience({
     [orderedPlanItems],
   );
   const arrivalItems = useMemo<MorningArrivalItem[]>(
-    () => arrivalPlanItems.map((item) => ({
-      item,
-      title: item.title,
-      outcome: item.outcome,
-      whyToday: item.whyToday,
-      definitionOfDone: item.definitionOfDone,
-      project: item.project,
-      deadline: item.dueAt
-        ? new Date(item.dueAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-        : undefined,
-      stateLabel: item.decision === 'accepted' ? 'Confirmed for today' : 'Suggested for today',
-    })),
-    [arrivalPlanItems],
+    () => arrivalPlanItems.map((item) => {
+      const sourceTask = tasks.find((task) => task._id === item.taskId);
+      const fullDescription = sourceTask?.description || item.outcome;
+      return {
+        item,
+        title: item.title,
+        summary: shortArrivalSummary(fullDescription, item.title),
+        description: fullDescription,
+        whyToday: item.whyToday,
+        definitionOfDone: item.definitionOfDone,
+        project: helpfulProjectLabel(item.project),
+        deadline: item.dueAt
+          ? new Date(item.dueAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          : undefined,
+      };
+    }),
+    [arrivalPlanItems, tasks],
   );
   const recommendation = arrivalPlanItems[0]
     ? `Start with ${arrivalPlanItems[0].title}. ${arrivalPlanItems[0].whyToday}`
@@ -2030,12 +2035,6 @@ function TodayExperience({
           inertTargetRef={livingCurrentRef}
           onExpand={(itemId) => setExpandedArrivalItemId((current) => current === itemId ? null : itemId)}
           onOwnerChange={(itemId, owner) => dayRitual.setOwner(itemId, owner)}
-          onMove={async (itemId, direction) => {
-            const next = moveDayPlanItem(arrivalPlanItems, itemId, direction);
-            const position = next.findIndex((item) => item.id === itemId);
-            const title = next[position]?.title ?? 'Task';
-            if (position >= 0) await dayRitual.reorder(itemId, position, title);
-          }}
           onDragReorder={async (activeId, overId) => {
             const next = reorderDayPlanItems(arrivalPlanItems, activeId, overId);
             const position = next.findIndex((item) => item.id === activeId);

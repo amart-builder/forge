@@ -5,7 +5,6 @@ import type {
 } from './types';
 
 export type SettlementDecision = SettlementDisposition;
-export type MoveDirection = -1 | 1;
 
 function withNormalizedPositions<T extends DayPlanItem>(items: readonly T[]): T[] {
   return items.map((item, position) => ({ ...item, position }));
@@ -23,6 +22,41 @@ const OWNER_DESCRIPTIONS: Record<DayOwner, string> = {
   together: 'You and Claude will work through this together. Execution has not started.',
 };
 
+const NON_PROJECT_TAGS = new Set([
+  'blocked',
+  'captured-today',
+  'email',
+  'high',
+  'jarvis-held',
+  'low',
+  'medium',
+  'today',
+  'urgent',
+]);
+
+export function shortArrivalSummary(value: string | undefined, title?: string): string | undefined {
+  const cleaned = value?.replace(/\s+/g, ' ').trim();
+  if (!cleaned || cleaned.toLocaleLowerCase() === title?.trim().toLocaleLowerCase()) {
+    return undefined;
+  }
+
+  const maximum = 96;
+  const firstSentence = cleaned.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim() ?? cleaned;
+  if (firstSentence.length <= maximum) return firstSentence;
+
+  const bounded = firstSentence.slice(0, maximum - 1);
+  const lastSpace = bounded.lastIndexOf(' ');
+  return `${bounded.slice(0, lastSpace > maximum * 0.6 ? lastSpace : bounded.length).trimEnd()}…`;
+}
+
+export function helpfulProjectLabel(value: string | undefined): string | undefined {
+  const cleaned = value?.replace(/\s+/g, ' ').trim();
+  if (!cleaned || cleaned.length > 32 || NON_PROJECT_TAGS.has(cleaned.toLocaleLowerCase())) {
+    return undefined;
+  }
+  return cleaned;
+}
+
 export function ownerLabel(owner: DayOwner): string {
   return OWNER_LABELS[owner];
 }
@@ -36,22 +70,6 @@ export function selectEssentialItems<T extends DayPlanItem>(
   maximum = 3,
 ): T[] {
   return items.slice(0, Math.max(0, maximum));
-}
-
-export function moveDayPlanItem<T extends DayPlanItem>(
-  items: readonly T[],
-  itemId: string,
-  direction: MoveDirection,
-): T[] {
-  const currentIndex = items.findIndex((item) => item.id === itemId);
-  if (currentIndex < 0) return [...items];
-
-  const nextIndex = currentIndex + direction;
-  if (nextIndex < 0 || nextIndex >= items.length) return [...items];
-
-  const next = [...items];
-  [next[currentIndex], next[nextIndex]] = [next[nextIndex], next[currentIndex]];
-  return withNormalizedPositions(next);
 }
 
 export function reorderDayPlanItems<T extends DayPlanItem>(
@@ -93,14 +111,6 @@ export function allSettlementDecisionsMade<T extends DayPlanItem>(
   decisions: Readonly<Record<string, SettlementDecision | undefined>>,
 ): boolean {
   return items.every((item) => Boolean(decisions[item.id]));
-}
-
-export function moveAnnouncement(
-  title: string,
-  nextIndex: number,
-  total: number,
-): string {
-  return `${title} moved to priority ${nextIndex + 1} of ${total}.`;
 }
 
 export function combineSurfaceErrors(...errors: Array<string | undefined>): string | undefined {
