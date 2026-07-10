@@ -6,7 +6,7 @@
 - **canonical_repo:** projects/astack/forge
 - **macbook_path:** /Users/alexanderjmartin/Atlas/projects/astack/forge
 - **mac_mini_path:** /Users/alexandermartin/Desktop/Atlas/projects/astack/forge
-- **github:** nested app repo, clean on `main` as of 2026-05-27 commit `a05395f`
+- **github:** public `amart-builder/forge`, clean on `main` as of 2026-07-10 commit `63ac66d`
 - **default_branch:** main
 - **owned_by:** shared
 - **deploy:** http://localhost:3200 on the Mac Mini; Alex's MacBook URL is http://alexander-mac-mini.taildd6a98.ts.net:3200/tasks
@@ -24,8 +24,8 @@
 
 ---
 
-**Last updated:** 2026-07-03 (card browser-verified; swap-spiral root-caused + fixed)
-**State:** Two tracks now. (1) Alex's live Forge still runs on the Mac Mini in Supabase mode over Tailscale, unchanged. (2) Jarvis Pro track: Forge is being productized to run fully local on a client's own MacBook (local SQLite, no login, bookmarked localhost:3200, auto-start LaunchAgent). 2026-06-30: the local-first foundation landed and was verified; the Tasks step (natural-language capture skill + native/text reminders) is built, verified, and committed. Voice-note capture is done (opt-in, on-device), and email voice honing (learned `~/.claude/voice.md` + humanizer) is built and validated live. The Composio email step (triage + reply + send) was built and committed, but on 2026-06-30 Alex PIVOTED email away from a Forge surface: drafts should land natively in his Gmail inbox instead of a Forge Email tab (see the PIVOT entry at the top of Current State). Next session executes that pivot; CRM and the public flip follow.
+**Last updated:** 2026-07-10 (Living Current T1-T3 deployed and canary-verified)
+**State:** Alex's live Supabase-backed Forge and the Jarvis Pro local-first client track now share the Living Current as the primary Today experience. The Mac Mini serves the merged build over Tailscale; email triage remains a separate Mini service and was not changed by this release.
 
 ## North Star Goal
 Make Forge the source of truth for Alex's day-to-day execution: tasks, email action items, CRM context, and daily priorities in one operating surface.
@@ -38,6 +38,17 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - Closed tasks require direct evidence before marking done.
 
 ## Current State
+
+### 2026-07-10 Living Current T1-T3 deployed and canary-verified
+
+- Merged PR #2 to `main` at `63ac66d` and deployed it to `com.atlas.forge-web` on the Mac Mini. Canonical live surface: http://alexander-mac-mini.taildd6a98.ts.net:3200/tasks.
+- T1 makes state honest: the surface distinguishes committed work, Jarvis-held work, email briefs, loading, stale saved data, and retryable failures without implying work happened when it did not.
+- T2 gives Later one deliberate return at the next local 5:00 AM seam, preserves refined wording, respects real expiry, handles legacy deferred records, and keeps undo idempotent.
+- T3 hydrates a validated three-day arrival snapshot before paint, keeps optimistic work out of persistent storage, tracks server-confirmed mutation baselines, and refreshes without overwriting in-flight work.
+- Request hardening now restricts Forge REST and Quiet Current to configured hosts, origins, and protocols. Live canary confirmed trusted requests return 200 and untrusted host requests return 403.
+- Verification is green on both machines: 27 of 27 tests, lint with zero errors and two unrelated existing warnings, production build, desktop and mobile browser canary, no console errors, no horizontal overflow, and a 201 focus-change event.
+- Fable 5's full review and a final fresh-context delta review found no P0 to P2 release blockers.
+- Product gate: observe at least one real Jarvis Pro client using Forge without hands-on help before expanding into T4 delegation autonomy. Use that session to learn the actual morning ritual, switching behavior, and points of confusion.
 
 ### 2026-07-08 Mini is BACK and now owns email triage (Codex engine, VERIFIED LIVE)
 
