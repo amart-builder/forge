@@ -668,14 +668,18 @@ input, textarea, select {
   box-shadow: var(--quiet-shadow);
 }
 
-.quiet-loading-orb {
-  width: 38px;
-  height: 38px;
-  border: 1px solid color-mix(in srgb, var(--quiet-water) 18%, transparent);
-  border-top-color: var(--quiet-water);
+.quiet-error-action {
+  margin-top: 16px;
+  border: 1px solid color-mix(in srgb, var(--quiet-water) 28%, var(--border));
   border-radius: 999px;
-  animation: quiet-spin 900ms linear infinite;
+  background: color-mix(in srgb, white 48%, transparent);
+  padding: 8px 13px;
+  color: var(--foreground);
+  font-size: 11px;
+  font-weight: 620;
 }
+
+.quiet-error-action:hover { background: color-mix(in srgb, white 76%, transparent); }
 
 /* Quiet Current river experience */
 .current-river-surface {
@@ -867,6 +871,22 @@ input, textarea, select {
 
 .current-capture-form button:disabled { opacity: .32; }
 .current-surface-error { margin-top: 9px; color: var(--accent-red); font-size: 11px; }
+.current-refresh-warning {
+  display: flex;
+  width: min(390px, calc(100vw - 36px));
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, var(--current-sun) 18%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, white 45%, transparent);
+  padding: 8px 10px;
+  color: color-mix(in srgb, var(--foreground) 66%, transparent);
+  font-size: 10px;
+  backdrop-filter: blur(12px);
+}
+.current-refresh-warning button { flex: none; text-decoration: underline; text-underline-offset: 3px; }
 
 .current-day-arc {
   justify-self: end;
@@ -1382,7 +1402,6 @@ input, textarea, select {
   .quiet-arrival,
   .quiet-now-card,
   .quiet-now-card.is-completing,
-  .quiet-loading-orb,
   .quiet-undo,
   .quiet-undo-timer {
     animation: none !important;

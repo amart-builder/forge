@@ -20,7 +20,7 @@ curl -s 'http://localhost:3200/api/quiet-current'
 
 ## Propose work in pencil
 
-Every proposal requires a human-readable reason and source. It expires after three days by default.
+Every proposal requires a human-readable reason and source. It expires after three days by default. If the person chooses Later, Forge hides it until the next morning seam, shows it one final time with that context, and then lets the normal three-day expiry finish the decision. Choosing Later again does not schedule another return.
 
 ```bash
 curl -s -X POST 'http://localhost:3200/api/quiet-current' \

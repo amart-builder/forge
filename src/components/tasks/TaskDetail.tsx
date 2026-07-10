@@ -85,6 +85,7 @@ export default function TaskDetail({
   const [columnId, setColumnId] = useState(task.columnId);
   const [blocked, setBlocked] = useState(task.blocked);
   const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState<string>();
 
   const backdropRef = useRef<HTMLDivElement>(null);
   const mouseDownTargetRef = useRef<EventTarget | null>(null);
@@ -117,6 +118,7 @@ export default function TaskDetail({
 
   async function handleSave() {
     setSaving(true);
+    setActionError(undefined);
     try {
       const tags = tagsStr
         .split(',')
@@ -133,8 +135,8 @@ export default function TaskDetail({
       });
 
       onClose();
-    } catch (err) {
-      console.error('Failed to save task:', err);
+    } catch {
+      setActionError("Forge couldn't save those task details. Try again.");
     } finally {
       setSaving(false);
     }
@@ -143,11 +145,12 @@ export default function TaskDetail({
   async function handleDelete() {
     if (!confirm('Delete this task? This cannot be undone.')) return;
 
+    setActionError(undefined);
     try {
       await onDeleteTask();
       onDeleted(taskId);
-    } catch (err) {
-      console.error('Failed to delete task:', err);
+    } catch {
+      setActionError("Forge couldn't confirm that deletion. Refresh All Work to check the task, then try again.");
     }
   }
 
@@ -288,6 +291,12 @@ export default function TaskDetail({
             <span>Updated: {formatTimestamp(task.updatedAt)}</span>
           </div>
         </div>
+
+        {actionError && (
+          <p role="alert" className="mt-4 text-xs text-accent-red">
+            {actionError}
+          </p>
+        )}
 
         <div className="flex items-center justify-between mt-5 pt-3 border-t">
           <button

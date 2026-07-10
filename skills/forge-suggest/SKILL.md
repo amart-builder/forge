@@ -40,7 +40,7 @@ curl -s -X POST 'http://localhost:3200/api/quiet-current' \
   }'
 ```
 
-Forge expires untouched proposals after three days. Do not recreate an expired proposal unless new evidence changes the reason.
+Forge expires untouched proposals after three days. Later returns once at the next morning seam, then follows the normal expiry window; do not recreate that loop. Do not recreate an expired proposal unless new evidence changes the reason.
 
 ## 3. Return delegated work in pencil
 

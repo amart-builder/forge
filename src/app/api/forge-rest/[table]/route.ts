@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRuntimeMode } from "@/lib/runtime/mode";
 import { handleLocalRest } from "@/lib/local/db";
+import { isTrustedForgeRequest } from "@/lib/request-security";
 
 type RouteContext = {
   params: Promise<{ table: string }>;
@@ -55,6 +56,9 @@ async function handleRequest(
   request: NextRequest,
   context: RouteContext
 ): Promise<NextResponse> {
+  if (!isTrustedForgeRequest(request)) {
+    return new NextResponse("Untrusted request host.", { status: 403 });
+  }
   const { table } = await context.params;
   const decodedTable = decodeURIComponent(table);
   const unprefixedTable = stripKnownPrefix(decodedTable);

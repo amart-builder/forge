@@ -28,6 +28,9 @@ export type WorkSuggestion = {
   state: SuggestionState;
   dismissReason?: string;
   resolvedTaskId?: string;
+  deferredUntil?: string;
+  deferredReturnState?: "proposed" | "refined";
+  resurfacedFromDeferredAt?: string;
   createdAt: string;
   updatedAt: string;
   expiresAt: string;
@@ -51,10 +54,23 @@ type QuietCurrentStore = {
 };
 
 const ACTIVE_STATES = new Set<SuggestionState>(["proposed", "refined"]);
+const NON_TERMINAL_STATES = new Set<SuggestionState>(["proposed", "refined", "deferred"]);
 const MAX_SUGGESTIONS = 500;
 const MAX_EVENTS = 2000;
 let testStorePath: string | undefined;
+let testNow: Date | undefined;
 let tokenCache: string | undefined;
+
+function nowDate(): Date {
+  return testNow ? new Date(testNow) : new Date();
+}
+
+function nextMorning(now: Date): Date {
+  const morning = new Date(now);
+  morning.setHours(5, 0, 0, 0);
+  if (morning <= now) morning.setDate(morning.getDate() + 1);
+  return morning;
+}
 
 function storePath(): string {
   if (testStorePath) return testStorePath;
@@ -67,6 +83,11 @@ function storePath(): string {
 export function setQuietCurrentStorePathForTests(file?: string): void {
   testStorePath = file;
   tokenCache = undefined;
+}
+
+/** Test-only clock override for deterministic lifecycle tests. */
+export function setQuietCurrentNowForTests(now?: Date): void {
+  testNow = now ? new Date(now) : undefined;
 }
 
 export function getQuietCurrentCsrfToken(): string {
@@ -137,7 +158,7 @@ function appendEvent(
   const event: DecisionEvent = {
     ...input,
     id: randomUUID(),
-    createdAt: new Date().toISOString(),
+    createdAt: nowDate().toISOString(),
   };
   store.decisionEvents.push(event);
   if (store.decisionEvents.length > MAX_EVENTS) {
@@ -146,18 +167,63 @@ function appendEvent(
   return event;
 }
 
+function resurfaceDeferredSuggestions(store: QuietCurrentStore): boolean {
+  const now = nowDate();
+  let changed = false;
+
+  for (const suggestion of store.suggestions) {
+    const deferredReturnAt = suggestion.deferredUntil
+      ? new Date(suggestion.deferredUntil).getTime()
+      : now.getTime();
+    const expiresBeforeReturn = Boolean(
+      suggestion.deferredUntil &&
+        new Date(suggestion.expiresAt).getTime() <= deferredReturnAt,
+    );
+    const isStillCurrent = new Date(suggestion.expiresAt).getTime() > now.getTime();
+    if (
+      suggestion.state === "deferred" &&
+      !suggestion.resurfacedFromDeferredAt &&
+      deferredReturnAt <= now.getTime() &&
+      !expiresBeforeReturn &&
+      isStillCurrent
+    ) {
+      const before = { ...suggestion };
+      suggestion.state = suggestion.deferredReturnState ?? "proposed";
+      suggestion.deferredUntil = undefined;
+      suggestion.deferredReturnState = undefined;
+      suggestion.resurfacedFromDeferredAt = now.toISOString();
+      suggestion.updatedAt = now.toISOString();
+      suggestion.expiresAt = new Date(
+        now.getTime() + 3 * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      appendEvent(store, {
+        eventType: "suggestion_resurface",
+        entityId: suggestion.id,
+        before,
+        after: suggestion,
+        source: "quiet_current",
+      });
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
 function expireSuggestions(store: QuietCurrentStore): boolean {
-  const now = Date.now();
+  const now = nowDate();
   let changed = false;
 
   for (const suggestion of store.suggestions) {
     if (
-      ACTIVE_STATES.has(suggestion.state) &&
-      new Date(suggestion.expiresAt).getTime() <= now
+      (ACTIVE_STATES.has(suggestion.state) || suggestion.state === "deferred") &&
+      new Date(suggestion.expiresAt).getTime() <= now.getTime()
     ) {
       const previousState = suggestion.state;
       suggestion.state = "expired";
-      suggestion.updatedAt = new Date().toISOString();
+      suggestion.deferredUntil = undefined;
+      suggestion.deferredReturnState = undefined;
+      suggestion.updatedAt = now.toISOString();
       appendEvent(store, {
         eventType: "suggestion_decay",
         entityId: suggestion.id,
@@ -172,12 +238,20 @@ function expireSuggestions(store: QuietCurrentStore): boolean {
   return changed;
 }
 
+function refreshSuggestionLifecycle(store: QuietCurrentStore): boolean {
+  const resurfaced = resurfaceDeferredSuggestions(store);
+  const expired = expireSuggestions(store);
+  return resurfaced || expired;
+}
+
 export function pruneSuggestions(
   suggestions: WorkSuggestion[],
   maximum = MAX_SUGGESTIONS,
 ): WorkSuggestion[] {
   if (suggestions.length <= maximum) return suggestions;
-  const terminal = suggestions.filter((suggestion) => !ACTIVE_STATES.has(suggestion.state));
+  const terminal = suggestions.filter(
+    (suggestion) => !NON_TERMINAL_STATES.has(suggestion.state),
+  );
   const removable = new Set(
     terminal.slice(0, Math.max(0, suggestions.length - maximum)).map((item) => item.id),
   );
@@ -186,7 +260,7 @@ export function pruneSuggestions(
 
 export function getQuietCurrentSnapshot(): QuietCurrentStore {
   const store = readStore();
-  if (expireSuggestions(store)) writeStore(store);
+  if (refreshSuggestionLifecycle(store)) writeStore(store);
   return store;
 }
 
@@ -207,8 +281,8 @@ export function createWorkSuggestion(input: {
     throw new Error("Returned work requires an existing target task.");
   }
   const store = readStore();
-  expireSuggestions(store);
-  const now = new Date();
+  refreshSuggestionLifecycle(store);
+  const now = nowDate();
   const expiresAt = input.expiresAt
     ? new Date(input.expiresAt)
     : new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
@@ -259,14 +333,15 @@ export function resolveWorkSuggestion(
   },
 ): WorkSuggestion {
   const store = readStore();
-  expireSuggestions(store);
+  refreshSuggestionLifecycle(store);
   const suggestion = store.suggestions.find((item) => item.id === id);
   if (!suggestion) throw new Error("Suggestion not found.");
-  if (!ACTIVE_STATES.has(suggestion.state)) {
+  if (suggestion.state !== "proposed" && suggestion.state !== "refined") {
     throw new Error(`Suggestion is already ${suggestion.state}.`);
   }
 
   const before = { ...suggestion };
+  const previousState = suggestion.state;
   if (input.title !== undefined) suggestion.title = input.title.trim();
   if (input.description !== undefined) {
     suggestion.description = input.description.trim();
@@ -276,7 +351,19 @@ export function resolveWorkSuggestion(
   suggestion.dismissReason = input.dismissReason;
   suggestion.resolvedTaskId = input.resolvedTaskId;
   suggestion.state = input.state;
-  suggestion.updatedAt = new Date().toISOString();
+  suggestion.updatedAt = nowDate().toISOString();
+  if (input.state === "deferred") {
+    if (!suggestion.resurfacedFromDeferredAt) {
+      suggestion.deferredUntil = nextMorning(nowDate()).toISOString();
+      suggestion.deferredReturnState = previousState;
+    } else {
+      suggestion.deferredUntil = undefined;
+      suggestion.deferredReturnState = undefined;
+    }
+  } else {
+    suggestion.deferredUntil = undefined;
+    suggestion.deferredReturnState = undefined;
+  }
 
   appendEvent(store, {
     eventType: {
@@ -302,23 +389,30 @@ export function reopenWorkSuggestion(
   const store = readStore();
   const suggestion = store.suggestions.find((item) => item.id === id);
   if (!suggestion) throw new Error("Suggestion not found.");
+  if (suggestion.state === state) return suggestion;
   if (ACTIVE_STATES.has(suggestion.state) || suggestion.state === "expired") {
     throw new Error(`Suggestion cannot be reopened from ${suggestion.state}.`);
   }
 
   const before = { ...suggestion };
+  const previousState = suggestion.state;
   suggestion.state = state;
   suggestion.dismissReason = undefined;
   suggestion.resolvedTaskId = undefined;
-  suggestion.updatedAt = new Date().toISOString();
-  if (new Date(suggestion.expiresAt).getTime() <= Date.now()) {
-    suggestion.expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+  suggestion.deferredUntil = undefined;
+  suggestion.deferredReturnState = undefined;
+  suggestion.updatedAt = nowDate().toISOString();
+  if (new Date(suggestion.expiresAt).getTime() <= nowDate().getTime()) {
+    suggestion.expiresAt = new Date(
+      nowDate().getTime() + 3 * 24 * 60 * 60 * 1000,
+    ).toISOString();
   }
   appendEvent(store, {
     eventType: "suggestion_undo",
     entityId: suggestion.id,
     before,
     after: suggestion,
+    reason: previousState === "deferred" ? "defer_undo" : undefined,
     source: "human",
   });
   writeStore(store);
@@ -329,7 +423,7 @@ export function recordDecisionEvent(
   input: Omit<DecisionEvent, "id" | "createdAt">,
 ): DecisionEvent {
   const store = readStore();
-  expireSuggestions(store);
+  refreshSuggestionLifecycle(store);
   const event = appendEvent(store, input);
   writeStore(store);
   return event;

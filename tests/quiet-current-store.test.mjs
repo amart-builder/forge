@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -10,6 +10,7 @@ import {
   recordDecisionEvent,
   reopenWorkSuggestion,
   resolveWorkSuggestion,
+  setQuietCurrentNowForTests,
   setQuietCurrentStorePathForTests,
 } from '../src/lib/quiet-current/store.ts';
 
@@ -19,7 +20,9 @@ function isolatedStore(t) {
     `forge-quiet-current-${process.pid}-${Date.now()}-${Math.random()}.json`,
   );
   setQuietCurrentStorePathForTests(file);
+  setQuietCurrentNowForTests(undefined);
   t.after(() => {
+    setQuietCurrentNowForTests(undefined);
     setQuietCurrentStorePathForTests(undefined);
     rmSync(file, { force: true });
     rmSync(`${file}.token`, { force: true });
@@ -104,6 +107,220 @@ test('expired pencil retires without changing accepted work', async (t) => {
   assert.throws(() => reopenWorkSuggestion(suggestion.id), /cannot be reopened from expired/);
 });
 
+test('Later resurfaces once at the next morning seam and then expires', (t) => {
+  isolatedStore(t);
+  setQuietCurrentNowForTests(new Date('2026-07-10T12:00:00.000Z'));
+  const suggestion = createWorkSuggestion({
+    title: 'Review the partnership idea',
+    reason: 'A partner asked for a response.',
+    source: 'email',
+  });
+
+  const deferred = resolveWorkSuggestion(suggestion.id, {
+    state: 'deferred',
+    source: 'human',
+  });
+  assert.equal(deferred.state, 'deferred');
+  assert.equal(deferred.deferredReturnState, 'proposed');
+  assert.ok(deferred.deferredUntil);
+
+  setQuietCurrentNowForTests(new Date(deferred.deferredUntil));
+  const resurfaced = getQuietCurrentSnapshot().suggestions.find(
+    (item) => item.id === suggestion.id,
+  );
+  assert.equal(resurfaced?.state, 'proposed');
+  assert.ok(resurfaced?.resurfacedFromDeferredAt);
+  assert.equal(
+    getQuietCurrentSnapshot().decisionEvents.filter(
+      (event) => event.eventType === 'suggestion_resurface',
+    ).length,
+    1,
+  );
+
+  const deferredAgain = resolveWorkSuggestion(suggestion.id, {
+    state: 'deferred',
+    source: 'human',
+  });
+  assert.equal(deferredAgain.deferredUntil, undefined);
+  setQuietCurrentNowForTests(new Date(new Date(deferredAgain.expiresAt).getTime() + 1));
+  const expired = getQuietCurrentSnapshot().suggestions.find(
+    (item) => item.id === suggestion.id,
+  );
+  assert.equal(expired?.state, 'expired');
+  assert.equal(
+    getQuietCurrentSnapshot().decisionEvents.filter(
+      (event) => event.eventType === 'suggestion_resurface',
+    ).length,
+    1,
+  );
+});
+
+test('Later preserves refined pencil wording when it resurfaces', (t) => {
+  isolatedStore(t);
+  setQuietCurrentNowForTests(new Date('2026-07-10T12:00:00.000Z'));
+  const suggestion = createWorkSuggestion({
+    title: 'Prepare the launch note',
+    reason: 'A launch is approaching.',
+    source: 'calendar',
+  });
+  resolveWorkSuggestion(suggestion.id, {
+    state: 'refined',
+    title: 'Prepare the client launch note',
+    source: 'human_refinement',
+  });
+  const deferred = resolveWorkSuggestion(suggestion.id, {
+    state: 'deferred',
+    source: 'human',
+  });
+
+  assert.equal(deferred.deferredReturnState, 'refined');
+  setQuietCurrentNowForTests(new Date(deferred.deferredUntil));
+  const resurfaced = getQuietCurrentSnapshot().suggestions.find(
+    (item) => item.id === suggestion.id,
+  );
+  assert.equal(resurfaced?.state, 'refined');
+  assert.equal(resurfaced?.title, 'Prepare the client launch note');
+});
+
+test('legacy deferred pencil returns immediately instead of being stranded', (t) => {
+  const file = isolatedStore(t);
+  setQuietCurrentNowForTests(new Date('2026-07-10T12:00:00.000Z'));
+  writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      suggestions: [
+        {
+          id: 'legacy-deferred',
+          kind: 'create_task',
+          title: 'Revisit the legacy idea',
+          description: '',
+          reason: 'It was set aside before the one-return lifecycle shipped.',
+          source: 'email',
+          priority: 'medium',
+          state: 'deferred',
+          createdAt: '2026-07-08T12:00:00.000Z',
+          updatedAt: '2026-07-08T12:00:00.000Z',
+          expiresAt: '2026-07-11T12:00:00.000Z',
+        },
+      ],
+      decisionEvents: [],
+    }),
+  );
+
+  const snapshot = getQuietCurrentSnapshot();
+  assert.equal(snapshot.suggestions[0]?.state, 'proposed');
+  assert.ok(snapshot.suggestions[0]?.resurfacedFromDeferredAt);
+  assert.equal(snapshot.decisionEvents[0]?.eventType, 'suggestion_resurface');
+});
+
+test('Later does not revive a suggestion after its real deadline', (t) => {
+  isolatedStore(t);
+  setQuietCurrentNowForTests(new Date('2026-07-10T12:00:00.000Z'));
+  const suggestion = createWorkSuggestion({
+    title: 'Prepare for the 2 PM call',
+    reason: 'The call is today.',
+    source: 'calendar',
+    expiresAt: '2026-07-10T14:00:00.000Z',
+  });
+  const deferred = resolveWorkSuggestion(suggestion.id, {
+    state: 'deferred',
+    source: 'human',
+  });
+
+  setQuietCurrentNowForTests(new Date('2026-07-10T14:00:00.001Z'));
+  const expired = getQuietCurrentSnapshot().suggestions.find(
+    (item) => item.id === suggestion.id,
+  );
+  assert.equal(expired?.state, 'expired');
+  assert.ok(new Date(suggestion.expiresAt) < new Date(deferred.deferredUntil));
+  assert.equal(
+    getQuietCurrentSnapshot().decisionEvents.some(
+      (event) => event.eventType === 'suggestion_resurface',
+    ),
+    false,
+  );
+});
+
+test('a late read expires deferred work even when its deadline followed the return seam', (t) => {
+  isolatedStore(t);
+  setQuietCurrentNowForTests(new Date('2026-07-10T12:00:00.000Z'));
+  const suggestion = createWorkSuggestion({
+    title: 'Review the follow-up tomorrow morning',
+    reason: 'The follow-up should not linger past tomorrow afternoon.',
+    source: 'email',
+    expiresAt: '2026-07-11T19:00:00.000Z',
+  });
+  const deferred = resolveWorkSuggestion(suggestion.id, {
+    state: 'deferred',
+    source: 'human',
+  });
+  assert.ok(new Date(suggestion.expiresAt) > new Date(deferred.deferredUntil));
+
+  setQuietCurrentNowForTests(new Date('2026-07-11T20:00:00.000Z'));
+  const expired = getQuietCurrentSnapshot().suggestions.find(
+    (item) => item.id === suggestion.id,
+  );
+  assert.equal(expired?.state, 'expired');
+  assert.equal(
+    getQuietCurrentSnapshot().decisionEvents.some(
+      (event) => event.eventType === 'suggestion_resurface',
+    ),
+    false,
+  );
+});
+
+test('undo after the morning seam is idempotent when Later already returned', (t) => {
+  isolatedStore(t);
+  setQuietCurrentNowForTests(new Date('2026-07-10T12:00:00.000Z'));
+  const suggestion = createWorkSuggestion({
+    title: 'Review the returned idea',
+    reason: 'It was set aside yesterday.',
+    source: 'email',
+  });
+  const deferred = resolveWorkSuggestion(suggestion.id, {
+    state: 'deferred',
+    source: 'human',
+  });
+  setQuietCurrentNowForTests(new Date(deferred.deferredUntil));
+  getQuietCurrentSnapshot();
+
+  const reopened = reopenWorkSuggestion(suggestion.id);
+  assert.equal(reopened.state, 'proposed');
+});
+
+test('undoing Later before morning cancels the scheduled return', (t) => {
+  isolatedStore(t);
+  setQuietCurrentNowForTests(new Date('2026-07-10T12:00:00.000Z'));
+  const suggestion = createWorkSuggestion({
+    title: 'Review the partnership idea',
+    reason: 'A partner asked for a response.',
+    source: 'email',
+  });
+  const deferred = resolveWorkSuggestion(suggestion.id, {
+    state: 'deferred',
+    source: 'human',
+  });
+  const scheduledReturn = deferred.deferredUntil;
+
+  const reopened = reopenWorkSuggestion(suggestion.id);
+  assert.equal(reopened.state, 'proposed');
+  assert.equal(reopened.deferredUntil, undefined);
+
+  setQuietCurrentNowForTests(new Date(new Date(scheduledReturn).getTime() + 1));
+  const snapshot = getQuietCurrentSnapshot();
+  assert.equal(
+    snapshot.suggestions.find((item) => item.id === suggestion.id)?.state,
+    'proposed',
+  );
+  assert.equal(
+    snapshot.decisionEvents.filter(
+      (event) => event.eventType === 'suggestion_resurface',
+    ).length,
+    0,
+  );
+});
+
 test('returned work cannot exist without its accepted target', (t) => {
   isolatedStore(t);
   assert.throws(
@@ -133,11 +350,12 @@ test('pruning removes terminal history before active pencil', () => {
     { ...base, id: 'active-old', title: 'Active old', state: 'proposed' },
     { ...base, id: 'terminal-old', title: 'Terminal old', state: 'accepted' },
     { ...base, id: 'active-new', title: 'Active new', state: 'refined' },
+    { ...base, id: 'deferred', title: 'Deferred', state: 'deferred' },
   ];
-  const pruned = pruneSuggestions(suggestions, 2);
+  const pruned = pruneSuggestions(suggestions, 3);
   assert.deepEqual(
     pruned.map((suggestion) => suggestion.id),
-    ['active-old', 'active-new'],
+    ['active-old', 'active-new', 'deferred'],
   );
 });
 
