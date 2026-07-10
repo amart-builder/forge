@@ -1,5 +1,5 @@
-import KanbanBoard from '@/components/tasks/KanbanBoard';
+import TaskWorkspace from '@/components/tasks/TaskWorkspace';
 
 export default function TasksPage() {
-  return <KanbanBoard />;
+  return <TaskWorkspace />;
 }

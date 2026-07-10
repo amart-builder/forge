@@ -78,11 +78,11 @@ export default function LocalCRMView() {
 
   const load = useCallback(async () => {
     try {
-      setError(undefined);
       const [contactRows, companyRows] = await Promise.all([
         listContacts(),
         listCompanies(),
       ]);
+      setError(undefined);
       setContacts(contactRows);
       setCompanies(companyRows);
     } catch (err) {
@@ -91,7 +91,8 @@ export default function LocalCRMView() {
   }, []);
 
   useEffect(() => {
-    void load();
+    const timeout = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timeout);
   }, [load]);
 
   const companyById = useMemo(() => {

@@ -5,8 +5,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const tabs = [
-  { name: 'Tasks', href: '/tasks' },
-  { name: 'CRM', href: '/crm' },
+  { name: 'Today', href: '/tasks' },
+  { name: 'People', href: '/crm' },
 ];
 
 export default function TabNav() {
@@ -23,8 +23,11 @@ export default function TabNav() {
   }
 
   return (
-    <nav className="flex items-center gap-1 px-5 h-11 bg-card border-b transition-colors duration-200" aria-label="Main navigation">
-      <span className="text-sm font-semibold tracking-tight mr-5 text-foreground">Forge</span>
+    <nav className="quiet-main-nav flex h-12 items-center gap-1 border-b px-4 sm:px-6" aria-label="Main navigation">
+      <span className="mr-4 flex items-center gap-2 text-sm font-semibold tracking-[-0.02em] text-foreground sm:mr-7">
+        <span className="quiet-forge-mark" aria-hidden="true" />
+        Forge
+      </span>
       <div className="flex items-center h-full">
         {tabs.map((tab) => {
           const isActive = pathname.startsWith(tab.href);
@@ -32,7 +35,7 @@ export default function TabNav() {
             <Link
               key={tab.href}
               href={tab.href}
-              className={`relative px-3 h-full flex items-center text-sm font-medium transition-colors duration-150 ${
+              className={`relative flex h-full items-center px-3 text-[13px] font-medium transition-colors duration-150 ${
                 isActive
                   ? 'text-foreground'
                   : 'text-muted-foreground hover:text-foreground'
@@ -41,7 +44,7 @@ export default function TabNav() {
             >
               {tab.name}
               {isActive && (
-                <span className="absolute bottom-0 left-1 right-1 h-[2px] bg-foreground rounded-full" />
+                <span className="absolute bottom-0 left-2 right-2 h-px rounded-full bg-foreground" />
               )}
             </Link>
           );

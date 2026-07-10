@@ -1,6 +1,6 @@
 # Forge
 
-Your command center for tasks, email, and CRM. The board runs on your own Mac. Email gets handled where it already lives: in Gmail.
+Your shared working surface with Jarvis: a calm view of what matters now, what may matter next, and what your AI is carrying. Forge runs on your own Mac. Email stays where it already lives: in Gmail.
 
 Forge is local-first. Your data lives in a single file on your laptop. There is no account to create, no login screen, and your board never leaves your machine. You open it like any website, by bookmarking a page, but it runs on your own computer and is always on.
 
@@ -8,7 +8,7 @@ Forge is local-first. Your data lives in a single file on your laptop. There is 
 
 ## Get Forge set up
 
-You do not set this up by hand. Send this repository's link to your AI assistant (Claude) and say "set up Forge for me." Claude follows the playbook in [SETUP.md](SETUP.md): it installs Forge, makes it start on its own, walks you through bookmarking it and turning on reminders, connects your Gmail for email triage if you want it, and can hook up Telegram or iMessage for text reminders and voice notes.
+You do not set this up by hand. Send this repository's link to Claude or Codex and say "set up Forge for me." Your assistant follows the playbook in [SETUP.md](SETUP.md): it installs Forge, interviews you one question at a time about your responsibilities, goals, day, work sources, and delegation boundaries, builds your first current with you, and then offers optional email, CRM, reminder, and voice-note connections.
 
 When it is done, Forge is running at `http://localhost:3200` on your Mac.
 
@@ -16,12 +16,14 @@ When it is done, Forge is running at `http://localhost:3200` on your Mac.
 
 ## Using Forge
 
-Open `http://localhost:3200` (bookmark it the first time). You will see two tabs:
+Open `http://localhost:3200` (bookmark it the first time). You will see two primary spaces:
 
-- **Tasks**: a board for everything you need to do, in four columns: Not Started, Must happen today, In Flight / Waiting, and Done.
-- **CRM**: set up in the CRM step.
+- **Today**: Quiet Current, the daily surface where one task is centered as Now. Accepted work is solid. Jarvis proposals are pale until you accept or begin them. `J` and `K` change focus; `Cmd+K` can focus any task without changing its state.
+- **People**: relationship records and context, set up in the CRM step.
 
-You do not have to add tasks by hand. Just tell Claude in plain language: "remind me to call the roofer tomorrow", "add finish the proposal to my board". Claude puts it on the board, picks a due date if you did not give one, and reminds you. When a task is due, Forge pops a notification on your Mac. If you connected Telegram or iMessage, it can text you the reminder, and you can send it a voice note to turn into a task.
+Today also contains **All Work**, the original four-column board for backlog grooming, waiting work, and history. The board remains available, but it is no longer the place you have to live all day.
+
+You do not have to add tasks by hand. Tell Claude or Codex in plain language: "remind me to call the roofer tomorrow" or "add finish the proposal to my board." Explicit requests become solid work. Work your assistant infers from email, meetings, or context enters Quiet Current in pencil through the [agent contract](AGENT_CONTRACT.md) and cannot become a commitment on its own.
 
 ---
 
