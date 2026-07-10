@@ -24,8 +24,8 @@
 
 ---
 
-**Last updated:** 2026-07-10 (Morning Command Center Phase 0 / 1A dogfood slice built)
-**State:** Living Current remains the deployed Today experience. The Morning Arrival and Day Settlement slice is complete on `codex/morning-command-center` for guarded local dogfood, but it is not deployed and the 8 a.m. trigger is not installed. Email triage remains a separate Mini service and was not changed.
+**Last updated:** 2026-07-10 (local Morning Command Center dogfood gate prepared)
+**State:** The MacBook's `com.forge.web` now serves the Morning Arrival and Day Settlement branch on loopback only for guarded local dogfood. The 8 a.m. trigger is still not installed. Email triage remains a separate Mini service and was not changed.
 
 ## North Star Goal
 Make Forge the source of truth for Alex's day-to-day execution: tasks, email action items, CRM context, and daily priorities in one operating surface.
@@ -39,6 +39,16 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 
 ## Current State
 
+### 2026-07-10 Local Morning Command Center dogfood gate prepared
+
+- Rebuilt `codex/morning-command-center` and rebootstrapped the existing MacBook `com.forge.web` service without running the broad installer. The service now binds only to `127.0.0.1:3200` and sets `FORGE_DAY_PLAN_ACCESS_MODE=loopback`.
+- Runtime verification passed: `/tasks` and the local day-plan route return 200, a public Host header returns 403, and the loaded LaunchAgent contains the expected bind and access mode.
+- The MacBook email-triage, reminders, duplicate `com.forge.local`, and arrival-trigger agents remained absent. The retired email-triage plist was not touched.
+- Supervised dry-run pulses passed for valid config, before-time suppression, a due morning, quiet-date suppression, overlapping-run locking, and unavailable-server fail-closed behavior. No receipt, persistent config, browser open, or arrival LaunchAgent was created.
+- Recovery copies are retained at `~/Library/LaunchAgents/com.forge.web.plist.before-morning-command-center.20260710-135843` and `~/Library/Application Support/Forge/backups/.next.before-morning-command-center.20260710-135843` until dogfood is stable.
+
+Next gate: begin the first real Morning Arrival locally, then dogfood Morning Arrival and Day Settlement on four of five workdays. Measure time from laptop open to intentional first work and record any moment where Forge feels interruptive, unclear, or untrustworthy. Do not install the 8 a.m. trigger yet.
+
 ### 2026-07-10 Morning Command Center Phase 0 / 1A dogfood slice implemented
 
 - Branch `codex/morning-command-center` now adds a durable SQLite Day Plan, append-only decision events, Day Snapshots, and a task-reconciliation ledger with expected-version and idempotency controls.
@@ -51,7 +61,7 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - QA incident: the first browser harness inherited the build's Supabase runtime and created three clearly named QA tasks in the live task API. Those exact three IDs were immediately deleted and verified absent; no existing task was edited. Later browser runs rebuilt in local mode and used isolated SQLite files.
 - Not included yet: installed 8 a.m. launch behavior, scheduled Settlement, prompt-box refinement, direct Edit / Later controls, Claude session kickoff, autonomous runs, and overnight execution.
 
-Next gate: rebuild and rebootstrap the loopback-bound local Forge agent so it receives the explicit access mode, then run supervised trigger dry-runs. After that, Alex dogfoods both rituals on four of five workdays and measures time from open to intentional first work. Do not install the trigger or deploy this branch to clients before that observation.
+The server-only rebootstrap and supervised dry-run gate above supersede this section's original next step. Do not install the trigger or deploy this branch to clients before the four-of-five-day observation.
 
 ### 2026-07-10 Living Current T1-T3 deployed and canary-verified
 
