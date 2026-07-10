@@ -2102,7 +2102,6 @@ function TodayExperience({
           }}
           onDismiss={dayRitual.dismissItem}
           onAssistantSubmit={dayRitual.submitAssistantPrompt}
-          onConfigureExecution={dayRitual.configureExecution}
           onKickoffExecution={dayRitual.kickoffExecution}
           onCancelExecution={dayRitual.cancelExecution}
           onSnooze={() => dayRitual.snooze().catch(() => undefined)}

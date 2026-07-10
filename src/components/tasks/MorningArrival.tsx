@@ -71,13 +71,6 @@ interface MorningArrivalProps {
   onDragReorder: (activeId: string, overId: string) => void | Promise<void>;
   onDismiss: (itemId: string, title: string) => void | Promise<void>;
   onAssistantSubmit: (userText: string) => void | Promise<unknown>;
-  onConfigureExecution: (
-    itemId: string,
-    mode: DayPlanExecutionMode,
-    modelAlias: DayPlanModelAlias,
-    workspaceId?: string,
-    budgetUsd?: number,
-  ) => void | Promise<unknown>;
   onKickoffExecution: (
     itemId: string,
     mode: DayPlanExecutionMode,
@@ -108,7 +101,6 @@ type SortableArrivalCardProps = {
   executionWorkspaces: DayPlanExecutionState['workspaces'];
   executionBusy: boolean;
   executionLoading: boolean;
-  onConfigureExecution: MorningArrivalProps['onConfigureExecution'];
   onKickoffExecution: MorningArrivalProps['onKickoffExecution'];
   onCancelExecution: MorningArrivalProps['onCancelExecution'];
   setDisclosureRef: (itemId: string, node: HTMLButtonElement | null) => void;
@@ -128,7 +120,6 @@ function SortableArrivalCard({
   executionWorkspaces,
   executionBusy,
   executionLoading,
-  onConfigureExecution,
   onKickoffExecution,
   onCancelExecution,
   setDisclosureRef,
@@ -137,8 +128,6 @@ function SortableArrivalCard({
   const contextId = useId();
   const metadataId = useId();
   const [executionDraft, setExecutionDraft] = useState<{
-    mode?: DayPlanExecutionMode;
-    modelAlias?: DayPlanModelAlias;
     workspaceId?: string;
     budgetUsd?: string;
     readinessCheckedAt?: string;
@@ -164,19 +153,19 @@ function SortableArrivalCard({
     : undefined;
   const readiness = executionItem?.readiness;
   const briefChanged = readiness?.codes.includes('brief_changed') ?? false;
-  const draftMatchesCurrentReadiness =
-    !briefChanged || executionDraft.readinessCheckedAt === readiness?.checkedAt;
   const configuredMode = briefChanged ||
     (view.item.owner === 'together' && executionItem?.config?.mode === 'autonomous')
     ? undefined
     : executionItem?.config?.mode;
-  const draftedMode = view.item.owner === 'together' && executionDraft.mode === 'autonomous'
-    ? undefined
-    : executionDraft.mode;
-  const selectedMode = draftMatchesCurrentReadiness
-    ? draftedMode ?? configuredMode
-    : undefined;
-  const selectedModel = executionDraft.modelAlias ?? executionItem?.config?.modelAlias ?? 'sonnet';
+  const selectedMode: DayPlanExecutionMode | undefined = view.item.owner === 'together'
+    ? 'plan_review'
+    : view.item.owner === 'claude'
+      ? 'autonomous'
+      : undefined;
+  const taskComplexity = `${view.title} ${view.description} ${view.definitionOfDone ?? ''}`.length;
+  const selectedModel: DayPlanModelAlias = view.item.owner === 'together' || taskComplexity >= 900
+    ? 'opus'
+    : 'sonnet';
   const selectedWorkspaceId = executionDraft.workspaceId ?? (
     configuredMode === 'autonomous' ? executionItem?.config?.workspaceId : undefined
   ) ?? '';
@@ -236,38 +225,6 @@ function SortableArrivalCard({
               : executionLoading
                 ? 'Checking readiness…'
                 : executionReadinessMessage(readiness, view.item.owner);
-
-  function chooseMode(mode: DayPlanExecutionMode) {
-    setExecutionDraft({
-      mode,
-      modelAlias: selectedModel,
-      workspaceId: mode === 'autonomous' && configuredMode === 'autonomous'
-        ? selectedWorkspaceId
-        : undefined,
-      budgetUsd: mode === 'autonomous' && configuredMode === 'autonomous'
-        ? selectedBudgetText
-        : undefined,
-      readinessCheckedAt: readiness?.checkedAt,
-    });
-    if (mode === 'plan_review') {
-      void Promise.resolve(
-        onConfigureExecution(view.item.id, mode, selectedModel),
-      ).catch(() => undefined);
-    }
-  }
-
-  function chooseModel(modelAlias: DayPlanModelAlias) {
-    setExecutionDraft((current) => ({
-      ...current,
-      modelAlias,
-      readinessCheckedAt: readiness?.checkedAt,
-    }));
-    if (selectedMode === 'plan_review') {
-      void Promise.resolve(
-        onConfigureExecution(view.item.id, selectedMode, modelAlias),
-      ).catch(() => undefined);
-    }
-  }
 
   function chooseWorkspace(workspaceId: string) {
     setExecutionDraft((current) => ({
@@ -359,7 +316,7 @@ function SortableArrivalCard({
                   value={owner}
                   checked={view.item.owner === owner}
                   disabled={controlBusy}
-                  onChange={() => void onOwnerChange(view.item.id, owner)}
+                onChange={() => void onOwnerChange(view.item.id, owner)}
                   className="h-4 w-4 accent-[var(--accent-blue)]"
                 />
                 {ownerLabel(owner)}
@@ -372,8 +329,8 @@ function SortableArrivalCard({
               : displayedRun
                 ? executionRunStatusLabel(displayedRun.status)
                 : view.item.owner === 'together'
-                  ? 'Choose Plan with Claude.'
-                  : 'Choose an execution mode.'}
+                  ? 'Plan with Claude selected automatically.'
+                  : 'Autonomous selected automatically.'}
           </p>
         </fieldset>
 
@@ -383,43 +340,13 @@ function SortableArrivalCard({
             aria-label={`Claude execution for ${view.title}`}
             data-card-control
           >
-            <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
-                aria-pressed={selectedMode === 'plan_review'}
-                disabled={controlBusy || Boolean(activeRun)}
-                className={`min-h-9 rounded-lg border px-2.5 text-xs font-medium disabled:opacity-50 ${
-                  selectedMode === 'plan_review' ? 'border-accent-blue bg-accent-blue/10 text-foreground' : 'text-muted-foreground'
-                }`}
-                onClick={() => chooseMode('plan_review')}
-              >
-                Plan with Claude
-              </button>
-              {view.item.owner === 'claude' && (
-                <button
-                  type="button"
-                  aria-pressed={selectedMode === 'autonomous'}
-                  disabled={controlBusy || Boolean(activeRun)}
-                  className={`min-h-9 rounded-lg border px-2.5 text-xs font-medium disabled:opacity-50 ${
-                    selectedMode === 'autonomous' ? 'border-accent-blue bg-accent-blue/10 text-foreground' : 'text-muted-foreground'
-                  }`}
-                  onClick={() => chooseMode('autonomous')}
-                >
-                  Autonomous
-                </button>
-              )}
-              <label className="ml-auto flex min-h-9 items-center gap-1.5 text-xs text-muted-foreground">
-                <span>Model</span>
-                <select
-                  value={selectedModel}
-                  disabled={controlBusy || Boolean(activeRun)}
-                  className="h-9 rounded-lg border bg-background px-2 text-xs text-foreground"
-                  onChange={(event) => chooseModel(event.target.value as DayPlanModelAlias)}
-                >
-                  <option value="sonnet">Sonnet</option>
-                  <option value="opus">Opus</option>
-                </select>
-              </label>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="rounded-full border border-accent-blue/40 bg-accent-blue/10 px-2.5 py-1 font-medium text-foreground">
+                {selectedMode === 'plan_review' ? 'Plan with Claude' : 'Autonomous'}
+              </span>
+              <span className="text-muted-foreground">
+                Model selected automatically: {selectedModel === 'opus' ? 'Opus' : 'Sonnet'}
+              </span>
             </div>
             {selectedMode === 'autonomous' && executionWorkspaces.length > 0 && (
               <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(6.5rem,0.7fr)] gap-2">
@@ -583,7 +510,6 @@ export default function MorningArrival({
   onDragReorder,
   onDismiss,
   onAssistantSubmit,
-  onConfigureExecution,
   onKickoffExecution,
   onCancelExecution,
   onSnooze,
@@ -739,7 +665,6 @@ export default function MorningArrival({
                         executionWorkspaces={executionState?.workspaces ?? []}
                         executionBusy={executionBusyItemIds.has(view.item.id)}
                         executionLoading={executionLoading}
-                        onConfigureExecution={onConfigureExecution}
                         onKickoffExecution={onKickoffExecution}
                         onCancelExecution={onCancelExecution}
                         setDisclosureRef={setDisclosureRef}
