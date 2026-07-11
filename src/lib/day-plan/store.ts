@@ -892,8 +892,20 @@ export function createDayPlanStore(options: {
       const plan = getPlan(input.planId);
       if (!plan) throw new DayPlanNotFound();
       if (plan.version !== input.expectedVersion) throw new DayPlanVersionConflict(plan);
-      requireArrivalEditing(plan);
       const item = requireItem(plan, input.itemId);
+      // Execution can be configured while arrival is open, and also once the day is
+      // active for an accepted agent-owned item, so the started view can set up work
+      // that was not ready at Start My Day. Everything else stays locked.
+      const arrivalEditing = plan.state === "proposed" && plan.arrivalState === "opened";
+      const activeAgentItem =
+        plan.state === "active" &&
+        item.decision === "accepted" &&
+        (item.owner === "claude" || item.owner === "together");
+      if (!arrivalEditing && !activeAgentItem) {
+        throw new DayPlanInvalidTransition(
+          "Execution can be configured only while arrival is open or the day is active.",
+        );
+      }
       requireState(
         item.decision,
         ["pending", "preselected", "accepted"],

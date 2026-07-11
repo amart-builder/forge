@@ -79,6 +79,12 @@ const LOCAL_DATE = /^\d{4}-\d{2}-\d{2}$/;
 type DayPlanAccessMode = "loopback" | "session";
 const LOOPBACK_ACCESS_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 
+// The configured day-plan access mode. Loopback means the request can only come from
+// this machine, which is what gates exposing a run's resumable claudeSessionId.
+export function currentDayPlanAccessMode(): DayPlanAccessMode | undefined {
+  return process.env.FORGE_DAY_PLAN_ACCESS_MODE as DayPlanAccessMode | undefined;
+}
+
 type ParsedPost =
   | { action: "ensure"; input: EnsureDayPlanInput }
   | { action: "reconciliation_applied"; reconciliationId: string }
@@ -472,10 +478,13 @@ export async function POST(request: NextRequest) {
     const queuedRuns = parsed.action === "start_day" && "executionRuns" in result
       ? result.executionRuns?.filter((run) => run.status === "queued").length ?? 0
       : 0;
+    const accessMode = currentDayPlanAccessMode();
     const publicResult = "executionRuns" in result
       ? {
           ...result,
-          executionRuns: result.executionRuns?.map(publicExecutionRun),
+          executionRuns: result.executionRuns?.map((run) =>
+            publicExecutionRun(run, accessMode),
+          ),
           unreadyItems: result.unreadyItems?.map(publicUnreadyItem),
           ...(parsed.action === "start_day"
             ? {

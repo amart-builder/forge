@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { hasDayPlanRouteAccess } from "@/app/api/day-plan/route";
+import {
+  currentDayPlanAccessMode,
+  hasDayPlanRouteAccess,
+} from "@/app/api/day-plan/route";
 import {
   DayPlanInvalidTransition,
   DayPlanNotFound,
@@ -116,6 +119,7 @@ export async function GET(request: NextRequest) {
     const store = getDayPlanStore();
     const plan = store.getPlan(planId);
     if (!plan) throw new DayPlanNotFound();
+    const accessMode = currentDayPlanAccessMode();
     return NextResponse.json({
       items: plan.items.map((item) => ({
         itemId: item.id,
@@ -124,7 +128,9 @@ export async function GET(request: NextRequest) {
           store.getExecutionReadiness(plan.id, item.id),
         ),
       })),
-      runs: store.listExecutionRuns(plan.id).map(publicExecutionRun),
+      runs: store.listExecutionRuns(plan.id).map((run) =>
+        publicExecutionRun(run, accessMode),
+      ),
       workspaces: store.listExecutionWorkspaces(),
     });
   } catch (error) {
@@ -146,8 +152,11 @@ export async function POST(request: NextRequest) {
     }
     const parsed = parseExecutionPostBody(JSON.parse(raw) as unknown);
     const store = getDayPlanStore();
+    const accessMode = currentDayPlanAccessMode();
     if (parsed.action === "cancel") {
-      return NextResponse.json({ run: publicExecutionRun(store.cancelExecutionRun(parsed.runId)) });
+      return NextResponse.json({
+        run: publicExecutionRun(store.cancelExecutionRun(parsed.runId), accessMode),
+      });
     }
     if (parsed.action === "configure") {
       const result = store.configureExecution(parsed.input);
@@ -162,7 +171,7 @@ export async function POST(request: NextRequest) {
       : undefined;
     return NextResponse.json({
       ...result,
-      run: result.run ? publicExecutionRun(result.run) : undefined,
+      run: result.run ? publicExecutionRun(result.run, accessMode) : undefined,
       readiness: publicExecutionReadiness(result.readiness),
       worker,
     });

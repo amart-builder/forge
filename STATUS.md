@@ -16,10 +16,10 @@
 
 <!-- BEGIN active-session -->
 ## Active Session
-- **system:** none
-- **device:** —
-- **since:** —
-- **task:** —
+- **system:** cowork
+- **device:** Alexanders-MacBook-Pro-2
+- **since:** 2026-07-10T16:53:51-0700
+- **task:** morning brief UX + Start My Day → Claude Code launch
 <!-- END active-session -->
 
 ---
@@ -38,6 +38,18 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - Closed tasks require direct evidence before marking done.
 
 ## Current State
+
+### 2026-07-10 Day Started payoff view + Open in Claude Code deep link (evening session)
+
+- Start My Day no longer dead-ends: when any accepted item is owned by Claude or Together, the ritual layer transitions to an explicit `started` view (no auto-close timer) showing "Start here: <first focus>" plus one row per handed-off item with live status chips. Unready items get a "Needs setup" chip with the readiness reason and working config controls; `configureExecution` now also permits accepted agent-owned items on an active day (me-owned/dropped still denied), and the active-day kickoff path handles post-start fixes. "Enter my day" is the explicit exit and focuses the recommended task.
+- Runs in `plan_ready`/`ready_to_join` show **Open in Claude Code**, which navigates to `claude://resume?session=<claude_session_id>` — the Claude desktop app's (undocumented but verified) deep-link route that imports a headless CLI session into the Mac app. Verified live twice, including a real Together plan run imported as a desktop session. `claude://code/new?q=<prompt>&folder=<path>` also verified for fresh desktop sessions. Undocumented routes: re-verify after Claude desktop updates. Custom-protocol navigation is silently blocked in embedded/sandboxed browsers; in real Chrome/Safari the first click shows an "Open Claude.app?" prompt.
+- Security tightened, not loosened: `claudeSessionId` was previously exposed for every run status; the public projection now includes it only for loopback access mode AND `plan_ready`/`ready_to_join`, stripped like workspacePath/pid otherwise (matrix-tested).
+- Living Current now surfaces run state durably: a shared pure selector (`selectCurrentExecutionRow`, hash-matched, never stale) drives non-interactive status chips on the focused pill, downstream nodes, and shelf entries, with Open in Claude Code only in the expanded focused surface (no nested buttons). Terminal runs (failed/interrupted/cancelled) are retryable from the shared panel, labeled "Retry".
+- Escape in Morning Arrival is now collapse-only and never bypasses the ritual; the explicit bypass button remains.
+- Verification: two independent reviews (fresh-context Opus: SHIP; cross-model Codex found the retry + overlay-close bugs, both fixed with new tests), 18+11 targeted tests plus all affected suites green, tsc, scoped eslint, production build, and live browser acceptance on the rebuilt `com.forge.web`: real Start My Day with a Together-owned card, payoff view rendered, run reached Ready to join, deep link imported the session into the desktop app (main.log "Imported CLI session b5a1b990…").
+- Dogfood note: today's real plan is now active with Jarvis Pro marketing handed to Together; its plan session is imported in the desktop app awaiting Alex.
+
+Next gate: dogfood the started view on the next real morning (does the payoff screen plus desktop handoff remove the post-start dead end?), then tackle the remaining arrival clunk: no explanation while the footer primary action is locked during in-flight kickoffs, and unready-item visibility before Start My Day.
 
 ### 2026-07-10 Morning Arrival Claude execution layer implemented and dogfood-ready
 

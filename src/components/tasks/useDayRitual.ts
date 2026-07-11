@@ -33,8 +33,18 @@ import type {
   RecommendationCandidate,
   SettlementDisposition,
 } from '@/lib/day-plan/types';
+import {
+  hasAgentOwnedAcceptedWork,
+  shouldKeepStartedView,
+} from '@/lib/day-plan/presentation';
 
-export type DayRitualView = 'checking' | 'none' | 'arrival' | 'transition' | 'settlement';
+export type DayRitualView =
+  | 'checking'
+  | 'none'
+  | 'arrival'
+  | 'transition'
+  | 'started'
+  | 'settlement';
 
 type UseDayRitualInput = {
   enabled: boolean;
@@ -135,7 +145,13 @@ export default function useDayRitual({
     planRef.current = nextPlan;
     setPlan(nextPlan);
     if (snapshot) setLatestSnapshot(snapshot);
-    setView(inferView(nextPlan));
+    setView((current) => {
+      const inferred = inferView(nextPlan);
+      // An active plan infers 'none', but the started payoff view stays open across
+      // accepted responses (configure, kickoff, refresh) until Enter my day. Real
+      // transitions (settlement opening, arrival reopening) still apply.
+      return shouldKeepStartedView(current, inferred, nextPlan.state) ? current : inferred;
+    });
   }, []);
 
   const refreshPlan = useCallback(async () => {
@@ -760,11 +776,24 @@ export default function useDayRitual({
         ],
       });
     }
+    // When Claude or Together own accepted work, hold on the started payoff view so the
+    // person can watch execution and open sessions. It stays open until they enter their
+    // day; there is no auto-close timer. A purely human day keeps the brief transition.
+    if (hasAgentOwnedAcceptedWork(result.plan.items)) {
+      setView('started');
+      return undefined;
+    }
     setView('transition');
     await new Promise((resolve) => window.setTimeout(resolve, 1200));
     setView('none');
     return result.plan.recommendedFirstTaskId;
   }, [acceptExecutionState, enqueueMutation]);
+
+  const enterDay = useCallback((): string | undefined => {
+    setView('none');
+    setAnnouncement('Living Current is ready.');
+    return planRef.current?.recommendedFirstTaskId;
+  }, []);
 
   const openSettlement = useCallback(async () => {
     const current = planRef.current;
@@ -885,7 +914,11 @@ export default function useDayRitual({
     executionLoading,
     executionBusyItemIds,
     executionError,
-    ritualOpen: view === 'arrival' || view === 'transition' || view === 'settlement',
+    ritualOpen:
+      view === 'arrival' ||
+      view === 'transition' ||
+      view === 'started' ||
+      view === 'settlement',
     openArrival,
     snooze,
     skip,
@@ -899,6 +932,7 @@ export default function useDayRitual({
     cancelExecution,
     refreshExecution,
     startDay,
+    enterDay,
     openSettlement,
     cancelSettlement,
     decideSettlement,

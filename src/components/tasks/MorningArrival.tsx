@@ -28,12 +28,16 @@ import type {
 } from '@/lib/day-plan/types';
 import {
   assistantTurnStatusLabel,
-  executionReadinessMessage,
   executionRunStatusLabel,
   ownerLabel,
+  resolveArrivalEscape,
+  selectCurrentExecutionRow,
   selectEssentialItems,
 } from '@/lib/day-plan/presentation';
 import DayRitualLayer from './DayRitualLayer';
+import ExecutionConfigPanel from './ExecutionConfigPanel';
+
+const ACTIVE_RUN_STATUSES = ['queued', 'starting', 'running', 'cancelling'];
 
 const OWNERS: DayOwner[] = ['me', 'claude', 'together'];
 
@@ -127,11 +131,6 @@ function SortableArrivalCard({
   const titleId = useId();
   const contextId = useId();
   const metadataId = useId();
-  const [executionDraft, setExecutionDraft] = useState<{
-    workspaceId?: string;
-    budgetUsd?: string;
-    readinessCheckedAt?: string;
-  }>({});
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: view.item.id,
   });
@@ -139,101 +138,16 @@ function SortableArrivalCard({
     transform: CSS.Translate.toString(transform),
     transition: transition ?? undefined,
   };
-  const latestRun = [...executionRuns]
-    .filter((run) => run.itemId === view.item.id)
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-  const activeRun = latestRun && ['queued', 'starting', 'running', 'cancelling'].includes(latestRun.status)
+  const { latestRun, currentRun } = selectCurrentExecutionRow(
+    executionRuns,
+    view.item.id,
+    executionItem?.config,
+  );
+  const activeRun = latestRun && ACTIVE_RUN_STATUSES.includes(latestRun.status)
     ? latestRun
     : undefined;
-  const currentRun = latestRun && executionItem?.config &&
-    latestRun.briefHash === executionItem.config.briefHash &&
-    latestRun.authorizationHash === executionItem.config.authorizationHash &&
-    latestRun.mode === executionItem.config.mode
-    ? latestRun
-    : undefined;
-  const readiness = executionItem?.readiness;
-  const briefChanged = readiness?.codes.includes('brief_changed') ?? false;
-  const configuredMode = briefChanged ||
-    (view.item.owner === 'together' && executionItem?.config?.mode === 'autonomous')
-    ? undefined
-    : executionItem?.config?.mode;
-  const selectedMode: DayPlanExecutionMode | undefined = view.item.owner === 'together'
-    ? 'plan_review'
-    : view.item.owner === 'claude'
-      ? 'autonomous'
-      : undefined;
-  const taskComplexity = `${view.title} ${view.description} ${view.definitionOfDone ?? ''}`.length;
-  const selectedModel: DayPlanModelAlias = view.item.owner === 'together' || taskComplexity >= 900
-    ? 'opus'
-    : 'sonnet';
-  const selectedWorkspaceId = executionDraft.workspaceId ?? (
-    configuredMode === 'autonomous' ? executionItem?.config?.workspaceId : undefined
-  ) ?? '';
-  const selectedBudgetText = executionDraft.budgetUsd ?? (
-    configuredMode === 'autonomous' && executionItem?.config?.budgetUsd !== undefined
-      ? String(executionItem.config.budgetUsd)
-      : undefined
-  ) ?? '';
-  const selectedWorkspace = executionWorkspaces.find(
-    (workspace) => workspace.id === selectedWorkspaceId,
-  );
-  const selectedBudget = Number(selectedBudgetText);
-  const autonomousSetupReady = selectedMode !== 'autonomous' || Boolean(
-    selectedWorkspace &&
-    selectedBudgetText &&
-    Number.isFinite(selectedBudget) &&
-    selectedBudget > 0 &&
-    selectedBudget <= selectedWorkspace.maximumBudgetUsd
-  );
-  const locallyFixableReadinessCodes = new Set([
-    'mode_required',
-    'owner_not_agent',
-    'brief_changed',
-    'workspace_required',
-    'workspace_not_allowlisted',
-    'budget_required',
-    'budget_exceeds_limit',
-  ]);
-  const readinessAllowsAttempt = Boolean(
-    selectedMode &&
-    autonomousSetupReady &&
-    (
-      readiness?.ready ||
-      readiness?.codes.every((code) => locallyFixableReadinessCodes.has(code))
-    ),
-  );
   const controlBusy = busy || executionBusy;
   const displayedRun = activeRun ?? currentRun;
-  const reviewRun = currentRun &&
-    ['plan_ready', 'ready_to_join', 'awaiting_review'].includes(currentRun.status) &&
-    currentRun.resultSummary?.text
-    ? currentRun
-    : undefined;
-  const reviewHeadingId = `${titleId}-claude-review`;
-  const executionStatusMessage = selectedMode === 'autonomous' && executionWorkspaces.length === 0
-    ? 'Autonomous needs a connected project.'
-    : selectedMode === 'autonomous' && !selectedWorkspaceId
-      ? 'Choose a connected project.'
-      : selectedMode === 'autonomous' && !selectedBudgetText
-        ? 'Set a budget before kickoff.'
-        : selectedMode === 'autonomous' && !autonomousSetupReady
-          ? `Budget must be between $0.01 and $${selectedWorkspace?.maximumBudgetUsd ?? 0}.`
-          : briefChanged
-            ? executionReadinessMessage(readiness, view.item.owner)
-            : displayedRun
-              ? executionRunStatusLabel(displayedRun.status)
-              : executionLoading
-                ? 'Checking readiness…'
-                : executionReadinessMessage(readiness, view.item.owner);
-
-  function chooseWorkspace(workspaceId: string) {
-    setExecutionDraft((current) => ({
-      ...current,
-      workspaceId,
-      budgetUsd: undefined,
-      readinessCheckedAt: readiness?.checkedAt,
-    }));
-  }
 
   return (
     <li
@@ -335,115 +249,19 @@ function SortableArrivalCard({
         </fieldset>
 
         {(view.item.owner === 'claude' || view.item.owner === 'together') && (
-          <section
-            className="mt-3 rounded-xl border bg-muted/40 p-3"
-            aria-label={`Claude execution for ${view.title}`}
-            data-card-control
-          >
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="rounded-full border border-accent-blue/40 bg-accent-blue/10 px-2.5 py-1 font-medium text-foreground">
-                {selectedMode === 'plan_review' ? 'Plan with Claude' : 'Autonomous'}
-              </span>
-            </div>
-            {selectedMode === 'autonomous' && executionWorkspaces.length > 0 && (
-              <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(6.5rem,0.7fr)] gap-2">
-                <label className="min-w-0 text-xs text-muted-foreground">
-                  <span className="sr-only">Connected project</span>
-                  <select
-                    value={selectedWorkspaceId}
-                    disabled={controlBusy || Boolean(activeRun)}
-                    className="h-9 w-full rounded-lg border bg-background px-2 text-xs text-foreground"
-                    onChange={(event) => chooseWorkspace(event.target.value)}
-                  >
-                    <option value="">Project…</option>
-                    {executionWorkspaces.map((workspace) => (
-                      <option key={workspace.id} value={workspace.id}>
-                        {workspace.id} (max ${workspace.maximumBudgetUsd})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex min-w-0 items-center rounded-lg border bg-background px-2 text-xs text-muted-foreground">
-                  <span className="mr-1">$</span>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    min="0.01"
-                    max={selectedWorkspace?.maximumBudgetUsd}
-                    step="0.01"
-                    value={selectedBudgetText}
-                    disabled={controlBusy || Boolean(activeRun) || !selectedWorkspace}
-                    className="h-8 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none"
-                    aria-label="Autonomous budget in dollars"
-                    placeholder={selectedWorkspace
-                      ? `up to ${selectedWorkspace.maximumBudgetUsd}`
-                      : 'budget'}
-                    onChange={(event) => setExecutionDraft((current) => ({
-                      ...current,
-                      budgetUsd: event.target.value,
-                      readinessCheckedAt: readiness?.checkedAt,
-                    }))}
-                  />
-                </label>
-              </div>
-            )}
-            <div className="mt-2 flex items-end gap-2">
-              <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground" role="status">
-                {executionStatusMessage}
-              </p>
-              {activeRun && (
-                <button
-                  type="button"
-                  disabled={controlBusy || activeRun.status === 'cancelling'}
-                  className="min-h-9 shrink-0 rounded-lg border px-2.5 text-xs font-medium text-muted-foreground disabled:opacity-40"
-                  onClick={() => void Promise.resolve(onCancelExecution(activeRun.id)).catch(() => undefined)}
-                >
-                  {activeRun.status === 'cancelling' ? 'Cancelling…' : 'Cancel'}
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={
-                  controlBusy ||
-                  executionLoading ||
-                  !selectedMode ||
-                  Boolean(activeRun) ||
-                  Boolean(currentRun) ||
-                  !readinessAllowsAttempt
-                }
-                className="min-h-9 shrink-0 rounded-lg bg-foreground px-3 text-xs font-semibold text-background disabled:opacity-40"
-                onClick={() => {
-                  if (!selectedMode) return;
-                  void Promise.resolve(
-                    onKickoffExecution(
-                      view.item.id,
-                      selectedMode,
-                      selectedModel,
-                      selectedMode === 'autonomous' ? selectedWorkspaceId : undefined,
-                      selectedMode === 'autonomous' ? selectedBudget : undefined,
-                    ),
-                  ).catch(() => undefined);
-                }}
-              >
-                {executionBusy ? 'Preparing…' : 'Kick Off'}
-              </button>
-            </div>
-            {reviewRun && (
-              <div
-                className="mt-2 max-h-28 overflow-y-auto rounded-lg border bg-background p-2.5 text-xs"
-                role="region"
-                aria-labelledby={reviewHeadingId}
-                tabIndex={0}
-              >
-                <p id={reviewHeadingId} className="font-semibold text-foreground">
-                  {reviewRun.status === 'plan_ready' ? 'Plan ready' : 'Review Claude’s work'}
-                </p>
-                <p className="mt-1 whitespace-pre-wrap leading-relaxed text-muted-foreground">
-                  {reviewRun.resultSummary?.text}
-                </p>
-              </div>
-            )}
-          </section>
+          <ExecutionConfigPanel
+            item={view.item}
+            ariaTitle={view.title}
+            complexityText={`${view.title} ${view.description} ${view.definitionOfDone ?? ''}`}
+            executionItem={executionItem}
+            runs={executionRuns}
+            workspaces={executionWorkspaces}
+            busy={busy}
+            executionBusy={executionBusy}
+            executionLoading={executionLoading}
+            onKickoffExecution={onKickoffExecution}
+            onCancelExecution={onCancelExecution}
+          />
         )}
 
         {expanded && (
@@ -565,13 +383,15 @@ export default function MorningArrival({
   }
 
   function handleEscape() {
-    if (draggingRef.current) return;
-    if (expandedItemId) {
-      onExpand(expandedItemId);
-      focusDisclosure(expandedItemId);
-      return;
+    // Escape only collapses an expanded card. It never bypasses or closes the ritual.
+    const decision = resolveArrivalEscape({
+      dragging: draggingRef.current,
+      expandedItemId,
+    });
+    if (decision.type === 'collapse') {
+      onExpand(decision.itemId);
+      focusDisclosure(decision.itemId);
     }
-    void onBypass();
   }
 
   async function handleDismiss(itemId: string, title: string) {

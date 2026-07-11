@@ -8,6 +8,7 @@ import Database from 'better-sqlite3';
 import { buildDayPlanCandidates } from '../src/lib/day-plan/candidates.ts';
 import { createDayPlanStore, DayPlanInvalidTransition } from '../src/lib/day-plan/store.ts';
 import {
+  includesClaudeSessionId,
   publicExecutionReadiness,
   publicExecutionRun,
 } from '../src/lib/day-plan/public-execution.ts';
@@ -162,6 +163,133 @@ test('brief edits invalidate execution configuration and prevent kickoff', (t) =
   assert.equal(runs.length, 1);
   assert.equal(runs[0].status, 'cancelled');
   assert.equal(runs[0].errorCode, 'brief_changed');
+});
+
+test('execution can be configured for an accepted agent item once the day is active, but not for me-owned or dropped items', (t) => {
+  const { store, plan: original } = setup(t);
+  // item[0] -> Claude (accepted agent work), item[1] stays me-owned. Both are accepted
+  // by Start My Day.
+  const plan = mutate(store, original, 'item_owner', {
+    itemId: original.items[0].id,
+    owner: 'claude',
+  });
+  const started = store.mutateDayPlan({
+    planId: plan.id,
+    expectedVersion: plan.version,
+    mutationId: 'start-day:active-config',
+    action: 'start_day',
+  });
+  const active = started.plan;
+  assert.equal(active.state, 'active');
+
+  const agentItem = active.items.find(
+    (item) => item.decision === 'accepted' && item.owner === 'claude',
+  );
+  const meItem = active.items.find(
+    (item) => item.decision === 'accepted' && item.owner === 'me',
+  );
+  assert.ok(agentItem && meItem);
+
+  const configured = store.configureExecution({
+    planId: active.id,
+    itemId: agentItem.id,
+    expectedVersion: active.version,
+    mutationId: 'configure:active:agent',
+    mode: 'plan_review',
+    modelAlias: 'sonnet',
+  });
+  assert.equal(configured.config.mode, 'plan_review');
+
+  // A me-owned accepted item is denied while the day is active (configure does not bump
+  // the plan version, so the same expectedVersion still applies).
+  assert.throws(
+    () => store.configureExecution({
+      planId: active.id,
+      itemId: meItem.id,
+      expectedVersion: active.version,
+      mutationId: 'configure:active:me',
+      mode: 'plan_review',
+      modelAlias: 'sonnet',
+    }),
+    (error) => error instanceof DayPlanInvalidTransition,
+  );
+});
+
+test('a dropped item can never be configured for execution, even while the day is active', (t) => {
+  const { store, plan: original } = setup(t);
+  // item[0] -> Claude then dropped; item[1] stays me-owned so Start My Day still has a focus.
+  let plan = mutate(store, original, 'item_owner', {
+    itemId: original.items[0].id,
+    owner: 'claude',
+  });
+  plan = mutate(store, plan, 'item_dismiss', { itemId: plan.items[0].id });
+  const started = store.mutateDayPlan({
+    planId: plan.id,
+    expectedVersion: plan.version,
+    mutationId: 'start-day:dropped',
+    action: 'start_day',
+  });
+  const active = started.plan;
+  assert.equal(active.state, 'active');
+  const dropped = active.items.find((item) => item.decision === 'dismissed');
+  assert.ok(dropped);
+  assert.throws(
+    () => store.configureExecution({
+      planId: active.id,
+      itemId: dropped.id,
+      expectedVersion: active.version,
+      mutationId: 'configure:active:dropped',
+      mode: 'plan_review',
+      modelAlias: 'sonnet',
+    }),
+    (error) => error instanceof DayPlanInvalidTransition,
+  );
+});
+
+test('claudeSessionId is projected only for loopback plan-ready and ready-to-join runs', () => {
+  const statuses = [
+    'queued', 'starting', 'running', 'plan_ready', 'ready_to_join',
+    'awaiting_review', 'failed', 'interrupted', 'cancelling', 'cancelled',
+  ];
+  for (const status of statuses) {
+    const exposed = status === 'plan_ready' || status === 'ready_to_join';
+    assert.equal(includesClaudeSessionId('loopback', status), exposed);
+    assert.equal(includesClaudeSessionId('session', status), false);
+    assert.equal(includesClaudeSessionId(undefined, status), false);
+  }
+
+  const baseRun = {
+    id: 'run-projection',
+    dayPlanId: 'plan-projection',
+    itemId: 'item-projection',
+    taskId: 'task-projection',
+    owner: 'together',
+    mode: 'plan_review',
+    modelAlias: 'sonnet',
+    status: 'plan_ready',
+    idempotencyKey: 'projection',
+    attempt: 1,
+    claudeSessionId: '00000000-0000-4000-8000-000000000000',
+    briefHash: 'hash',
+    authorizationHash: 'auth',
+    promptSnapshot: { title: 'Projected task', outcome: 'Safe', whyToday: 'Accepted work' },
+    workspacePath: '/private/allowlisted/project',
+    pid: 4242,
+    readiness: { ready: true, codes: ['ready'], checkedAt: '', workspacePath: '/private/allowlisted/project' },
+    createdAt: '2026-07-10T16:00:00.000Z',
+    updatedAt: '2026-07-10T16:00:00.000Z',
+  };
+  assert.equal(publicExecutionRun(baseRun, 'loopback').claudeSessionId, baseRun.claudeSessionId);
+  assert.equal(publicExecutionRun(baseRun, 'session').claudeSessionId, undefined);
+  assert.equal(publicExecutionRun(baseRun).claudeSessionId, undefined);
+  assert.equal(publicExecutionRun({ ...baseRun, status: 'running' }, 'loopback').claudeSessionId, undefined);
+  assert.equal(publicExecutionRun({ ...baseRun, status: 'ready_to_join' }, 'loopback').claudeSessionId, baseRun.claudeSessionId);
+
+  // workspacePath, pid, and the readiness path stay stripped regardless of access mode.
+  const stripped = publicExecutionRun(baseRun, 'loopback');
+  assert.equal(stripped.workspacePath, undefined);
+  assert.equal(stripped.pid, undefined);
+  assert.equal(stripped.readiness.workspacePath, undefined);
 });
 
 test('Start My Day routes the latest agent cards and reports autonomous setup gaps', (t) => {
