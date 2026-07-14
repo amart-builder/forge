@@ -312,6 +312,35 @@ export function shouldKeepStartedView(
   return currentView === 'started' && planState === 'active' && inferredView === 'none';
 }
 
+export type RitualContentSwapDecision = 'none' | 'immediate' | 'crossfade';
+
+// Pure decision for swapping ritual content inside the one mounted DayRitualLayer.
+// Same view: nothing to do. Reduced motion: swap in place with no exit/enter motion.
+// Otherwise: fade the outgoing content quickly, then let the incoming content arrive.
+export function resolveRitualContentSwap(input: {
+  displayedKey: string;
+  nextKey: string;
+  reducedMotion: boolean;
+}): RitualContentSwapDecision {
+  if (input.displayedKey === input.nextKey) return 'none';
+  return input.reducedMotion ? 'immediate' : 'crossfade';
+}
+
+// One plain line explaining why Day Settlement is showing a date that is not today
+// (a missed prior-day settlement). Today's own settlement gets no extra line.
+export function staleSettlementNotice(
+  planLocalDate: string,
+  todayLocalDate: string,
+): string | undefined {
+  if (planLocalDate === todayLocalDate) return undefined;
+  const label = new Intl.DateTimeFormat('en-US', {
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(`${planLocalDate}T12:00:00.000Z`));
+  return `${label} was never closed. Settle it before today's plan begins.`;
+}
+
 export type ArrivalEscapeDecision =
   | { type: 'collapse'; itemId: string }
   | { type: 'none' };

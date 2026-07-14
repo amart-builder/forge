@@ -219,13 +219,17 @@ export default function ExecutionConfigPanel({
       )}
       <div className="mt-2 flex items-end gap-2">
         <p className="min-w-0 flex-1 text-xs leading-relaxed text-muted-foreground" role="status">
-          {executionStatusMessage}
+          {/* Keyed so a status change replays the subtle enter; the live region itself
+              stays mounted so screen readers still announce the new text. */}
+          <span key={executionStatusMessage} className="panel-pop-in inline-block">
+            {executionStatusMessage}
+          </span>
         </p>
         {activeRun && (
           <button
             type="button"
             disabled={controlBusy || activeRun.status === 'cancelling'}
-            className="min-h-9 shrink-0 rounded-lg border px-2.5 text-xs font-medium text-muted-foreground disabled:opacity-40"
+            className="press-scale min-h-9 shrink-0 rounded-lg border px-2.5 text-xs font-medium text-muted-foreground disabled:opacity-40"
             onClick={() => void Promise.resolve(onCancelExecution(activeRun.id)).catch(() => undefined)}
           >
             {activeRun.status === 'cancelling' ? 'Cancelling…' : 'Cancel'}
@@ -241,7 +245,7 @@ export default function ExecutionConfigPanel({
             Boolean(blockingRun) ||
             !readinessAllowsAttempt
           }
-          className="min-h-9 shrink-0 rounded-lg bg-foreground px-3 text-xs font-semibold text-background disabled:opacity-40"
+          className="press-scale min-h-9 shrink-0 rounded-lg bg-foreground px-3 text-xs font-semibold text-background disabled:opacity-40"
           onClick={() => {
             if (!selectedMode) return;
             void Promise.resolve(
@@ -263,13 +267,13 @@ export default function ExecutionConfigPanel({
         </button>
       </div>
       {openableRun && (
-        <div className="mt-2 flex justify-end">
+        <div className="panel-pop-in mt-2 flex justify-end">
           <OpenInClaudeCode sessionId={openableRun.claudeSessionId} title={ariaTitle} />
         </div>
       )}
       {reviewRun && (
         <div
-          className="mt-2 max-h-28 overflow-y-auto rounded-lg border bg-background p-2.5 text-xs"
+          className="panel-pop-in mt-2 max-h-28 overflow-y-auto rounded-lg border bg-background p-2.5 text-xs"
           role="region"
           aria-labelledby={reviewHeadingId}
           tabIndex={0}

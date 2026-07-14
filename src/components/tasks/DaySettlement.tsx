@@ -1,14 +1,13 @@
 'use client';
 
-import { useId, type RefObject } from 'react';
 import type { DayPlan, DayPlanItem } from '@/lib/day-plan/types';
 import {
   allSettlementDecisionsMade,
   ownerDescription,
   ownerLabel,
+  staleSettlementNotice,
   type SettlementDecision,
 } from '@/lib/day-plan/presentation';
-import DayRitualLayer from './DayRitualLayer';
 
 const DECISIONS: Array<{
   value: SettlementDecision;
@@ -41,9 +40,10 @@ interface DaySettlementProps {
   savingItemIds?: ReadonlySet<string>;
   closing?: boolean;
   canDefer?: boolean;
-  announcement?: string;
   error?: string;
-  inertTargetRef?: RefObject<HTMLElement | null>;
+  // The hoisted DayRitualLayer owns the dialog chrome; these ids label it.
+  titleId: string;
+  descriptionId: string;
   onDecision: (itemId: string, decision: SettlementDecision) => void | Promise<void>;
   onCancel: () => void;
   onCloseDay: () => void | Promise<void>;
@@ -58,15 +58,13 @@ export default function DaySettlement({
   savingItemIds = new Set<string>(),
   closing = false,
   canDefer = true,
-  announcement,
   error,
-  inertTargetRef,
+  titleId,
+  descriptionId,
   onDecision,
   onCancel,
   onCloseDay,
 }: DaySettlementProps) {
-  const titleId = useId();
-  const descriptionId = useId();
   const allDecided = allSettlementDecisionsMade(
     unresolved.map((view) => view.item),
     decisions,
@@ -78,15 +76,16 @@ export default function DaySettlement({
     year: 'numeric',
     timeZone: 'UTC',
   }).format(new Date(`${plan.localDate}T12:00:00.000Z`));
+  // When settlement opens days later for a plan that was never closed, say why it is here.
+  const todayLocalDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: plan.timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const staleNotice = staleSettlementNotice(plan.localDate, todayLocalDate);
 
   return (
-    <DayRitualLayer
-      labelledBy={titleId}
-      describedBy={descriptionId}
-      announcement={announcement}
-      inertTargetRef={inertTargetRef}
-      onEscape={onCancel}
-    >
       <div
         className="my-auto overflow-hidden rounded-3xl border bg-background shadow-2xl"
         data-day-plan-id={plan.id}
@@ -97,7 +96,12 @@ export default function DaySettlement({
             <p className="mt-2 text-xs text-muted-foreground">
               Closing <time dateTime={plan.localDate}>{planDateLabel}</time>
             </p>
-            <h1 id={titleId} className="mt-2 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+            {staleNotice && (
+              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-foreground">
+                {staleNotice}
+              </p>
+            )}
+            <h1 id={titleId} tabIndex={-1} className="mt-2 text-2xl font-semibold tracking-tight text-foreground outline-none sm:text-3xl">
               Close the open loops.
             </h1>
             <p id={descriptionId} className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
@@ -223,7 +227,6 @@ export default function DaySettlement({
           </footer>
         </div>
       </div>
-    </DayRitualLayer>
   );
 }
 

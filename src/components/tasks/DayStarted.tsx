@@ -1,6 +1,5 @@
 'use client';
 
-import { useId, type RefObject } from 'react';
 import type { DayPlanExecutionState } from '@/lib/data/day-plan';
 import type {
   DayPlan,
@@ -11,7 +10,6 @@ import {
   helpfulProjectLabel,
   selectStartedExecutionRows,
 } from '@/lib/day-plan/presentation';
-import DayRitualLayer from './DayRitualLayer';
 import ExecutionConfigPanel from './ExecutionConfigPanel';
 import { RunStatusChip } from './ClaudeRunIndicators';
 
@@ -21,9 +19,10 @@ interface DayStartedProps {
   executionLoading?: boolean;
   executionBusyItemIds?: ReadonlySet<string>;
   executionError?: string;
-  announcement?: string;
   busy?: boolean;
-  inertTargetRef?: RefObject<HTMLElement | null>;
+  // The hoisted DayRitualLayer owns the dialog chrome; these ids label it.
+  titleId: string;
+  descriptionId: string;
   onKickoffExecution: (
     itemId: string,
     mode: DayPlanExecutionMode,
@@ -41,16 +40,13 @@ export default function DayStarted({
   executionLoading = false,
   executionBusyItemIds = new Set<string>(),
   executionError,
-  announcement,
   busy = false,
-  inertTargetRef,
+  titleId,
+  descriptionId,
   onKickoffExecution,
   onCancelExecution,
   onEnterDay,
 }: DayStartedProps) {
-  const titleId = useId();
-  const descriptionId = useId();
-
   const firstFocus =
     plan.items.find((item) => item.id === plan.recommendedFirstItemId) ??
     plan.items.find((item) => item.decision === 'accepted');
@@ -61,14 +57,6 @@ export default function DayStarted({
   );
 
   return (
-    <DayRitualLayer
-      labelledBy={titleId}
-      describedBy={descriptionId}
-      announcement={announcement}
-      inertTargetRef={inertTargetRef}
-      width="wide"
-      onEscape={() => undefined}
-    >
       <div
         className="my-auto overflow-hidden rounded-3xl border bg-background shadow-2xl"
         data-day-plan-id={plan.id}
@@ -80,7 +68,8 @@ export default function DayStarted({
             </p>
             <h1
               id={titleId}
-              className="mt-2 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl"
+              tabIndex={-1}
+              className="mt-2 text-2xl font-semibold tracking-tight text-foreground outline-none sm:text-3xl"
             >
               {firstFocus ? `Start here: ${firstFocus.title}` : 'Your day is set.'}
             </h1>
@@ -154,7 +143,7 @@ export default function DayStarted({
             <button
               type="button"
               data-ritual-primary
-              className="min-h-11 rounded-xl bg-foreground px-5 text-sm font-semibold text-background hover:opacity-90 sm:ml-auto"
+              className="press-scale min-h-11 rounded-xl bg-foreground px-5 text-sm font-semibold text-background hover:opacity-90 sm:ml-auto"
               onClick={onEnterDay}
             >
               Enter my day
@@ -162,7 +151,6 @@ export default function DayStarted({
           </footer>
         </div>
       </div>
-    </DayRitualLayer>
   );
 }
 

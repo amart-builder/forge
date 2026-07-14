@@ -36,7 +36,7 @@ export function OpenInClaudeCode({
   return (
     <button
       type="button"
-      className={`min-h-9 shrink-0 rounded-lg border border-accent-blue/50 bg-accent-blue/10 px-3 text-xs font-semibold text-foreground hover:bg-accent-blue/20 ${className}`}
+      className={`min-h-9 shrink-0 rounded-lg border border-accent-blue/50 bg-accent-blue/10 px-3 text-xs font-semibold text-foreground transition-[background-color,transform] duration-150 ease-[var(--ease-out-forge)] hover:bg-accent-blue/20 active:scale-[0.97] motion-reduce:transform-none motion-reduce:transition-none ${className}`}
       aria-label={title ? `Open ${title} in Claude Code` : 'Open in Claude Code'}
       onClick={() => {
         window.location.href = claudeResumeUrl(sessionId);

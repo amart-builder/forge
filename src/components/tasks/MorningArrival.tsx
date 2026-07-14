@@ -16,7 +16,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 import type { DayPlanExecutionState } from '@/lib/data/day-plan';
 import type {
   DayPlan,
@@ -34,7 +34,6 @@ import {
   selectCurrentExecutionRow,
   selectEssentialItems,
 } from '@/lib/day-plan/presentation';
-import DayRitualLayer from './DayRitualLayer';
 import ExecutionConfigPanel from './ExecutionConfigPanel';
 
 const ACTIVE_RUN_STATUSES = ['queued', 'starting', 'running', 'cancelling'];
@@ -59,7 +58,6 @@ interface MorningArrivalProps {
   recap?: string;
   freshnessLabel?: string;
   expandedItemId?: string | null;
-  announcement?: string;
   busy?: boolean;
   error?: string;
   assistantTurn?: DayPlanAssistantTurn;
@@ -69,7 +67,11 @@ interface MorningArrivalProps {
   executionLoading?: boolean;
   executionBusyItemIds?: ReadonlySet<string>;
   executionError?: string;
-  inertTargetRef?: RefObject<HTMLElement | null>;
+  // The hoisted DayRitualLayer owns the dialog chrome; these ids label it and the
+  // escape ref lets the layer route Escape to this view's collapse behavior.
+  titleId: string;
+  descriptionId: string;
+  escapeRef?: RefObject<(() => void) | null>;
   onExpand: (itemId: string) => void;
   onOwnerChange: (itemId: string, owner: DayOwner) => void | Promise<void>;
   onDragReorder: (activeId: string, overId: string) => void | Promise<void>;
@@ -175,7 +177,7 @@ function SortableArrivalCard({
         <div className="flex items-start gap-3">
           <button
             type="button"
-            className="flex min-h-11 min-w-11 shrink-0 cursor-grab items-center justify-center rounded-xl border text-muted-foreground hover:bg-muted focus:outline-none focus:ring-2 focus:ring-accent-blue/40 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50"
+            className={`press-scale ${isDragging ? 'press-scale-suppress' : ''} flex min-h-11 min-w-11 shrink-0 cursor-grab items-center justify-center rounded-xl border text-muted-foreground hover:bg-muted focus:outline-none focus:ring-2 focus:ring-accent-blue/40 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-50`}
             aria-label={`Reorder ${view.title}. Priority ${index + 1} of ${total}. Owner ${ownerLabel(view.item.owner)}.`}
             disabled={controlBusy}
             style={{ touchAction: 'none' }}
@@ -220,7 +222,7 @@ function SortableArrivalCard({
             {OWNERS.map((owner) => (
               <label
                 key={owner}
-                className={`flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-xl border px-2 text-xs font-medium focus-within:ring-2 focus-within:ring-accent-blue/40 ${
+                className={`press-scale flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-xl border px-2 text-xs font-medium focus-within:ring-2 focus-within:ring-accent-blue/40 ${
                   view.item.owner === owner ? 'border-accent-blue bg-accent-blue/5 text-foreground' : 'text-muted-foreground'
                 }`}
               >
@@ -309,7 +311,6 @@ export default function MorningArrival({
   recap,
   freshnessLabel,
   expandedItemId,
-  announcement,
   busy = false,
   error,
   assistantTurn,
@@ -319,7 +320,9 @@ export default function MorningArrival({
   executionLoading = false,
   executionBusyItemIds = new Set<string>(),
   executionError,
-  inertTargetRef,
+  titleId,
+  descriptionId,
+  escapeRef,
   onExpand,
   onOwnerChange,
   onDragReorder,
@@ -334,8 +337,6 @@ export default function MorningArrival({
   onAddWhatChanged,
   onOpenAllWork,
 }: MorningArrivalProps) {
-  const titleId = useId();
-  const descriptionId = useId();
   const assistantHeadingId = useId();
   const [assistantPrompt, setAssistantPrompt] = useState('');
   const assistantPromptRef = useRef<HTMLTextAreaElement>(null);
@@ -394,6 +395,16 @@ export default function MorningArrival({
     }
   }
 
+  // The hoisted DayRitualLayer routes Escape through this ref while arrival is the
+  // active ritual view.
+  useEffect(() => {
+    if (!escapeRef) return;
+    escapeRef.current = handleEscape;
+    return () => {
+      escapeRef.current = null;
+    };
+  });
+
   async function handleDismiss(itemId: string, title: string) {
     const nextItemId = visibleItems.find((view) => view.item.id !== itemId)?.item.id;
     if (expandedItemId === itemId) onExpand(itemId);
@@ -402,14 +413,6 @@ export default function MorningArrival({
   }
 
   return (
-    <DayRitualLayer
-      labelledBy={titleId}
-      describedBy={descriptionId}
-      announcement={announcement}
-      inertTargetRef={inertTargetRef}
-      width="wide"
-      onEscape={handleEscape}
-    >
       <div
         className="my-auto overflow-hidden rounded-3xl border bg-background shadow-2xl"
         data-day-plan-id={plan.id}
@@ -417,7 +420,7 @@ export default function MorningArrival({
         <div className="max-h-[calc(100dvh-7rem)] overflow-y-auto">
           <header className="sticky top-0 z-10 border-b bg-background/95 px-4 py-5 backdrop-blur sm:px-7">
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Morning arrival</p>
-            <h1 id={titleId} className="mt-2 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+            <h1 id={titleId} tabIndex={-1} className="mt-2 text-2xl font-semibold tracking-tight text-foreground outline-none sm:text-3xl">
               Choose where your attention goes.
             </h1>
             <p id={descriptionId} className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
@@ -536,7 +539,7 @@ export default function MorningArrival({
                   type="submit"
                   disabled={!assistantPrompt.trim() || assistantSubmitting}
                   aria-label={assistantSubmitting ? 'Sending to Claude' : 'Send'}
-                  className="min-h-11 min-w-20 rounded-xl bg-foreground px-4 text-sm font-semibold text-background transition-colors disabled:bg-muted-foreground/25 disabled:text-foreground/50 disabled:opacity-100"
+                  className="min-h-11 min-w-20 rounded-xl bg-foreground px-4 text-sm font-semibold text-background transition-[color,background-color,transform] duration-150 ease-[var(--ease-out-forge)] active:scale-[0.97] motion-reduce:transform-none motion-reduce:transition-none disabled:bg-muted-foreground/25 disabled:text-foreground/50 disabled:opacity-100"
                 >
                   {assistantSubmitting
                     ? <span aria-hidden="true" className="inline-block size-1.5 rounded-full bg-current opacity-50 motion-safe:animate-pulse" />
@@ -581,13 +584,13 @@ export default function MorningArrival({
           </div>
 
           <footer className="sticky bottom-0 z-10 flex flex-wrap items-center gap-2 border-t bg-background/95 px-4 py-4 backdrop-blur sm:px-7">
-            <button type="button" disabled={busy} className="min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-muted disabled:opacity-50" onClick={() => void onSnooze()}>
+            <button type="button" disabled={busy} className="press-scale min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-muted disabled:opacity-50" onClick={() => void onSnooze()}>
               Snooze 15 minutes
             </button>
-            <button type="button" disabled={busy} className="min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-muted disabled:opacity-50" onClick={() => void onSkip()}>
+            <button type="button" disabled={busy} className="press-scale min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-muted disabled:opacity-50" onClick={() => void onSkip()}>
               Skip Today
             </button>
-            <button type="button" disabled={busy} className="min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-muted disabled:opacity-50" onClick={() => void onBypass()}>
+            <button type="button" disabled={busy} className="press-scale min-h-11 rounded-xl px-3 text-sm text-muted-foreground hover:bg-muted disabled:opacity-50" onClick={() => void onBypass()}>
               Enter Living Current
             </button>
             <button
@@ -600,7 +603,7 @@ export default function MorningArrival({
                 anyExecutionBusy ||
                 visibleItems.length === 0
               }
-              className="min-h-11 rounded-xl bg-foreground px-5 text-sm font-semibold text-background hover:opacity-90 disabled:opacity-40 sm:ml-auto"
+              className="press-scale min-h-11 rounded-xl bg-foreground px-5 text-sm font-semibold text-background hover:opacity-90 disabled:opacity-40 sm:ml-auto"
               onClick={() => void onStartDay()}
             >
               {busy ? 'Setting your day…' : 'Start My Day'}
@@ -608,7 +611,6 @@ export default function MorningArrival({
           </footer>
         </div>
       </div>
-    </DayRitualLayer>
   );
 }
 

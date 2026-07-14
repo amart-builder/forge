@@ -382,7 +382,10 @@ export async function runOneExecution(options: ClaudeWorkerOptions): Promise<boo
           ? result.terminatedBy === "timeout" ? "execution_timeout" : "worker_interrupted"
           : result.overflowed
             ? "execution_output_too_large"
-            : resultError ?? (childPid ? "claude_failed" : "spawn_failed"),
+            : resultSummary
+              // A successful run (exit 0 with a parsed result) carries no error code.
+              ? undefined
+              : resultError ?? (childPid ? "claude_failed" : "spawn_failed"),
     });
   } catch (error) {
     options.store.finishExecutionRun({

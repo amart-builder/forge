@@ -44,7 +44,7 @@ import {
 import MorningArrival, { type MorningArrivalItem } from './MorningArrival';
 import DayStarted from './DayStarted';
 import DaySettlement from './DaySettlement';
-import DayRitualLayer from './DayRitualLayer';
+import DayRitualLayer, { DayRitualContentSwap } from './DayRitualLayer';
 import { OpenInClaudeCode, RunStatusChip } from './ClaudeRunIndicators';
 import CurrentCanvas, { type CurrentPoint, type Tributary } from './CurrentCanvas';
 import TaskDetail from './TaskDetail';
@@ -110,6 +110,22 @@ const JARVIS_HELD_TAG = 'jarvis-held';
 const BLOCKED_TAG = 'blocked';
 const FOCUS_KEY = 'forge.quiet-current.focus';
 const NOTES_KEY = 'forge.quiet-current.notes';
+
+// The hoisted DayRitualLayer stays mounted across ritual views; these stable ids let
+// each view's heading label the dialog and receive focus after a content swap.
+type OverlayRitualView = 'arrival' | 'started' | 'settlement' | 'transition';
+const RITUAL_TITLE_IDS: Record<OverlayRitualView, string> = {
+  arrival: 'day-ritual-title-arrival',
+  started: 'day-ritual-title-started',
+  settlement: 'day-ritual-title-settlement',
+  transition: 'day-ritual-title-transition',
+};
+const RITUAL_DESCRIPTION_IDS: Record<OverlayRitualView, string> = {
+  arrival: 'day-ritual-description-arrival',
+  started: 'day-ritual-description-started',
+  settlement: 'day-ritual-description-settlement',
+  transition: 'day-ritual-description-transition',
+};
 
 function hasTag(task: TaskData, tag: string): boolean {
   return task.tags.some((candidate) => candidate.trim().toLowerCase() === tag);
@@ -624,6 +640,8 @@ function TodayExperience({
   const undoRunningRef = useRef(false);
   const reconciliationRunningRef = useRef(false);
   const taskMutationRunningRef = useRef(false);
+  // MorningArrival publishes its staged escape handler here so the hoisted layer can call it.
+  const arrivalEscapeRef = useRef<(() => void) | null>(null);
 
   const todayColumn = findColumn(columns, TODAY_ALIASES);
   const notStartedColumn = findColumn(columns, NOT_STARTED_ALIASES);
@@ -706,6 +724,13 @@ function TodayExperience({
     candidates: dayPlanCandidates,
     candidatesReady: candidateEvidence?.freshness === 'current',
   });
+  const ritualView: OverlayRitualView | undefined =
+    dayRitual.view === 'arrival' ||
+    dayRitual.view === 'started' ||
+    dayRitual.view === 'settlement' ||
+    dayRitual.view === 'transition'
+      ? dayRitual.view
+      : undefined;
 
   const doneToday = useMemo(() => {
     const today = new Date();
@@ -1744,10 +1769,15 @@ function TodayExperience({
                   dayRitual.busy ||
                   dayRitual.plan.state !== 'proposed'
                 }
+                title="Available when a new day is proposed."
+                aria-describedby="morning-arrival-availability"
                 onClick={() => void openMorningArrival()}
               >
                 Morning Arrival
               </button>
+              <span id="morning-arrival-availability" className="sr-only">
+                Available when a new day is proposed.
+              </span>
               <button
                 type="button"
                 className="current-capture-toggle"
@@ -2120,119 +2150,131 @@ function TodayExperience({
       )}
       </div>
 
-      {dayRitual.view === 'arrival' && dayRitual.plan && (
-        <MorningArrival
-          plan={dayRitual.plan}
-          items={arrivalItems}
-          recommendation={recommendation}
-          recap={morningRecap}
-          freshnessLabel={planEvidenceRefreshedAt
-            ? `Evidence refreshed ${new Date(planEvidenceRefreshedAt).toLocaleTimeString([], {
-                hour: 'numeric',
-                minute: '2-digit',
-              })}`
-            : 'Using the latest verified task evidence'}
-          expandedItemId={expandedArrivalItemId}
-          announcement={dayRitual.announcement}
-          busy={dayRitual.busy}
-          error={dayRitual.error}
-          assistantTurn={dayRitual.assistantTurn}
-          assistantSubmitting={dayRitual.assistantSubmitting}
-          assistantError={dayRitual.assistantError}
-          executionState={dayRitual.executionState}
-          executionLoading={dayRitual.executionLoading}
-          executionBusyItemIds={dayRitual.executionBusyItemIds}
-          executionError={dayRitual.executionError}
-          inertTargetRef={livingCurrentRef}
-          onExpand={(itemId) => setExpandedArrivalItemId((current) => current === itemId ? null : itemId)}
-          onOwnerChange={(itemId, owner) => dayRitual.setOwner(itemId, owner)}
-          onDragReorder={async (activeId, overId) => {
-            const next = reorderDayPlanItems(arrivalPlanItems, activeId, overId);
-            const position = next.findIndex((item) => item.id === activeId);
-            const title = next[position]?.title ?? 'Task';
-            if (position >= 0) await dayRitual.reorder(activeId, position, title);
-          }}
-          onDismiss={dayRitual.dismissItem}
-          onAssistantSubmit={dayRitual.submitAssistantPrompt}
-          onKickoffExecution={dayRitual.kickoffExecution}
-          onCancelExecution={dayRitual.cancelExecution}
-          onSnooze={() => dayRitual.snooze().catch(() => undefined)}
-          onSkip={() => dayRitual.skip().catch(() => undefined)}
-          onBypass={() => dayRitual.bypass().catch(() => undefined)}
-          onStartDay={startPlannedDay}
-          onAddWhatChanged={() => {
-            void dayRitual.bypass().then(() => setCaptureOpen(true)).catch(() => undefined);
-          }}
-          onOpenAllWork={onOpenAllWork ? () => {
-            void dayRitual.bypass().then(onOpenAllWork).catch(() => undefined);
-          } : undefined}
-        />
-      )}
-
-      {dayRitual.view === 'settlement' && dayRitual.plan && (
-        <DaySettlement
-          plan={dayRitual.plan}
-          completed={completedForSettlement}
-          unresolved={unresolvedForSettlement}
-          decisions={settlementDecisions}
-          proposedTomorrowTitle={proposedTomorrow?.title}
-          savingItemIds={dayRitual.savingItemIds}
-          closing={dayRitual.busy}
-          announcement={dayRitual.announcement}
-          error={dayRitual.error}
-          canDefer={Boolean(notStartedColumn)}
-          inertTargetRef={livingCurrentRef}
-          onDecision={(itemId, disposition) => {
-            if (disposition === 'defer' && !notStartedColumn) {
-              setSurfaceError('Forge needs a Not Started or To Do list before it can defer work.');
-              return;
-            }
-            return dayRitual.decideSettlement(itemId, disposition);
-          }}
-          onCancel={dayRitual.cancelSettlement}
-          onCloseDay={closeSettledDay}
-        />
-      )}
-
-      {dayRitual.view === 'started' && dayRitual.plan && (
-        <DayStarted
-          plan={dayRitual.plan}
-          executionState={dayRitual.executionState}
-          executionLoading={dayRitual.executionLoading}
-          executionBusyItemIds={dayRitual.executionBusyItemIds}
-          executionError={dayRitual.executionError}
-          announcement={dayRitual.announcement}
-          busy={dayRitual.busy}
-          inertTargetRef={livingCurrentRef}
-          onKickoffExecution={dayRitual.kickoffExecution}
-          onCancelExecution={dayRitual.cancelExecution}
-          onEnterDay={enterStartedDay}
-        />
-      )}
-
-      {dayRitual.view === 'transition' && dayRitual.plan && (
+      {ritualView && dayRitual.plan && (
         <DayRitualLayer
-          labelledBy="day-start-transition-title"
+          labelledBy={RITUAL_TITLE_IDS[ritualView]}
+          describedBy={RITUAL_DESCRIPTION_IDS[ritualView]}
+          announcement={dayRitual.announcement}
           inertTargetRef={livingCurrentRef}
-          onEscape={() => undefined}
+          width={ritualView === 'settlement' ? 'default' : 'wide'}
+          onEscape={
+            ritualView === 'arrival'
+              ? () => arrivalEscapeRef.current?.()
+              : ritualView === 'settlement'
+                ? dayRitual.cancelSettlement
+                : () => undefined
+          }
         >
-          <div
-            className="mx-auto w-full max-w-xl rounded-3xl border bg-background px-6 py-12 text-center shadow-2xl sm:px-10"
-            data-day-plan-id={dayRitual.plan.id}
+          <DayRitualContentSwap
+            viewKey={ritualView}
+            focusTargetId={RITUAL_TITLE_IDS[ritualView]}
           >
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              Living Current
-            </p>
-            <h1
-              id="day-start-transition-title"
-              className="mt-3 text-2xl font-semibold tracking-tight text-foreground sm:text-3xl"
-            >
-              {dayRitual.transitionMessage}
-            </h1>
-            <p className="mt-3 text-sm text-muted-foreground">
-              Bringing your first focus into view.
-            </p>
-          </div>
+            {ritualView === 'arrival' ? (
+              <MorningArrival
+                plan={dayRitual.plan}
+                items={arrivalItems}
+                recommendation={recommendation}
+                recap={morningRecap}
+                freshnessLabel={planEvidenceRefreshedAt
+                  ? `Evidence refreshed ${new Date(planEvidenceRefreshedAt).toLocaleTimeString([], {
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    })}`
+                  : 'Using the latest verified task evidence'}
+                expandedItemId={expandedArrivalItemId}
+                busy={dayRitual.busy}
+                error={dayRitual.error}
+                assistantTurn={dayRitual.assistantTurn}
+                assistantSubmitting={dayRitual.assistantSubmitting}
+                assistantError={dayRitual.assistantError}
+                executionState={dayRitual.executionState}
+                executionLoading={dayRitual.executionLoading}
+                executionBusyItemIds={dayRitual.executionBusyItemIds}
+                executionError={dayRitual.executionError}
+                titleId={RITUAL_TITLE_IDS.arrival}
+                descriptionId={RITUAL_DESCRIPTION_IDS.arrival}
+                escapeRef={arrivalEscapeRef}
+                onExpand={(itemId) => setExpandedArrivalItemId((current) => current === itemId ? null : itemId)}
+                onOwnerChange={(itemId, owner) => dayRitual.setOwner(itemId, owner)}
+                onDragReorder={async (activeId, overId) => {
+                  const next = reorderDayPlanItems(arrivalPlanItems, activeId, overId);
+                  const position = next.findIndex((item) => item.id === activeId);
+                  const title = next[position]?.title ?? 'Task';
+                  if (position >= 0) await dayRitual.reorder(activeId, position, title);
+                }}
+                onDismiss={dayRitual.dismissItem}
+                onAssistantSubmit={dayRitual.submitAssistantPrompt}
+                onKickoffExecution={dayRitual.kickoffExecution}
+                onCancelExecution={dayRitual.cancelExecution}
+                onSnooze={() => dayRitual.snooze().catch(() => undefined)}
+                onSkip={() => dayRitual.skip().catch(() => undefined)}
+                onBypass={() => dayRitual.bypass().catch(() => undefined)}
+                onStartDay={startPlannedDay}
+                onAddWhatChanged={() => {
+                  void dayRitual.bypass().then(() => setCaptureOpen(true)).catch(() => undefined);
+                }}
+                onOpenAllWork={onOpenAllWork ? () => {
+                  void dayRitual.bypass().then(onOpenAllWork).catch(() => undefined);
+                } : undefined}
+              />
+            ) : ritualView === 'settlement' ? (
+              <DaySettlement
+                plan={dayRitual.plan}
+                completed={completedForSettlement}
+                unresolved={unresolvedForSettlement}
+                decisions={settlementDecisions}
+                proposedTomorrowTitle={proposedTomorrow?.title}
+                savingItemIds={dayRitual.savingItemIds}
+                closing={dayRitual.busy}
+                error={dayRitual.error}
+                canDefer={Boolean(notStartedColumn)}
+                titleId={RITUAL_TITLE_IDS.settlement}
+                descriptionId={RITUAL_DESCRIPTION_IDS.settlement}
+                onDecision={(itemId, disposition) => {
+                  if (disposition === 'defer' && !notStartedColumn) {
+                    setSurfaceError('Forge needs a Not Started or To Do list before it can defer work.');
+                    return;
+                  }
+                  return dayRitual.decideSettlement(itemId, disposition);
+                }}
+                onCancel={dayRitual.cancelSettlement}
+                onCloseDay={closeSettledDay}
+              />
+            ) : ritualView === 'started' ? (
+              <DayStarted
+                plan={dayRitual.plan}
+                executionState={dayRitual.executionState}
+                executionLoading={dayRitual.executionLoading}
+                executionBusyItemIds={dayRitual.executionBusyItemIds}
+                executionError={dayRitual.executionError}
+                busy={dayRitual.busy}
+                titleId={RITUAL_TITLE_IDS.started}
+                descriptionId={RITUAL_DESCRIPTION_IDS.started}
+                onKickoffExecution={dayRitual.kickoffExecution}
+                onCancelExecution={dayRitual.cancelExecution}
+                onEnterDay={enterStartedDay}
+              />
+            ) : (
+              <div
+                className="mx-auto w-full max-w-xl rounded-3xl border bg-background px-6 py-12 text-center shadow-2xl sm:px-10"
+                data-day-plan-id={dayRitual.plan.id}
+              >
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  Living Current
+                </p>
+                <h1
+                  id={RITUAL_TITLE_IDS.transition}
+                  tabIndex={-1}
+                  className="mt-3 text-2xl font-semibold tracking-tight text-foreground outline-none sm:text-3xl"
+                >
+                  {dayRitual.transitionMessage}
+                </h1>
+                <p id={RITUAL_DESCRIPTION_IDS.transition} className="mt-3 text-sm text-muted-foreground">
+                  Bringing your first focus into view.
+                </p>
+              </div>
+            )}
+          </DayRitualContentSwap>
         </DayRitualLayer>
       )}
     </div>

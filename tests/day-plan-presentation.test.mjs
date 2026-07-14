@@ -14,12 +14,14 @@ import {
   ownerDescription,
   reorderDayPlanItems,
   resolveArrivalEscape,
+  resolveRitualContentSwap,
   selectCurrentExecutionRow,
   selectEssentialItems,
   selectRecommendedHumanFocus,
   selectStartedExecutionRows,
   shortArrivalSummary,
   shouldKeepStartedView,
+  staleSettlementNotice,
 } from '../src/lib/day-plan/presentation.ts';
 import {
   planTaskReconciliation,
@@ -254,6 +256,33 @@ test('escape collapses an expanded card and otherwise does nothing, never bypass
   );
   assert.deepEqual(resolveArrivalEscape({ dragging: false, expandedItemId: null }), { type: 'none' });
   assert.deepEqual(resolveArrivalEscape({ dragging: true, expandedItemId: 'item-a' }), { type: 'none' });
+});
+
+test('ritual view swaps crossfade, cut immediately under reduced motion, and skip no-ops', () => {
+  assert.equal(
+    resolveRitualContentSwap({ displayedKey: 'arrival', nextKey: 'arrival', reducedMotion: false }),
+    'none',
+  );
+  assert.equal(
+    resolveRitualContentSwap({ displayedKey: 'arrival', nextKey: 'arrival', reducedMotion: true }),
+    'none',
+  );
+  assert.equal(
+    resolveRitualContentSwap({ displayedKey: 'arrival', nextKey: 'started', reducedMotion: false }),
+    'crossfade',
+  );
+  assert.equal(
+    resolveRitualContentSwap({ displayedKey: 'arrival', nextKey: 'started', reducedMotion: true }),
+    'immediate',
+  );
+});
+
+test('settlement explains itself only when the plan being closed is not today', () => {
+  assert.equal(staleSettlementNotice('2026-07-14', '2026-07-14'), undefined);
+  assert.equal(
+    staleSettlementNotice('2026-07-11', '2026-07-14'),
+    "July 11 was never closed. Settle it before today's plan begins.",
+  );
 });
 
 test('ritual and secondary surface failures remain visible together', () => {

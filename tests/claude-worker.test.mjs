@@ -171,6 +171,8 @@ test('plan-review worker uses a resumable safe session and stops at plan_ready',
   const finished = store.getExecutionRun(queued.id);
   assert.equal(finished.status, 'plan_ready');
   assert.equal(finished.exitCode, 0);
+  // A successful run must not carry a stale failure code next to its result.
+  assert.equal(finished.errorCode, undefined);
   assert.ok(finished.pid > 0);
   const captured = JSON.parse(readFileSync(fake.capture, 'utf8'));
   assert.equal(captured.args[captured.args.indexOf('--session-id') + 1], queued.claudeSessionId);
@@ -205,6 +207,7 @@ test('Together plan review stops at ready_to_join instead of completing the task
   const fake = fakeClaude(dir, '{"type":"result","result":"Ready to work together"}\n');
   await runOneExecution(workerOptions(dir, store, fake.executable));
   assert.equal(store.getExecutionRun(queued.id).status, 'ready_to_join');
+  assert.equal(store.getExecutionRun(queued.id).errorCode, undefined);
   assert.equal(store.getPlan(plan.id).items[0].decision, 'accepted');
 });
 
