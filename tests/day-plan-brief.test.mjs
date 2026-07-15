@@ -13,8 +13,10 @@ import {
   nextBriefTargetLocalDate,
   overlayBriefOnCandidates,
   selectEligibleMorningBrief,
+  selectMorningBriefGeneration,
   settlementReconciliationComplete,
   validateMorningBrief,
+  MORNING_BRIEF_FAILED_WINDOW_HOURS,
   MORNING_BRIEF_PROMPT_VERSION,
   MORNING_BRIEF_SCHEMA_VERSION,
 } from '../src/lib/day-plan/brief.ts';
@@ -625,6 +627,125 @@ test('a late-finishing older generation never clobbers a newer artifact', (t) =>
   assert.equal(store.getMorningBrief(older.id).status, 'failed');
   assert.equal(store.latestEligibleMorningBrief('2026-07-14').id, newer.id);
   assert.equal(store.listMorningBriefs('2026-07-14').length, 2);
+});
+
+// ---------------------------------------------------------------------------
+// In-flight generation state (pure selector).
+// ---------------------------------------------------------------------------
+
+function genArtifact(overrides) {
+  return {
+    id: overrides.id ?? `gen-${Math.random().toString(36).slice(2)}`,
+    targetLocalDate: '2026-07-14',
+    status: 'queued',
+    promptVersion: MORNING_BRIEF_PROMPT_VERSION,
+    schemaVersion: MORNING_BRIEF_SCHEMA_VERSION,
+    modelAlias: 'opus',
+    effort: 'high',
+    budgetUsd: 1.5,
+    createdAt: '2026-07-14T13:00:00.000Z',
+    updatedAt: '2026-07-14T13:00:00.000Z',
+    ...overrides,
+  };
+}
+
+test('brief generation state: idle when there is nothing for the date', () => {
+  const now = new Date('2026-07-14T14:00:00.000Z');
+  assert.deepEqual(selectMorningBriefGeneration([], '2026-07-14', now), { state: 'idle' });
+  // A row for another date is ignored.
+  assert.deepEqual(
+    selectMorningBriefGeneration(
+      [genArtifact({ targetLocalDate: '2026-07-13', status: 'running', startedAt: '2026-07-14T13:59:00.000Z' })],
+      '2026-07-14',
+      now,
+    ),
+    { state: 'idle' },
+  );
+});
+
+test('brief generation state: an active row wins, running over queued, and carries startedAt', () => {
+  const now = new Date('2026-07-14T14:00:00.000Z');
+  assert.deepEqual(
+    selectMorningBriefGeneration([genArtifact({ status: 'queued' })], '2026-07-14', now),
+    { state: 'queued' },
+  );
+  assert.deepEqual(
+    selectMorningBriefGeneration(
+      [genArtifact({ status: 'running', startedAt: '2026-07-14T13:58:00.000Z' })],
+      '2026-07-14',
+      now,
+    ),
+    { state: 'running', startedAt: '2026-07-14T13:58:00.000Z' },
+  );
+  // Running beats a co-existing queued row (the queued row is a late re-request).
+  assert.deepEqual(
+    selectMorningBriefGeneration(
+      [
+        genArtifact({ id: 'q', status: 'queued' }),
+        genArtifact({ id: 'r', status: 'running', startedAt: '2026-07-14T13:59:00.000Z' }),
+      ],
+      '2026-07-14',
+      now,
+    ),
+    { state: 'running', startedAt: '2026-07-14T13:59:00.000Z' },
+  );
+  // An active row beats a recent failure.
+  assert.equal(
+    selectMorningBriefGeneration(
+      [
+        genArtifact({ id: 'f', status: 'failed', finishedAt: '2026-07-14T13:50:00.000Z' }),
+        genArtifact({ id: 'q', status: 'queued' }),
+      ],
+      '2026-07-14',
+      now,
+    ).state,
+    'queued',
+  );
+});
+
+test('brief generation state: a failure only shows inside the window, else idle', () => {
+  const now = new Date('2026-07-14T14:00:00.000Z');
+  // 1h ago, inside the 6h window.
+  assert.deepEqual(
+    selectMorningBriefGeneration(
+      [genArtifact({ status: 'failed', startedAt: '2026-07-14T12:55:00.000Z', finishedAt: '2026-07-14T13:00:00.000Z' })],
+      '2026-07-14',
+      now,
+    ),
+    { state: 'failed', startedAt: '2026-07-14T12:55:00.000Z' },
+  );
+  // Exactly at the window edge (6h) is still shown.
+  const edge = new Date(`2026-07-14T13:00:00.000Z`);
+  edge.setHours(edge.getHours() + MORNING_BRIEF_FAILED_WINDOW_HOURS);
+  assert.equal(
+    selectMorningBriefGeneration(
+      [genArtifact({ status: 'failed', finishedAt: '2026-07-14T13:00:00.000Z' })],
+      '2026-07-14',
+      edge,
+    ).state,
+    'failed',
+  );
+  // 7h ago, outside the window, is treated as idle.
+  assert.deepEqual(
+    selectMorningBriefGeneration(
+      [genArtifact({ status: 'failed', finishedAt: '2026-07-14T07:00:00.000Z' })],
+      '2026-07-14',
+      now,
+    ),
+    { state: 'idle' },
+  );
+  // The most recent failure wins among several inside the window.
+  assert.deepEqual(
+    selectMorningBriefGeneration(
+      [
+        genArtifact({ id: 'old', status: 'failed', finishedAt: '2026-07-14T12:00:00.000Z' }),
+        genArtifact({ id: 'new', status: 'failed', startedAt: '2026-07-14T13:29:00.000Z', finishedAt: '2026-07-14T13:30:00.000Z' }),
+      ],
+      '2026-07-14',
+      now,
+    ),
+    { state: 'failed', startedAt: '2026-07-14T13:29:00.000Z' },
+  );
 });
 
 test('sales action states mark approve, edit, and skip without touching the artifact', (t) => {

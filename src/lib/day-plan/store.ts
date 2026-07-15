@@ -30,6 +30,7 @@ import type {
   EnsureDayPlanInput,
   KickoffDayPlanItemInput,
   KickoffDayPlanItemResult,
+  RecommendationCandidate,
 } from "./types";
 import {
   assessDayPlanExecutionReadiness,
@@ -59,6 +60,19 @@ import {
 
 type Clock = () => Date;
 
+// Mutations that count as a meaningful arrival interaction. Each durably stamps
+// arrival_interacted_at, closing the late-attach window. Arrival lifecycle
+// transitions (open/snooze/skip/bypass/reopen), start_day, and settlement are
+// deliberately excluded.
+const CONTENT_MUTATION_ACTIONS = new Set<string>([
+  "item_accept",
+  "item_edit",
+  "item_later",
+  "item_dismiss",
+  "item_owner",
+  "item_reorder",
+]);
+
 type DayPlanRow = {
   id: string;
   local_date: string;
@@ -70,6 +84,7 @@ type DayPlanRow = {
   last_mutation_id: string | null;
   items_json: string;
   brief_id: string | null;
+  arrival_interacted_at: string | null;
   recommended_first_item_id: string | null;
   recommended_first_task_id: string | null;
   snoozed_until: string | null;
@@ -418,6 +433,7 @@ function planFromRow(row: DayPlanRow): DayPlan {
     lastMutationId: row.last_mutation_id ?? undefined,
     items: parseJson<DayPlanItem[]>(row.items_json, "day plan items"),
     briefId: row.brief_id ?? undefined,
+    arrivalInteractedAt: row.arrival_interacted_at ?? undefined,
     recommendedFirstItemId: row.recommended_first_item_id ?? undefined,
     recommendedFirstTaskId: row.recommended_first_task_id ?? undefined,
     snoozedUntil: row.snoozed_until ?? undefined,
@@ -660,6 +676,9 @@ export function createDayPlanStore(options: {
   if (!dayPlanColumns.has("brief_id")) {
     db.exec("ALTER TABLE day_plans ADD COLUMN brief_id TEXT");
   }
+  if (!dayPlanColumns.has("arrival_interacted_at")) {
+    db.exec("ALTER TABLE day_plans ADD COLUMN arrival_interacted_at TEXT");
+  }
 
   const selectPlan = db.prepare("SELECT * FROM day_plans WHERE id = ?");
   const selectOpenPlan = db.prepare("SELECT * FROM day_plans WHERE open_slot = 1 LIMIT 1");
@@ -775,7 +794,8 @@ export function createDayPlanStore(options: {
     db.prepare(
       `UPDATE day_plans SET
         timezone = ?, open_slot = ?, plan_state = ?, arrival_state = ?, settlement_state = ?,
-        version = ?, last_mutation_id = ?, items_json = ?, recommended_first_item_id = ?,
+        version = ?, last_mutation_id = ?, items_json = ?, brief_id = ?, arrival_interacted_at = ?,
+        recommended_first_item_id = ?,
         recommended_first_task_id = ?, snoozed_until = ?, next_day_note = ?, confirmed_at = ?,
         settled_at = ?, updated_at = ?
        WHERE id = ?`,
@@ -788,6 +808,8 @@ export function createDayPlanStore(options: {
       plan.version,
       plan.lastMutationId ?? null,
       JSON.stringify(plan.items),
+      plan.briefId ?? null,
+      plan.arrivalInteractedAt ?? null,
       plan.recommendedFirstItemId ?? null,
       plan.recommendedFirstTaskId ?? null,
       plan.snoozedUntil ?? null,
@@ -988,6 +1010,9 @@ export function createDayPlanStore(options: {
       const plan = getPlan(input.planId);
       if (!plan) throw new DayPlanNotFound();
       if (plan.version !== input.expectedVersion) throw new DayPlanVersionConflict(plan);
+      // Configuring execution during an open arrival is a real interaction; freeze
+      // the arrival against a late brief attach (no-op once the day is active).
+      stampArrivalInteraction(input.planId, now().toISOString());
       const item = requireItem(plan, input.itemId);
       // Execution can be configured while arrival is open, and also once the day is
       // active for an accepted agent-owned item, so the started view can set up work
@@ -1121,6 +1146,9 @@ export function createDayPlanStore(options: {
       ) {
         throw new DayPlanInvalidTransition("Kickoff requires an open arrival or active day.");
       }
+      // Kicking off work from an open arrival is a real interaction (no-op once
+      // the day is active).
+      stampArrivalInteraction(input.planId, now().toISOString());
       const before = clonePlan(plan);
       const item = requireItem(plan, input.itemId);
       requireState(
@@ -1202,6 +1230,8 @@ export function createDayPlanStore(options: {
           (id, day_plan_id, base_version, user_text, state, created_at)
          VALUES (?, ?, ?, ?, 'queued', ?)`,
       ).run(input.id, plan.id, plan.version, userText, createdAt);
+      // Submitting a refine-box turn is a real interaction; freeze the arrival.
+      stampArrivalInteraction(plan.id, createdAt);
       return { turn: getAssistantTurn(input.id)!, replayed: false };
     });
   }
@@ -1783,6 +1813,146 @@ export function createDayPlanStore(options: {
     });
   }
 
+  // Imports a relay artifact (already deeply validated by the caller) in one
+  // transaction, reconciling every local same-key state:
+  //   - a local succeeded row for the same composite key wins by earliest
+  //     finished_at (identical content, so this only adjusts provenance);
+  //   - a local queued/running row for the same date is adopted into a succeeded
+  //     row carrying the imported payload (a late local finisher's complete then
+  //     no-ops, which the store already tolerates);
+  //   - otherwise the artifact is inserted as a new succeeded row.
+  // Idempotent and safe against a concurrent local generation of the same
+  // envelope. Returns whether a row was written.
+  function importMorningBrief(
+    artifact: MorningBriefArtifact,
+  ): { imported: boolean; adopted: boolean } {
+    if (artifact.status !== "succeeded" || !artifact.briefJson || !artifact.inputHash) {
+      return { imported: false, adopted: false };
+    }
+    return immediate(() => {
+      const updatedAt = now().toISOString();
+      const importedFinishedAt = artifact.finishedAt ?? artifact.createdAt;
+      const sameKey = db
+        .prepare(
+          `SELECT * FROM day_plan_briefs
+           WHERE target_local_date = ? AND input_hash = ?
+             AND prompt_version = ? AND schema_version = ? AND status = 'succeeded'
+           LIMIT 1`,
+        )
+        .get(
+          artifact.targetLocalDate,
+          artifact.inputHash,
+          artifact.promptVersion,
+          artifact.schemaVersion,
+        ) as MorningBriefRow | undefined;
+      if (sameKey) {
+        // Deterministic winner on a same-key conflict is the earliest
+        // finished_at, and the winner's COMPLETE canonical payload is adopted
+        // (an identical input hash does not guarantee identical model output).
+        // The row id is kept so references stay valid — but a brief a plan has
+        // already consumed is pinned: its content must never change under an
+        // arrival that was built from it.
+        const existingFinished = sameKey.finished_at ?? sameKey.created_at;
+        if (importedFinishedAt < existingFinished) {
+          const pinned = db
+            .prepare("SELECT 1 FROM day_plans WHERE brief_id = ? LIMIT 1")
+            .get(sameKey.id);
+          if (!pinned) {
+            db.prepare(
+              `UPDATE day_plan_briefs
+               SET source_manifest_json = ?, model_alias = ?, effort = ?, budget_usd = ?,
+                   brief_json = ?, created_at = ?, started_at = ?, finished_at = ?, updated_at = ?
+               WHERE id = ? AND status = 'succeeded'`,
+            ).run(
+              artifact.sourceManifest ? JSON.stringify(artifact.sourceManifest) : null,
+              artifact.modelAlias,
+              artifact.effort,
+              artifact.budgetUsd,
+              artifact.briefJson,
+              artifact.createdAt,
+              artifact.startedAt ?? null,
+              importedFinishedAt,
+              updatedAt,
+              sameKey.id,
+            );
+          }
+        }
+        return { imported: false, adopted: false };
+      }
+      // A dead failed row with this composite key would collide with the unique
+      // index on insert/adopt; it carries no artifact, so prune it first.
+      db.prepare(
+        `DELETE FROM day_plan_briefs
+         WHERE target_local_date = ? AND input_hash = ?
+           AND prompt_version = ? AND schema_version = ? AND status = 'failed'`,
+      ).run(
+        artifact.targetLocalDate,
+        artifact.inputHash,
+        artifact.promptVersion,
+        artifact.schemaVersion,
+      );
+      const adoptable = db
+        .prepare(
+          `SELECT * FROM day_plan_briefs
+           WHERE target_local_date = ? AND status IN ('queued','running')
+           ORDER BY created_at, id LIMIT 1`,
+        )
+        .get(artifact.targetLocalDate) as MorningBriefRow | undefined;
+      if (adoptable) {
+        const changed = db
+          .prepare(
+            `UPDATE day_plan_briefs
+             SET status = 'succeeded', input_hash = ?, prompt_version = ?, schema_version = ?,
+                 source_manifest_json = ?, model_alias = ?, effort = ?, budget_usd = ?,
+                 brief_json = ?, error_code = NULL,
+                 started_at = COALESCE(started_at, ?), finished_at = ?, updated_at = ?
+             WHERE id = ? AND status IN ('queued','running')`,
+          )
+          .run(
+            artifact.inputHash,
+            artifact.promptVersion,
+            artifact.schemaVersion,
+            artifact.sourceManifest ? JSON.stringify(artifact.sourceManifest) : null,
+            artifact.modelAlias,
+            artifact.effort,
+            artifact.budgetUsd,
+            artifact.briefJson,
+            artifact.startedAt ?? null,
+            importedFinishedAt,
+            updatedAt,
+            adoptable.id,
+          ).changes;
+        if (changed > 0) return { imported: true, adopted: true };
+        // Raced with a local transition; fall through to a plain insert.
+      }
+      const inserted = db
+        .prepare(
+          `INSERT OR IGNORE INTO day_plan_briefs
+            (id, target_local_date, status, input_hash, prompt_version, schema_version,
+             source_manifest_json, model_alias, effort, budget_usd, brief_json, error_code,
+             created_at, updated_at, started_at, finished_at)
+           VALUES (?, ?, 'succeeded', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+        )
+        .run(
+          artifact.id,
+          artifact.targetLocalDate,
+          artifact.inputHash,
+          artifact.promptVersion,
+          artifact.schemaVersion,
+          artifact.sourceManifest ? JSON.stringify(artifact.sourceManifest) : null,
+          artifact.modelAlias,
+          artifact.effort,
+          artifact.budgetUsd,
+          artifact.briefJson,
+          artifact.createdAt,
+          updatedAt,
+          artifact.startedAt ?? null,
+          importedFinishedAt,
+        ).changes;
+      return { imported: inserted > 0, adopted: false };
+    });
+  }
+
   function interruptStaleMorningBriefs(staleBefore: string): number {
     return db
       .prepare(
@@ -1866,7 +2036,12 @@ export function createDayPlanStore(options: {
     return immediate(() => {
       const existingEvent = selectEvent.get(input.mutationId) as EventRow | undefined;
       if (existingEvent) {
-        if (existingEvent.event_type !== "ensure") {
+        // A prior ensure with this id may have either returned/created a plan or
+        // late-attached a brief; both replay as an untouched return.
+        if (
+          existingEvent.event_type !== "ensure" &&
+          existingEvent.event_type !== "brief_attach"
+        ) {
           throw new DayPlanInvalidTransition("Mutation ID was already used for another action.");
         }
         const replayed = getPlan(existingEvent.day_plan_id);
@@ -1879,6 +2054,23 @@ export function createDayPlanStore(options: {
         (selectDatePlan.get(input.localDate) as DayPlanRow | undefined);
       if (existingRow) {
         const existing = planFromRow(existingRow);
+        // Guarded late-attach. A brief that landed after this plan was created
+        // can still overlay a pristine, untouched arrival, but never after any
+        // interaction (the durable arrival_interacted_at marker) or once a brief
+        // is already consumed. All guards are checked inside this same immediate
+        // transaction; the whole path is fail-open — any defect returns the plan
+        // untouched via the ordinary ensure event below.
+        const attached = maybeLateAttachBrief(existing, input);
+        if (attached) {
+          return { plan: attached, snapshot: getSnapshot(attached.id), replayed: false };
+        }
+        // Attach-only (the 15s late-brief poll): nothing attached, so this is a
+        // deliberate silent no-op — no ledger event and the mutation id stays
+        // unconsumed, so a repeating poll never grows the ledger. Only a real
+        // attach above records anything (as its brief_attach event).
+        if (input.attachOnly) {
+          return { plan: existing, snapshot: getSnapshot(existing.id), replayed: false };
+        }
         appendEvent({
           id: input.mutationId,
           planId: existing.id,
@@ -1890,32 +2082,11 @@ export function createDayPlanStore(options: {
         return { plan: existing, snapshot: getSnapshot(existing.id), replayed: false };
       }
 
-      if (input.candidates.length > 10) {
-        throw new DayPlanInvalidTransition("Arrival supports at most ten candidates.");
-      }
-      if (
-        new Set(input.candidates.map((candidate) => candidate.taskId)).size !==
-          input.candidates.length ||
-        new Set(input.candidates.map((candidate) => candidate.outcomeKey)).size !==
-          input.candidates.length
-      ) {
-        throw new DayPlanInvalidTransition("Arrival candidates must be unique.");
-      }
-      if (
-        input.candidates.some(
-          (candidate) =>
-            candidate.commitment !== "ink" ||
-            candidate.conflicts.length > 0 ||
-            candidate.sourceRefs.length !== 1 ||
-            candidate.sourceRefs[0].sourceType !== "task" ||
-            candidate.sourceRefs[0].recordId !== candidate.taskId ||
-            candidate.sourceRefs[0].freshness !== "current",
-        )
-      ) {
-        throw new DayPlanInvalidTransition(
-          "Arrival candidates require current accepted task evidence.",
-        );
-      }
+      // Attach-only must never create a plan (the poll only runs against an
+      // existing arrival; a vanished plan means the ritual moved on).
+      if (input.attachOnly) throw new DayPlanNotFound();
+
+      assertArrivalCandidates(input.candidates);
 
       const createdAt = now().toISOString();
       const id = randomUUID();
@@ -1969,8 +2140,9 @@ export function createDayPlanStore(options: {
       db.prepare(
         `INSERT INTO day_plans
           (id, local_date, timezone, open_slot, plan_state, arrival_state, settlement_state,
-           version, last_mutation_id, items_json, brief_id, created_at, updated_at)
-         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           version, last_mutation_id, items_json, brief_id, arrival_interacted_at,
+           created_at, updated_at)
+         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       ).run(
         plan.id,
         plan.localDate,
@@ -1994,6 +2166,145 @@ export function createDayPlanStore(options: {
         createdAt,
       });
       return { plan, replayed: false };
+    });
+  }
+
+  // Shared candidate-evidence validation for the arrival. Both plan creation and
+  // the guarded late-attach must only ever build items from candidates carrying
+  // current, unconflicted, single-source task evidence.
+  function assertArrivalCandidates(candidates: RecommendationCandidate[]): void {
+    if (candidates.length > 10) {
+      throw new DayPlanInvalidTransition("Arrival supports at most ten candidates.");
+    }
+    if (
+      new Set(candidates.map((candidate) => candidate.taskId)).size !== candidates.length ||
+      new Set(candidates.map((candidate) => candidate.outcomeKey)).size !== candidates.length
+    ) {
+      throw new DayPlanInvalidTransition("Arrival candidates must be unique.");
+    }
+    if (
+      candidates.some(
+        (candidate) =>
+          candidate.commitment !== "ink" ||
+          candidate.conflicts.length > 0 ||
+          candidate.sourceRefs.length !== 1 ||
+          candidate.sourceRefs[0].sourceType !== "task" ||
+          candidate.sourceRefs[0].recordId !== candidate.taskId ||
+          candidate.sourceRefs[0].freshness !== "current",
+      )
+    ) {
+      throw new DayPlanInvalidTransition(
+        "Arrival candidates require current accepted task evidence.",
+      );
+    }
+  }
+
+  // Attaches today's eligible brief to an already-created, pristine arrival, or
+  // returns undefined when any guard fails (the caller then returns the plan
+  // untouched). Runs inside the caller's immediate() transaction. Fail-open: any
+  // error skips the attach rather than failing the ensure.
+  function maybeLateAttachBrief(
+    existing: DayPlan,
+    input: EnsureDayPlanInput,
+  ): DayPlan | undefined {
+    try {
+      if (existing.briefId) return undefined;
+      if (existing.state !== "proposed") return undefined;
+      if (existing.arrivalState !== "due" && existing.arrivalState !== "opened") return undefined;
+      // The durable no-hot-swap guard: any interaction closes the window.
+      if (existing.arrivalInteractedAt) return undefined;
+      if (existing.items.length > 0 && !existing.items.every((item) => item.decision === "preselected")) {
+        return undefined;
+      }
+      // A caller that did not supply fresh candidates (an empty ensure for an
+      // existing plan) must never overlay onto stale/empty evidence.
+      if (input.candidates.length === 0) return undefined;
+      assertArrivalCandidates(input.candidates);
+
+      const briefArtifact = latestEligibleMorningBrief(existing.localDate);
+      const briefContent = morningBriefFromArtifact(briefArtifact);
+      if (!briefArtifact || !briefContent) return undefined;
+
+      const selection = overlayBriefOnCandidates(input.candidates, briefContent);
+      const items: DayPlanItem[] = selection.map(({ candidate, brief }, position) => ({
+        ...structuredClone(candidate),
+        id: candidate.candidateId,
+        position,
+        decision: "preselected",
+        ...(brief
+          ? { brief, owner: brief.suggestedOwner ?? candidate.owner }
+          : {}),
+      }));
+
+      const changedAt = now().toISOString();
+      const attached: DayPlan = {
+        ...existing,
+        items,
+        briefId: briefArtifact.id,
+        version: existing.version + 1,
+        lastMutationId: input.mutationId,
+        updatedAt: changedAt,
+      };
+      persistPlan(attached);
+      appendEvent({
+        id: input.mutationId,
+        planId: attached.id,
+        eventType: "brief_attach",
+        resultVersion: attached.version,
+        before: existing,
+        after: attached,
+        createdAt: changedAt,
+      });
+      return attached;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Durably records the first arrival interaction without bumping the plan
+  // version (so it never conflicts with the client's in-flight expectedVersion).
+  // Only stamps a still-pristine, proposed arrival; anything else is a safe
+  // no-op. Called directly by content mutations that live outside mutateDayPlan
+  // (assistant turns, execution configure/kickoff).
+  function stampArrivalInteraction(planId: string, at: string): void {
+    db.prepare(
+      `UPDATE day_plans
+       SET arrival_interacted_at = COALESCE(arrival_interacted_at, ?)
+       WHERE id = ? AND plan_state = 'proposed' AND arrival_state IN ('due','opened')`,
+    ).run(at, planId);
+  }
+
+  // The explicit, idempotent interaction marker the client fires on first
+  // meaningful touch (card expansion, typing in the refine box). Idempotent on
+  // the mutation id via the event ledger; never bumps the version.
+  function markArrivalInteraction(
+    planId: string,
+    mutationId: string,
+  ): { plan: DayPlan; replayed: boolean } {
+    return immediate(() => {
+      const existingEvent = selectEvent.get(mutationId) as EventRow | undefined;
+      if (existingEvent) {
+        if (existingEvent.event_type !== "arrival_interact") {
+          throw new DayPlanInvalidTransition("Mutation ID was already used for another action.");
+        }
+        const replayed = getPlan(existingEvent.day_plan_id);
+        if (!replayed) throw new DayPlanNotFound();
+        return { plan: replayed, replayed: true };
+      }
+      const plan = getPlan(planId);
+      if (!plan) throw new DayPlanNotFound();
+      const at = now().toISOString();
+      stampArrivalInteraction(planId, at);
+      const updated = getPlan(planId) ?? plan;
+      appendEvent({
+        id: mutationId,
+        planId,
+        eventType: "arrival_interact",
+        resultVersion: updated.version,
+        after: { arrivalInteractedAt: updated.arrivalInteractedAt },
+        createdAt: at,
+      });
+      return { plan: updated, replayed: false };
     });
   }
 
@@ -2401,7 +2712,16 @@ export function createDayPlanStore(options: {
             })),
             humanDecisionEventIds: [
               ...eventRows
-                .filter((event) => event.event_type !== "ensure")
+                // Provenance covers human decisions only: ensure (plan
+                // creation), brief_attach (system late-attach), and
+                // arrival_interact (a touch marker, not a decision) are all
+                // machine-recorded and excluded.
+                .filter(
+                  (event) =>
+                    event.event_type !== "ensure" &&
+                    event.event_type !== "brief_attach" &&
+                    event.event_type !== "arrival_interact",
+                )
                 .map((event) => event.id),
               input.mutationId,
             ],
@@ -2482,6 +2802,14 @@ export function createDayPlanStore(options: {
         if (["item_edit", "item_owner", "item_later", "item_dismiss"].includes(input.action)) {
           invalidateQueuedRunsForItem(plan, changedItem, changedAt);
         }
+      }
+
+      // Every content mutation is a real interaction: it durably freezes the
+      // arrival against a late brief attach. Arrival-state-only transitions
+      // (open, snooze, skip) deliberately do not stamp, so a brief can still
+      // attach to an opened-but-untouched arrival.
+      if (CONTENT_MUTATION_ACTIONS.has(input.action) && !plan.arrivalInteractedAt) {
+        plan.arrivalInteractedAt = changedAt;
       }
 
       plan.version += 1;
@@ -2578,6 +2906,7 @@ export function createDayPlanStore(options: {
 
   return {
     ensureDayPlan,
+    markArrivalInteraction,
     mutateDayPlan,
     createAssistantTurn,
     claimNextAssistantTurn,
@@ -2625,6 +2954,7 @@ export function createDayPlanStore(options: {
     recordMorningBriefInputs,
     completeMorningBrief,
     failMorningBrief,
+    importMorningBrief,
     interruptStaleMorningBriefs,
     setMorningBriefSalesActionState,
     listMorningBriefSalesActionStates,

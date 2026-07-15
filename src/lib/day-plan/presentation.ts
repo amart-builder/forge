@@ -341,6 +341,55 @@ export function staleSettlementNotice(
   return `${label} was never closed. Settle it before today's plan begins.`;
 }
 
+// Pure gate for polling the day-plan read model to pick up a brief that finishes
+// generating after the arrival opened. Poll only while the arrival view is open,
+// the document is visible, the user has not interacted (the no-hot-swap rule: a
+// touched arrival never accepts a late brief), no brief is consumed yet, and a
+// generation is actually queued or running. Any of those failing stops polling.
+export function shouldPollBriefGeneration(input: {
+  view: string;
+  documentVisible: boolean;
+  interacted: boolean;
+  hasConsumedBrief: boolean;
+  generationState?: 'idle' | 'queued' | 'running' | 'failed';
+}): boolean {
+  if (input.view !== 'arrival') return false;
+  if (!input.documentVisible) return false;
+  if (input.interacted) return false;
+  if (input.hasConsumedBrief) return false;
+  return input.generationState === 'queued' || input.generationState === 'running';
+}
+
+// Pure gate for the ONE-SHOT attach-only ensure fired at initialization and on
+// regaining document visibility. It covers the relay's primary case, which the
+// generation poll above cannot: a brief that finished while the app was closed
+// leaves the plan without a brief and NO queued/running generation, so nothing
+// would ever ask the server to run its guarded late-attach. Fires only for a
+// pristine, proposed, due/opened arrival with fresh candidates, at most once
+// per page load or visibility regain (alreadyAttempted); the durable
+// arrival_interacted_at marker or any local interaction closes it for good.
+export function shouldAttemptLateBriefAttach(input: {
+  planState?: string;
+  arrivalState?: string;
+  hasConsumedBrief: boolean;
+  arrivalInteractedAt?: string;
+  interacted: boolean;
+  documentVisible: boolean;
+  candidatesReady: boolean;
+  candidateCount: number;
+  alreadyAttempted: boolean;
+}): boolean {
+  if (input.alreadyAttempted) return false;
+  if (!input.documentVisible) return false;
+  if (input.planState !== 'proposed') return false;
+  if (input.arrivalState !== 'due' && input.arrivalState !== 'opened') return false;
+  if (input.hasConsumedBrief) return false;
+  if (input.arrivalInteractedAt) return false;
+  if (input.interacted) return false;
+  // Never ask the server to overlay onto missing/stale evidence.
+  return input.candidatesReady && input.candidateCount > 0;
+}
+
 export type ArrivalEscapeDecision =
   | { type: 'collapse'; itemId: string }
   | { type: 'none' };

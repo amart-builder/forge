@@ -17,8 +17,21 @@ import {
 } from "../day-plan/brief";
 import {
   collectMorningBriefSources,
+  defaultGoalsPath,
+  defaultSprintMemoPath,
   type CollectedBriefSources,
 } from "../day-plan/brief-sources";
+import {
+  exportBriefArtifact,
+  liveRemoteBriefAttempt,
+  originHost,
+  scanAndImportBriefRelay,
+  sweepBriefRelayOutbox,
+  verifySourceCheckpoint,
+  writeBriefAttemptStatus,
+  writeSettlementRelay,
+  writeSourceCheckpoint,
+} from "../day-plan/brief-relay";
 import {
   buildAssistantPlannerCommand,
   buildExecutionCommand,
@@ -416,11 +429,65 @@ export async function runOneExecution(options: ClaudeWorkerOptions): Promise<boo
   return true;
 }
 
+// Cross-machine relay wiring for the brief lane. Presence turns the relay on;
+// absence keeps the lane purely local (the default in tests). requireSourceCheckpoint
+// marks a non-authoritative generator (the Mini): it gates on the MBP's source
+// checkpoint and never publishes the checkpoint or settlement summary itself.
+export type BriefRelayOptions = {
+  dataDir: string;
+  host?: string;
+  requireSourceCheckpoint?: boolean;
+  goalsPath?: string;
+  sprintMemoPath?: string;
+};
+
 export type MorningBriefWorkerOptions = ClaudeWorkerOptions & {
   // Test seam; production uses the real collector (files + loopback task fetch).
   collectBriefSources?: (store: DayPlanStore) => Promise<CollectedBriefSources>;
   briefTimeoutMs?: number;
+  relay?: BriefRelayOptions;
 };
+
+function isValidTimezone(zone: string | undefined): zone is string {
+  if (!zone) return false;
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The brief lane's target-date timezone. A validated FORGE_BRIEF_TIMEZONE wins so
+// the Mini (whose local day_plans is stale by design) targets Alex's real
+// morning; otherwise the open plan's zone, then the latest settlement's, then
+// the machine's, then UTC.
+function resolveBriefTimezone(store: DayPlanStore): string {
+  const readModel = store.getReadModel();
+  const envZone = process.env.FORGE_BRIEF_TIMEZONE;
+  return (
+    (isValidTimezone(envZone) ? envZone : undefined) ??
+    readModel.currentPlan?.timezone ??
+    readModel.latestSnapshot?.timezone ??
+    Intl.DateTimeFormat().resolvedOptions().timeZone ??
+    "UTC"
+  );
+}
+
+function resolveBriefTargetDate(store: DayPlanStore, now: Date): string {
+  try {
+    return localDateInTimezone(now, resolveBriefTimezone(store));
+  } catch {
+    return localDateInTimezone(now, "UTC");
+  }
+}
+
+function relayCheckpointSources(relay: BriefRelayOptions): Record<string, string> {
+  return {
+    goals: relay.goalsPath ?? defaultGoalsPath(),
+    sprint_memo: relay.sprintMemoPath ?? defaultSprintMemoPath(),
+  };
+}
 
 // The Morning Brief lane. It reuses the same bounded spawn machinery as the
 // other lanes but drains through its own loop, so a brief can never starve
@@ -439,6 +506,48 @@ export async function runOneMorningBrief(
   options.store.interruptStaleMorningBriefs(cutoff(clock(), staleAfterMs));
   const claimed = options.store.claimNextMorningBrief();
   if (!claimed) return false;
+  const relay = options.relay;
+  const relayHost = relay?.host ?? originHost();
+  // Fail a brief and, when relaying, publish a failed status so the peer machine
+  // stops waiting on this attempt.
+  const failBrief = (code: string) => {
+    options.store.failMorningBrief(claimed.id, code);
+    if (relay) {
+      writeBriefAttemptStatus(
+        {
+          targetLocalDate: claimed.targetLocalDate,
+          attemptId: claimed.id,
+          state: "failed",
+          errorCode: code,
+        },
+        { dataDir: relay.dataDir, host: relayHost, now: clock() },
+      );
+    }
+  };
+  // A non-authoritative generator (the Mini) must not brief off synced source
+  // copies the MBP has not vouched for. Gate before any expensive work.
+  if (relay?.requireSourceCheckpoint) {
+    const verdict = verifySourceCheckpoint({
+      sources: relayCheckpointSources(relay),
+      now: clock(),
+      dataDir: relay.dataDir,
+    });
+    if (!verdict.ok) {
+      failBrief(`source_checkpoint_${verdict.reason}`);
+      return true;
+    }
+  }
+  if (relay) {
+    writeBriefAttemptStatus(
+      {
+        targetLocalDate: claimed.targetLocalDate,
+        attemptId: claimed.id,
+        state: "running",
+        startedAt: claimed.startedAt ?? clock().toISOString(),
+      },
+      { dataDir: relay.dataDir, host: relayHost, now: clock() },
+    );
+  }
   try {
     const collect =
       options.collectBriefSources ??
@@ -448,10 +557,7 @@ export async function runOneMorningBrief(
       now: clock(),
     });
     if (context.missingRequired.length > 0) {
-      options.store.failMorningBrief(
-        claimed.id,
-        `required_source_missing:${context.missingRequired.join(",")}`,
-      );
+      failBrief(`required_source_missing:${context.missingRequired.join(",")}`);
       return true;
     }
     // The hash covers the full generation envelope: the bounded sections
@@ -497,17 +603,11 @@ export async function runOneMorningBrief(
       abortSignal: options.abortSignal,
     });
     if (result.terminatedBy || result.signal) {
-      options.store.failMorningBrief(
-        claimed.id,
-        result.terminatedBy === "timeout" ? "brief_timeout" : "worker_interrupted",
-      );
+      failBrief(result.terminatedBy === "timeout" ? "brief_timeout" : "worker_interrupted");
       return true;
     }
     if (result.exitCode !== 0 || result.overflowed) {
-      options.store.failMorningBrief(
-        claimed.id,
-        result.overflowed ? "brief_output_too_large" : "claude_failed",
-      );
+      failBrief(result.overflowed ? "brief_output_too_large" : "claude_failed");
       return true;
     }
     const validated = validateMorningBrief(parseMorningBriefOutput(result.stdout), {
@@ -521,47 +621,123 @@ export async function runOneMorningBrief(
           .map((source) => source.id),
       ),
     });
-    options.store.completeMorningBrief(claimed.id, JSON.stringify(validated.brief));
-  } catch (error) {
-    options.store.failMorningBrief(
+    const completed = options.store.completeMorningBrief(
       claimed.id,
-      error instanceof Error ? error.message : "brief_failed",
+      JSON.stringify(validated.brief),
     );
+    // Publish the immutable artifact to the relay so the other machine imports
+    // it. The authoritative machine (the MBP) also refreshes the settlement
+    // summary and source checkpoint from its own state. All fail-open.
+    if (relay && completed) {
+      exportBriefArtifact(completed, { dataDir: relay.dataDir, host: relayHost });
+      if (!relay.requireSourceCheckpoint) {
+        writeSettlementRelay({ store: options.store, now: clock(), dataDir: relay.dataDir });
+        writeSourceCheckpoint({
+          sources: relayCheckpointSources(relay),
+          now: clock(),
+          dataDir: relay.dataDir,
+        });
+      }
+    }
+  } catch (error) {
+    failBrief(error instanceof Error ? error.message : "brief_failed");
   }
   return true;
 }
 
 // Scheduled entry point (the ~7:30 local LaunchAgent run, which may fire late
-// on wake). Targets today in the plan timezone: the open plan's zone first,
-// then the latest settlement's, then the machine's. Skips cleanly when an
-// eligible artifact for today already exists.
+// on wake). Targets today with a validated FORGE_BRIEF_TIMEZONE first (so the
+// Mini, whose local day_plans is stale by design, still targets Alex's real
+// morning), then the open plan's zone, the latest settlement's, the machine's,
+// and UTC. When relaying, it first imports any already-synced artifact and waits
+// while another machine has a live generation for this date. Skips cleanly when
+// an eligible artifact for today already exists.
 export function enqueueDueMorningBrief(
   store: DayPlanStore,
   now: Date = new Date(),
+  options: { relay?: BriefRelayOptions } = {},
 ): MorningBriefArtifact | undefined {
-  const readModel = store.getReadModel();
-  const timezone =
-    readModel.currentPlan?.timezone ??
-    readModel.latestSnapshot?.timezone ??
-    Intl.DateTimeFormat().resolvedOptions().timeZone ??
-    "UTC";
-  let target: string;
-  try {
-    target = localDateInTimezone(now, timezone);
-  } catch {
-    target = localDateInTimezone(now, "UTC");
+  const target = resolveBriefTargetDate(store, now);
+  if (options.relay) {
+    scanAndImportBriefRelay({
+      store,
+      targetLocalDate: target,
+      dataDir: options.relay.dataDir,
+    });
+    const remote = liveRemoteBriefAttempt({
+      targetLocalDate: target,
+      selfHost: options.relay.host,
+      dataDir: options.relay.dataDir,
+      now,
+    });
+    // Backfill waits: a live generation on the other machine will sync its
+    // artifact in; a second generation here would only race it.
+    if (remote) return undefined;
   }
   if (store.latestEligibleMorningBrief(target)) return undefined;
-  return store.enqueueMorningBrief(target, morningBriefModelConfig()).brief;
+  const enqueued = store.enqueueMorningBrief(target, morningBriefModelConfig());
+  // Announce the queued attempt immediately (not first at claim), closing the
+  // enqueue→claim window in which the peer could start a duplicate generation.
+  if (options.relay && enqueued.created) {
+    writeBriefAttemptStatus(
+      { targetLocalDate: target, attemptId: enqueued.brief.id, state: "queued" },
+      { dataDir: options.relay.dataDir, host: options.relay.host, now },
+    );
+  }
+  return enqueued.brief;
 }
 
 export async function watchMorningBriefQueue(
   options: MorningBriefWorkerOptions,
   pollIntervalMs = 2000,
 ): Promise<void> {
+  const clock = options.now ?? (() => new Date());
+  const relay = options.relay;
+  // Filenames already imported this process lifetime; a cheap readdir skip.
+  const importedFiles = new Set<string>();
+  // The authoritative machine republishes the checkpoint + settlement relay and
+  // sweeps the outbox on this cadence, not every idle cycle: the poll runs every
+  // couple of seconds, and rewriting synced files that often would churn
+  // Syncthing and the disk for no benefit.
+  const MAINTENANCE_INTERVAL_MS = 5 * 60 * 1000;
+  let lastMaintenanceAt = 0;
   while (!options.abortSignal?.aborted) {
+    if (relay) {
+      // Pull in any synced artifact before this machine considers generating.
+      scanAndImportBriefRelay({
+        store: options.store,
+        targetLocalDate: resolveBriefTargetDate(options.store, clock()),
+        dataDir: relay.dataDir,
+        imported: importedFiles,
+      });
+    }
     const processed = await runOneMorningBrief(options);
-    if (!processed) await waitForPoll(pollIntervalMs, options.abortSignal);
+    if (!processed) {
+      // Idle: on the authoritative machine, keep the relay fresh — re-export any
+      // succeeded row whose file went missing, and republish the settlement
+      // summary and source checkpoint. Throttled; all fail-open.
+      const nowMs = clock().getTime();
+      if (
+        relay &&
+        !relay.requireSourceCheckpoint &&
+        nowMs - lastMaintenanceAt >= MAINTENANCE_INTERVAL_MS
+      ) {
+        lastMaintenanceAt = nowMs;
+        sweepBriefRelayOutbox({
+          store: options.store,
+          now: clock(),
+          dataDir: relay.dataDir,
+          host: relay.host,
+        });
+        writeSettlementRelay({ store: options.store, now: clock(), dataDir: relay.dataDir });
+        writeSourceCheckpoint({
+          sources: relayCheckpointSources(relay),
+          now: clock(),
+          dataDir: relay.dataDir,
+        });
+      }
+      await waitForPoll(pollIntervalMs, options.abortSignal);
+    }
   }
 }
 

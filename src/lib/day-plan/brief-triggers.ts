@@ -4,6 +4,7 @@ import {
   nextBriefTargetLocalDate,
   settlementReconciliationComplete,
 } from "./brief";
+import { writeBriefAttemptStatus } from "./brief-relay";
 import type { MorningBriefArtifact } from "./brief";
 import type {
   DayPlan,
@@ -26,6 +27,37 @@ export type MorningBriefTriggerStore = {
   ): unknown;
 };
 
+// Wraps a trigger store so every REAL enqueue (created: true) immediately
+// publishes a write-once `queued` attempt-status file to the relay. Without
+// this, the first status the peer machine sees is `running` after claim,
+// leaving an enqueue→claim window in which both machines could start the same
+// generation. Fail-open: a status-write failure never blocks the enqueue.
+export function withQueuedAttemptStatus(
+  store: MorningBriefTriggerStore,
+  relay: { dataDir?: string; host?: string; now?: () => Date } = {},
+): MorningBriefTriggerStore {
+  return {
+    listPendingReconciliations: () => store.listPendingReconciliations(),
+    getPlan: (id) => store.getPlan(id),
+    latestEligibleMorningBrief: (date) => store.latestEligibleMorningBrief(date),
+    enqueueMorningBrief: (targetLocalDate, provenance) => {
+      const result = store.enqueueMorningBrief(targetLocalDate, provenance);
+      try {
+        const enqueued = result as { created?: boolean; brief?: { id?: string } };
+        if (enqueued?.created && enqueued.brief?.id) {
+          writeBriefAttemptStatus(
+            { targetLocalDate, attemptId: enqueued.brief.id, state: "queued" },
+            { dataDir: relay.dataDir, host: relay.host, now: relay.now?.() },
+          );
+        }
+      } catch {
+        // Fail open: the enqueue already succeeded.
+      }
+      return result;
+    },
+  };
+}
+
 // Queues Morning Brief generation on the spec's triggers, always fail-open:
 // brief machinery must never block or delay the ritual response.
 // - After Day Settlement reconciliation completes for THIS settlement. A
@@ -41,6 +73,12 @@ export function maybeQueueMorningBrief(
   action: string,
   result: unknown,
   now: Date = new Date(),
+  options: {
+    // When the other machine has a live generation for the target date, the
+    // MBP's arrival backfill waits for that artifact to sync in rather than
+    // racing a second generation. Fail-open: absent predicate = no wait.
+    isRemoteAttemptLive?: (targetLocalDate: string) => boolean;
+  } = {},
 ): void {
   try {
     if (action === "settlement_commit") {
@@ -93,6 +131,8 @@ export function maybeQueueMorningBrief(
       // settlement, whose reconciliation trigger targets the right morning.
       if (plan.localDate !== localDateInTimezone(now, plan.timezone)) return;
       if (store.latestEligibleMorningBrief(plan.localDate)) return;
+      // Backfill waits while the other machine is mid-generation for this date.
+      if (options.isRemoteAttemptLive?.(plan.localDate)) return;
       store.enqueueMorningBrief(plan.localDate, morningBriefModelConfig());
     }
   } catch {

@@ -6,6 +6,17 @@
 # Safe to re-run: it replaces any previous Forge LaunchAgents.
 set -euo pipefail
 
+# --mini installs ONLY the always-on Mac Mini's 7:30 morning-brief agent (the
+# Mini generates the brief and relays it to the MBP over Syncthing). The default
+# (MBP) install no longer schedules a 7:30 brief agent at all; backfill and the
+# post-settlement trigger cover the MBP side.
+MINI=0
+for arg in "$@"; do
+  case "$arg" in
+    --mini) MINI=1 ;;
+  esac
+done
+
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="$HOME/Library/Logs"
 LA_DIR="$HOME/Library/LaunchAgents"
@@ -43,6 +54,113 @@ fi
 
 mkdir -p "$LOG_DIR" "$LA_DIR"
 
+# --- Mini-only: install the 7:30 morning-brief agent and exit ---------------
+# The Mini already runs its own web + worker via com.atlas.forge-web; this flag
+# adds only the scheduled brief generator, which writes the relay files the MBP
+# imports. Logs go to ~/Library/Logs (TCC blocks launchd writes under ~/Desktop).
+if [ "$MINI" = "1" ]; then
+  # SAFETY GATE: the Mini agent is a second live SQLite writer on a tree that
+  # Syncthing used to sync wholesale. Bootstrapping it before forge.db is
+  # excluded from sync ON BOTH machines is a documented corruption vector, so
+  # this refuses to proceed until the operator confirms. Confirm with
+  # FORGE_MINI_CONFIRM_STIGNORE=1 or interactively below.
+  cat <<'STIGNORE_BLOCK'
+================================================================================
+Before this installs anything, ~/Atlas/.stignore must contain the block below
+ON BOTH MACHINES (.stignore itself does NOT sync — edit it on each machine),
+and the Forge web + worker processes on both machines must have been STOPPED
+when the block was applied:
+
+// --- Forge machine-private runtime state (brief-relay change) ---
+// Each machine keeps its OWN forge.db now; a live SQLite file must never sync
+// (torn-write corruption). -wal/-shm are already covered by the global rules
+// above. The relay dirs (brief-relay/, settlement-relay/) and
+// source-checkpoint.json are the transport and MUST keep syncing — not listed.
+projects/astack/forge/data/forge.db
+projects/astack/forge/data/claude-runs
+projects/astack/forge/data/claude-runs/**
+projects/astack/forge/data/claude-worker.heartbeat
+projects/astack/forge/data/backups
+projects/astack/forge/data/backups/**
+================================================================================
+STIGNORE_BLOCK
+  if [ "${FORGE_MINI_CONFIRM_STIGNORE:-0}" != "1" ]; then
+    if [ -t 0 ]; then
+      printf 'Confirm the block above is applied on BOTH machines and writers were stopped when it was applied. Proceed? [y/N] '
+      read -r STIGNORE_REPLY
+      case "$STIGNORE_REPLY" in
+        y|Y|yes|YES) ;;
+        *)
+          echo "Aborted: apply the .stignore block on both machines first, then re-run." >&2
+          exit 1
+          ;;
+      esac
+    else
+      echo "Refusing to bootstrap the Mini brief agent: confirm the .stignore block is applied on BOTH machines (writers stopped), then re-run with FORGE_MINI_CONFIRM_STIGNORE=1." >&2
+      exit 1
+    fi
+  fi
+  # The Atlas root is three levels up from the repo (<atlas>/projects/astack/forge).
+  ATLAS_ROOT="$(cd "$REPO_DIR/../../.." && pwd)"
+  MINI_BRIEF_PLIST="$LA_DIR/com.forge.morning-brief.plist"
+  cat > "$MINI_BRIEF_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.forge.morning-brief</string>
+  <key>WorkingDirectory</key>
+  <string>$REPO_DIR</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$TSX_BIN</string>
+    <string>$REPO_DIR/scripts/forge-claude-worker.ts</string>
+    <string>--lane</string>
+    <string>brief</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>7</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$LOG_DIR/forge-morning-brief.log</string>
+  <key>StandardErrorPath</key>
+  <string>$LOG_DIR/forge-morning-brief.error.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <key>HOME</key>
+    <string>$HOME</string>
+    <key>FORGE_CLAUDE_WORKER_ENABLED</key>
+    <string>1</string>
+    <key>FORGE_CLAUDE_BIN</key>
+    <string>$CLAUDE_BIN</string>
+    <key>FORGE_BRIEF_WEB_BASE</key>
+    <string>http://127.0.0.1:3200</string>
+    <key>FORGE_BRIEF_TIMEZONE</key>
+    <string>America/Los_Angeles</string>
+    <key>FORGE_BRIEF_REQUIRE_SOURCE_CHECKPOINT</key>
+    <string>1</string>
+    <key>FORGE_BRIEF_GOALS_PATH</key>
+    <string>$ATLAS_ROOT/brain/GOALS.md</string>
+    <key>FORGE_BRIEF_SPRINT_MEMO_PATH</key>
+    <string>$ATLAS_ROOT/brain/path-to-30k-2026-07.md</string>
+  </dict>
+</dict>
+</plist>
+EOF
+  UID_NUM="$(id -u)"
+  launchctl bootout "gui/$UID_NUM/com.forge.morning-brief" 2>/dev/null || true
+  launchctl bootstrap "gui/$UID_NUM" "$MINI_BRIEF_PLIST"
+  echo "Installed the Mini morning-brief agent (7:30 local): $MINI_BRIEF_PLIST"
+  echo "Brief goals: $ATLAS_ROOT/brain/GOALS.md"
+  echo "Logs: $LOG_DIR/forge-morning-brief.log"
+  exit 0
+fi
+
 # --- Install Forge's skills for Claude and Codex ---
 # The forge-* skills are refreshed every run in both supported agent homes. The
 # bundled humanizer skill is installed only when absent, so unrelated personal
@@ -68,7 +186,6 @@ BACKUP_PLIST="$LA_DIR/com.forge.local.backup.plist"
 REMINDERS_PLIST="$LA_DIR/com.forge.reminders.plist"
 TRIAGE_PLIST="$LA_DIR/com.forge.email-triage.plist"
 WORKER_PLIST="$LA_DIR/com.forge.claude-worker.plist"
-BRIEF_PLIST="$LA_DIR/com.forge.morning-brief.plist"
 
 # --- Server: next start on localhost:3200 ---
 cat > "$SERVER_PLIST" <<EOF
@@ -156,51 +273,13 @@ cat > "$WORKER_PLIST" <<EOF
 </plist>
 EOF
 
-# --- Morning Brief: enqueue and drain the brief lane daily at 7:30am local ---
-# One-shot run (no KeepAlive): it enqueues today's brief if none is eligible,
-# drains the brief queue, and exits. The watch worker also drains this lane,
-# so the two never conflict (single-flight claim in the store).
-cat > "$BRIEF_PLIST" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.forge.morning-brief</string>
-  <key>WorkingDirectory</key>
-  <string>$REPO_DIR</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$TSX_BIN</string>
-    <string>$REPO_DIR/scripts/forge-claude-worker.ts</string>
-    <string>--lane</string>
-    <string>brief</string>
-  </array>
-  <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key><integer>7</integer>
-    <key>Minute</key><integer>30</integer>
-  </dict>
-  <key>StandardOutPath</key>
-  <string>$LOG_DIR/forge-morning-brief.log</string>
-  <key>StandardErrorPath</key>
-  <string>$LOG_DIR/forge-morning-brief.error.log</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
-    <key>HOME</key>
-    <string>$HOME</string>
-    <key>FORGE_CLAUDE_WORKER_ENABLED</key>
-    <string>1</string>
-    <key>FORGE_CLAUDE_BIN</key>
-    <string>$CLAUDE_BIN</string>
-    <key>FORGE_BRIEF_WEB_BASE</key>
-    <string>http://127.0.0.1:3200</string>
-  </dict>
-</dict>
-</plist>
-EOF
+# --- Morning Brief on the MBP ---
+# There is intentionally no 7:30 one-shot agent here anymore: the always-on Mac
+# Mini owns scheduled generation (install it there with `--mini`) and relays the
+# artifact over Syncthing. The MBP still covers itself two ways with no agent:
+# the arrival's on-demand backfill (the watch worker drains the brief lane) and
+# the post-settlement evening trigger. Any previously installed com.forge.morning-brief
+# agent is booted out below.
 
 # --- Daily database backup at 3:30am ---
 cat > "$BACKUP_PLIST" <<EOF
@@ -328,12 +407,14 @@ launchctl bootout "gui/$UID_NUM/com.forge.local.backup" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.reminders" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.email-triage" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.claude-worker" 2>/dev/null || true
+# Decommission the retired MBP 7:30 brief agent entirely (bootout + plist
+# removal): the Mini owns scheduled generation now.
 launchctl bootout "gui/$UID_NUM/com.forge.morning-brief" 2>/dev/null || true
+rm -f "$LA_DIR/com.forge.morning-brief.plist"
 launchctl bootstrap "gui/$UID_NUM" "$SERVER_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$BACKUP_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$REMINDERS_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$WORKER_PLIST"
-launchctl bootstrap "gui/$UID_NUM" "$BRIEF_PLIST"
 if [ -f "$TRIAGE_PLIST" ]; then launchctl bootstrap "gui/$UID_NUM" "$TRIAGE_PLIST"; fi
 launchctl enable "gui/$UID_NUM/com.forge.local" 2>/dev/null || true
 launchctl enable "gui/$UID_NUM/com.forge.claude-worker" 2>/dev/null || true
@@ -368,7 +449,7 @@ if [ -n "$UP" ]; then
   echo "Server logs: $LOG_DIR/forge.log"
   echo "Daily database backups: $REPO_DIR/data/backups"
   echo "Claude worker: supervised by com.forge.claude-worker"
-  echo "Morning Brief: scheduled daily at 7:30 by com.forge.morning-brief"
+  echo "Morning Brief: generated on the Mac Mini (install there with --mini) + MBP backfill/post-settlement"
   echo "Autonomous execution remains off until FORGE_CLAUDE_EXECUTION_ENABLED=1 and an allowlisted workspace config are explicitly added."
 else
   echo "Forge did not respond on http://localhost:3200 within 20 seconds." >&2

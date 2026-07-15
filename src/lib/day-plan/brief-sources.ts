@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import type { DayPlanStore } from "./store";
 import type { BriefSourceInput } from "./brief";
+import { buildSettlementSummary, readSettlementRelay } from "./brief-relay";
 
 // Required-source defaults. Both are configurable; these point at Alex's real
 // operating files so the default installation briefs from the same documents
@@ -54,6 +55,9 @@ export type MorningBriefSourceOptions = {
   webBaseUrl?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  // Overrides the relay data directory (defaults to the forge.db directory).
+  // Tests point this at a temp dir to exercise the settlement relay fallback.
+  dataDir?: string;
 };
 
 type TaskRow = {
@@ -242,43 +246,56 @@ export async function collectMorningBriefSources(
     });
   }
 
+  // Settlement summary: the local store is authoritative when it holds
+  // snapshots. An empty local state (the Mini, whose DB no longer syncs) is
+  // never treated as "no settlements"; it falls back to the relay file the MBP
+  // publishes, whose as_of drives the same staleness threshold. Newest valid
+  // source wins; if neither is available the source records missing.
+  const settlementThreshold = staleThresholdHours("settlement_summary", 96);
+  let settlementContent: string | undefined;
+  let settlementAsOf: string | undefined;
   try {
     const snapshots = options.store.listRecentSnapshots(3);
-    sources.push({
-      id: "settlement_summary",
-      label: "RECENT_SETTLEMENTS",
-      required: true,
-      maxChars: 6000,
-      priority: 4,
-      content: snapshots.length > 0
-        ? snapshots
-            .map((snapshot) =>
-              `- ${snapshot.localDate}: completed=${snapshot.body.completedHumanTaskIds.length}` +
-                (snapshot.body.unresolvedItems.length > 0
-                  ? ` unresolved=${snapshot.body.unresolvedItems
-                      .map((item) => `"${compactLine(item.title, 100)}"(${item.disposition})`)
-                      .join(", ")}`
-                  : " unresolved=none") +
-                (snapshot.body.nextDayRecommendationSeed
-                  ? ` carry_first="${compactLine(snapshot.body.nextDayRecommendationSeed.title, 100)}"`
-                  : ""),
-            )
-            .join("\n")
-        : "No settlement snapshots exist yet.",
-      asOf: snapshots[0]?.createdAt,
-      // No settlement for four days means the ritual itself lapsed.
-      freshnessThresholdHours: staleThresholdHours("settlement_summary", 96),
-    });
+    if (snapshots.length > 0) {
+      const summary = buildSettlementSummary(snapshots);
+      settlementContent = summary.content;
+      settlementAsOf = summary.asOf;
+    }
   } catch {
-    sources.push({
-      id: "settlement_summary",
-      label: "RECENT_SETTLEMENTS",
-      required: true,
-      maxChars: 6000,
-      priority: 4,
-      note: "settlement_snapshot_read_failed",
-    });
+    // Fall through to the relay fallback below.
   }
+  const relaySettlement = readSettlementRelay({ dataDir: options.dataDir });
+  if (relaySettlement) {
+    // Newest valid wins, compared as parsed epochs (never as strings): prefer
+    // whichever source has the later as_of; an unparseable local as_of loses.
+    const relayMs = Date.parse(relaySettlement.asOf);
+    const localMs = settlementContent && settlementAsOf ? Date.parse(settlementAsOf) : NaN;
+    if (!settlementContent || !Number.isFinite(localMs) || relayMs > localMs) {
+      settlementContent = relaySettlement.content;
+      settlementAsOf = relaySettlement.asOf;
+    }
+  }
+  sources.push(
+    settlementContent
+      ? {
+          id: "settlement_summary",
+          label: "RECENT_SETTLEMENTS",
+          required: true,
+          maxChars: 6000,
+          priority: 4,
+          content: settlementContent,
+          asOf: settlementAsOf,
+          freshnessThresholdHours: settlementThreshold,
+        }
+      : {
+          id: "settlement_summary",
+          label: "RECENT_SETTLEMENTS",
+          required: true,
+          maxChars: 6000,
+          priority: 4,
+          note: "settlement_summary_unavailable",
+        },
+  );
 
   sources.push(emailBrief);
 

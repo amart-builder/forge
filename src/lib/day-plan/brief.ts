@@ -620,6 +620,87 @@ export function selectEligibleMorningBrief(
     )[0];
 }
 
+export type MorningBriefGenerationState = "idle" | "queued" | "running" | "failed";
+
+// The in-flight generation state the arrival needs, with the start time when a
+// row has actually begun. This carries no brief content: only the coarse
+// lifecycle and, at most, a timestamp.
+export type MorningBriefGeneration = {
+  state: MorningBriefGenerationState;
+  startedAt?: string;
+};
+
+// How recently a failed generation is still worth reporting. Past this a stale
+// failure is treated as idle: the arrival stays silent and does not imply a
+// brief is on its way.
+export const MORNING_BRIEF_FAILED_WINDOW_HOURS = 6;
+
+// Derives the generation state for a target date from its brief rows (pure; the
+// caller supplies now). An active queued/running row wins, running first since
+// it carries a real start time; otherwise the most recent failure inside the
+// window; otherwise idle. Never surfaces brief_json — only lifecycle + startedAt.
+export function selectMorningBriefGeneration(
+  artifacts: readonly MorningBriefArtifact[],
+  targetLocalDate: string,
+  now: Date,
+  options: {
+    failedWindowHours?: number;
+    // A live (unexpired) brief generation on another machine in the relay mesh.
+    // When present and no local row is already active, the arrival stays
+    // in-progress until that machine's artifact syncs in and is imported.
+    remoteAttempt?: { startedAt?: string };
+  } = {},
+): MorningBriefGeneration {
+  const forDate = artifacts.filter(
+    (artifact) => artifact.targetLocalDate === targetLocalDate,
+  );
+
+  const running = forDate
+    .filter((artifact) => artifact.status === "running")
+    .sort((left, right) =>
+      (right.startedAt ?? right.createdAt).localeCompare(left.startedAt ?? left.createdAt),
+    )[0];
+  if (running) {
+    return { state: "running", ...(running.startedAt ? { startedAt: running.startedAt } : {}) };
+  }
+
+  const queued = forDate
+    .filter((artifact) => artifact.status === "queued")
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+  if (queued) {
+    return { state: "queued", ...(queued.startedAt ? { startedAt: queued.startedAt } : {}) };
+  }
+
+  const windowHours = options.failedWindowHours ?? MORNING_BRIEF_FAILED_WINDOW_HOURS;
+  const cutoff = now.getTime() - windowHours * 60 * 60 * 1000;
+  const failed = forDate
+    .filter((artifact) => artifact.status === "failed")
+    .filter((artifact) => {
+      const at = new Date(artifact.finishedAt ?? artifact.updatedAt).getTime();
+      return Number.isFinite(at) && at >= cutoff;
+    })
+    .sort((left, right) =>
+      (right.finishedAt ?? right.updatedAt).localeCompare(left.finishedAt ?? left.updatedAt),
+    )[0];
+  // A live remote attempt keeps the arrival in-progress even when this machine
+  // has no active row (the common case: the Mini generates, the MBP watches).
+  // It outranks a local stale-failed row so the UI does not flicker to quiet.
+  if (options.remoteAttempt) {
+    return {
+      state: "running",
+      ...(options.remoteAttempt.startedAt
+        ? { startedAt: options.remoteAttempt.startedAt }
+        : {}),
+    };
+  }
+
+  if (failed) {
+    return { state: "failed", ...(failed.startedAt ? { startedAt: failed.startedAt } : {}) };
+  }
+
+  return { state: "idle" };
+}
+
 function storedRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

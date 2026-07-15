@@ -2179,6 +2179,7 @@ function TodayExperience({
                 items={arrivalItems}
                 recommendation={recommendation}
                 brief={dayRitual.morningBrief}
+                briefGeneration={dayRitual.briefGeneration}
                 recap={morningRecap}
                 freshnessLabel={planEvidenceRefreshedAt
                   ? `Evidence refreshed ${new Date(planEvidenceRefreshedAt).toLocaleTimeString([], {
@@ -2199,7 +2200,11 @@ function TodayExperience({
                 titleId={RITUAL_TITLE_IDS.arrival}
                 descriptionId={RITUAL_DESCRIPTION_IDS.arrival}
                 escapeRef={arrivalEscapeRef}
-                onExpand={(itemId) => setExpandedArrivalItemId((current) => current === itemId ? null : itemId)}
+                onInteract={dayRitual.markArrivalInteraction}
+                onExpand={(itemId) => {
+                  dayRitual.markArrivalInteraction();
+                  setExpandedArrivalItemId((current) => current === itemId ? null : itemId);
+                }}
                 onOwnerChange={(itemId, owner) => dayRitual.setOwner(itemId, owner)}
                 onDragReorder={async (activeId, overId) => {
                   const next = reorderDayPlanItems(arrivalPlanItems, activeId, overId);

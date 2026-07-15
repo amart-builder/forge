@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { NextRequest } from 'next/server';
 import { buildDayPlanCandidates } from '../src/lib/day-plan/candidates.ts';
+import { createDayPlanStore } from '../src/lib/day-plan/store.ts';
 import {
+  GET,
   POST,
   hasDayPlanRouteAccess,
   parseDayPlanPostBody,
@@ -170,6 +175,75 @@ test('POST rejects untrusted hosts and missing CSRF before touching state', asyn
     }),
   );
   assert.equal(missingToken.status, 403);
+});
+
+test('GET exposes briefGeneration on loopback and strips it for a remote session', async (t) => {
+  const dir = path.join(os.tmpdir(), `forge-route-gen-${process.pid}-${Date.now()}`);
+  mkdirSync(dir, { recursive: true });
+  const store = createDayPlanStore({ dbPath: path.join(dir, 'forge.db') });
+  const globalRef = globalThis;
+  const previousStore = globalRef.__forgeDayPlanStore;
+  const previousEnv = {
+    access: process.env.FORGE_DAY_PLAN_ACCESS_MODE,
+    token: process.env.FORGE_DAY_PLAN_REMOTE_TOKEN,
+    hosts: process.env.FORGE_ALLOWED_HOSTS,
+  };
+  globalRef.__forgeDayPlanStore = store;
+  t.after(() => {
+    if (previousStore === undefined) delete globalRef.__forgeDayPlanStore;
+    else globalRef.__forgeDayPlanStore = previousStore;
+    for (const [key, value] of [
+      ['FORGE_DAY_PLAN_ACCESS_MODE', previousEnv.access],
+      ['FORGE_DAY_PLAN_REMOTE_TOKEN', previousEnv.token],
+      ['FORGE_ALLOWED_HOSTS', previousEnv.hosts],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // An open plan for the date, with a brief still queued (never consumed): the
+  // in-flight scenario the arrival cares about.
+  store.ensureDayPlan({
+    localDate: '2026-07-10',
+    timezone: 'America/Los_Angeles',
+    mutationId: 'ensure:2026-07-10',
+    candidates: [candidate()],
+  });
+  store.enqueueMorningBrief('2026-07-10', { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 });
+
+  process.env.FORGE_DAY_PLAN_ACCESS_MODE = 'loopback';
+  const loopback = await GET(
+    new NextRequest('http://localhost:3200/api/day-plan', {
+      headers: { host: 'localhost:3200', 'x-forwarded-for': '127.0.0.1' },
+    }),
+  );
+  assert.equal(loopback.status, 200);
+  const loopbackBody = await loopback.json();
+  assert.equal(loopbackBody.briefGeneration.state, 'queued');
+  assert.ok(loopbackBody.currentPlan);
+
+  // The same store over a remote session strips briefGeneration exactly like
+  // brief content: a remote caller never learns a brief is being written.
+  process.env.FORGE_DAY_PLAN_ACCESS_MODE = 'session';
+  process.env.FORGE_DAY_PLAN_REMOTE_TOKEN = 'secret-value';
+  process.env.FORGE_ALLOWED_HOSTS = 'forge.example.test';
+  const remote = await GET(
+    new NextRequest('https://forge.example.test/api/day-plan', {
+      headers: {
+        host: 'forge.example.test',
+        origin: 'https://forge.example.test',
+        'x-forge-day-plan-session': 'secret-value',
+      },
+    }),
+  );
+  assert.equal(remote.status, 200);
+  const remoteBody = await remote.json();
+  assert.equal(remoteBody.briefGeneration, undefined);
+  assert.ok(remoteBody.currentPlan);
+  assert.equal(remoteBody.currentPlan.briefId, undefined);
 });
 
 test('non-loopback day-plan access requires the separate remote session secret', () => {

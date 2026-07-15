@@ -22,9 +22,15 @@ async function main(): Promise<number> {
   if (!existsSync(claudePath)) {
     return 4;
   }
-  const store = createDayPlanStore({
-    dbPath: process.env.FORGE_DB_PATH ?? path.join(repoDir, "data", "forge.db"),
-  });
+  const dbPath = process.env.FORGE_DB_PATH ?? path.join(repoDir, "data", "forge.db");
+  const store = createDayPlanStore({ dbPath });
+  // The cross-machine file relay lives next to the (now machine-private) DB. A
+  // generator that is not the authoritative source (the Mini) sets
+  // FORGE_BRIEF_REQUIRE_SOURCE_CHECKPOINT=1 so it gates on the MBP's checkpoint.
+  const relay = {
+    dataDir: path.dirname(dbPath),
+    requireSourceCheckpoint: process.env.FORGE_BRIEF_REQUIRE_SOURCE_CHECKPOINT === "1",
+  };
   const heartbeatPath = path.join(repoDir, "data", "claude-worker.heartbeat");
   let heartbeat: NodeJS.Timeout | undefined;
   try {
@@ -39,6 +45,7 @@ async function main(): Promise<number> {
       logDir: path.join(repoDir, "data", "claude-runs"),
       fallbackCwd: repoDir,
       abortSignal: shutdown.signal,
+      relay,
     };
     if (lane === "watch") {
       mkdirSync(path.dirname(heartbeatPath), { recursive: true, mode: 0o700 });
@@ -59,7 +66,7 @@ async function main(): Promise<number> {
       // best-effort: a transient SQLITE_BUSY must not exit-1 the whole run
       // (the drain below and the arrival trigger both cover the miss).
       try {
-        enqueueDueMorningBrief(store);
+        enqueueDueMorningBrief(store, new Date(), { relay });
       } catch (error) {
         console.error("morning-brief enqueue failed (continuing to drain):", error);
       }

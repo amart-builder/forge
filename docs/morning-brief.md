@@ -38,6 +38,17 @@ The Morning Arrival used to be a deterministic ranking of yesterday's leftover t
 
 ## Deferred (documented decisions, do not build without one)
 
-- 7:30 periodic-pulse redesign (plan-timezone-aware gating): host-local plist is acceptable for single-Mac loopback v1.
 - Full closed evidence registry (bounded grounding shipped instead: required evidence_refs validated against source ids). JSON-literal fencing prevents delimiter breakout, not semantic injection; toollessness bounds the blast radius.
 - Calendar / CRM last-touch adapters (v2), Forge onboarding goals interview.
+- Moving FORGE_DB_PATH and backups outside the Syncthing tree (each machine's DB is now un-synced via .stignore instead).
+
+## Cross-machine relay (v1.1, shipped 2026-07-15)
+
+The 7:30 generation moved to the always-on Mac Mini after the MacBook-asleep failure (2026-07-15 morning: dark-wake froze the run; `worker_interrupted`). Design (see `src/lib/day-plan/brief-relay.ts`):
+
+- **No SQLite is shared between machines.** Each machine's `data/forge.db` is machine-private (ignored in each machine's `~/Atlas/.stignore` — Syncthing does NOT sync `.stignore` itself; the block must be maintained on both machines by hand). Transport is write-once JSON files under `data/brief-relay/` (artifacts, `<date>-<host>-<uuid>.json`, checksummed, strictly validated, 1MB cap, sync-conflict names ignored) plus attempt-status files under `data/brief-relay/status/` (queued/running/failed with TTL + 10-min clock-skew clamp) so the other machine can see a generation in flight and hold its backfill.
+- **MacBook publishes** `data/source-checkpoint.json` (goals + sprint memo hashes) and `data/settlement-relay/latest.json` (worker tick throttled 5 min + settlement route, gated to the machine where `FORGE_BRIEF_REQUIRE_SOURCE_CHECKPOINT` is unset). The **Mini requires** a fresh (<26h) matching checkpoint or it fails closed (`source_checkpoint_mismatch`) — it never generates from stale synced sources; MacBook backfill covers.
+- **Import** is one transaction (`importMorningBrief`): same-key succeeded → earliest-finished wins with full payload adoption unless a plan already pinned the row; local queued/running → adopt; else insert. Scan/import runs in the worker loop and before ensure + trigger evaluation.
+- **Late-attach**: `ensureDayPlan` on an existing plan attaches an eligible brief only when brief_id is null, plan proposed, arrival due/opened, all items preselected, and durable `arrival_interacted_at` is null (`brief_attach` ledger event, excluded from settlement human-decision provenance). The client fires a one-shot attach-only ensure on load/visibility and polls at 15s only while a generation is live; attach-only failures are silent no-ops (no ledger growth).
+- **Ops**: Mini LaunchAgent `com.forge.morning-brief` (7:30, installed via `install-forge-local.sh --mini`, which refuses to run until the operator confirms the `.stignore` block is on BOTH machines); MacBook's 7:30 one-shot is decommissioned (post-settlement trigger + backfill remain). Mini claude auth lives in the gui launchd domain (SSH shells report "Not logged in" because the Keychain is locked there — that is expected, not breakage).
+- Live-accepted 2026-07-15: outbox exported both existing artifacts on first worker start; files synced; Mini imported and correctly deduped instead of regenerating; claude smoke passed in the Mini's launchd context; late-attach delivered the day's brief into the open 2026-07-15 plan (exactly one `brief_attach` event).

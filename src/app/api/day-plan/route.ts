@@ -22,9 +22,23 @@ import { isClaudeWorkerAvailable } from "@/lib/claude-execution/trigger";
 import {
   morningBriefFromArtifact,
   publicMorningBrief,
+  selectMorningBriefGeneration,
   type MorningBriefSalesActionState,
 } from "@/lib/day-plan/brief";
-import { maybeQueueMorningBrief } from "@/lib/day-plan/brief-triggers";
+import {
+  maybeQueueMorningBrief,
+  withQueuedAttemptStatus,
+} from "@/lib/day-plan/brief-triggers";
+import {
+  liveRemoteBriefAttempt,
+  scanAndImportBriefRelay,
+  writeSettlementRelay,
+  writeSourceCheckpoint,
+} from "@/lib/day-plan/brief-relay";
+import {
+  defaultGoalsPath,
+  defaultSprintMemoPath,
+} from "@/lib/day-plan/brief-sources";
 import {
   publicDayPlan,
   publicExecutionRun,
@@ -97,6 +111,7 @@ type ParsedPost =
   | { action: "ensure"; input: EnsureDayPlanInput }
   | { action: "reconciliation_applied"; reconciliationId: string }
   | { action: "task_mutation_applied"; mutationId: string }
+  | { action: "arrival_interact"; planId: string; mutationId: string }
   | {
       action: "brief_action";
       briefId: string;
@@ -383,6 +398,9 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
         timezone: timezoneValue(body.timezone),
         mutationId: mutationIdValue(body.mutationId),
         candidates,
+        // Late-brief poll mode: attach-or-silent-no-op, never a new plan or a
+        // ledger row (only a real brief_attach records anything).
+        ...(body.attachOnly === true ? { attachOnly: true } : {}),
       },
     };
   }
@@ -400,6 +418,13 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
     return {
       action,
       mutationId: stringValue(body.mutationId, "mutationId", { required: true, max: 200 })!,
+    };
+  }
+  if (action === "arrival_interact") {
+    return {
+      action,
+      planId: stringValue(body.planId, "planId", { required: true, max: 200 })!,
+      mutationId: mutationIdValue(body.mutationId),
     };
   }
   if (action === "brief_action") {
@@ -491,6 +516,32 @@ function readModelMorningBrief(
   }
 }
 
+// The in-flight brief generation state for the plan's target date. Loopback-only,
+// gated exactly like brief content: a remote session must not learn whether a
+// brief is being written. Fail-open — any error yields no field and the arrival
+// stays quiet. Carries no brief_json, only lifecycle state (and startedAt).
+function readModelBriefGeneration(
+  store: DayPlanStore,
+  plan: { localDate?: string } | undefined,
+  accessMode: DayPlanAccessMode | undefined,
+) {
+  try {
+    if (accessMode !== "loopback") return undefined;
+    if (!plan?.localDate) return undefined;
+    // A live generation on the other machine keeps the arrival in-progress until
+    // its artifact syncs in and is imported. Fail-open: no status = no attempt.
+    const remoteAttempt = liveRemoteBriefAttempt({ targetLocalDate: plan.localDate });
+    return selectMorningBriefGeneration(
+      store.listMorningBriefs(plan.localDate),
+      plan.localDate,
+      new Date(),
+      { remoteAttempt: remoteAttempt ? { startedAt: remoteAttempt.startedAt } : undefined },
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 export async function GET(request: NextRequest) {
   if (!hasDayPlanRouteAccess(request)) {
     return NextResponse.json({ error: "Untrusted request host." }, { status: 403 });
@@ -502,12 +553,18 @@ export async function GET(request: NextRequest) {
     // response carries, so plan.briefId and the brief id always agree.
     const readModel = store.getReadModel();
     const morningBrief = readModelMorningBrief(store, readModel.currentPlan);
+    const briefGeneration = readModelBriefGeneration(
+      store,
+      readModel.currentPlan,
+      accessMode,
+    );
     return NextResponse.json({
       ...readModel,
       currentPlan: readModel.currentPlan
         ? publicDayPlan(readModel.currentPlan, accessMode)
         : undefined,
       ...(morningBrief ? { morningBrief } : {}),
+      ...(briefGeneration ? { briefGeneration } : {}),
       csrfToken: getQuietCurrentCsrfToken(),
     });
   } catch (error) {
@@ -556,6 +613,21 @@ export async function POST(request: NextRequest) {
         states: store.listMorningBriefSalesActionStates(parsed.briefId),
       });
     }
+    if (parsed.action === "arrival_interact") {
+      // Durable first-interaction marker: freezes the arrival against a late
+      // brief attach. Idempotent on the mutation id; never bumps the version.
+      const marked = store.markArrivalInteraction(parsed.planId, parsed.mutationId);
+      return NextResponse.json({
+        plan: publicDayPlan(marked.plan, currentDayPlanAccessMode()),
+        replayed: marked.replayed,
+      });
+    }
+    // Import any synced relay artifact BEFORE ensuring or evaluating triggers, so
+    // a just-synced brief is consumed (or late-attached) instead of regenerated.
+    // Fail-open and only meaningful on loopback (the surface Alex uses).
+    if (parsed.action === "ensure" && currentDayPlanAccessMode() === "loopback") {
+      scanAndImportBriefRelay({ store, targetLocalDate: parsed.input.localDate });
+    }
     const result = parsed.action === "ensure"
       ? store.ensureDayPlan(parsed.input)
       : parsed.action === "reconciliation_applied"
@@ -563,7 +635,29 @@ export async function POST(request: NextRequest) {
         : parsed.action === "task_mutation_applied"
           ? store.acknowledgeTaskMutation(parsed.mutationId)
         : store.mutateDayPlan(parsed.input);
-    maybeQueueMorningBrief(store, parsed.action, result);
+    // Trigger-driven enqueues announce themselves to the relay as `queued`
+    // immediately (see withQueuedAttemptStatus), closing the enqueue→claim
+    // duplicate-generation window.
+    maybeQueueMorningBrief(withQueuedAttemptStatus(store), parsed.action, result, new Date(), {
+      isRemoteAttemptLive: (date) =>
+        Boolean(liveRemoteBriefAttempt({ targetLocalDate: date })),
+    });
+    // The MBP settles days; refresh the settlement relay so the Mini's next
+    // brief sees the same reconciliation summary, and publish the source
+    // checkpoint alongside it. Role-gated: a machine that itself gates on the
+    // checkpoint (the Mini sets FORGE_BRIEF_REQUIRE_SOURCE_CHECKPOINT=1) is not
+    // the authoritative source publisher and must never write it. Fail-open.
+    if (parsed.action === "settlement_commit" || parsed.action === "reconciliation_applied") {
+      writeSettlementRelay({ store });
+      if (process.env.FORGE_BRIEF_REQUIRE_SOURCE_CHECKPOINT !== "1") {
+        writeSourceCheckpoint({
+          sources: {
+            goals: defaultGoalsPath(),
+            sprint_memo: defaultSprintMemoPath(),
+          },
+        });
+      }
+    }
     const queuedRuns = parsed.action === "start_day" && "executionRuns" in result
       ? result.executionRuns?.filter((run) => run.status === "queued").length ?? 0
       : 0;

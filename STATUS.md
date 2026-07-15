@@ -16,10 +16,10 @@
 
 <!-- BEGIN active-session -->
 ## Active Session
-- **system:** none
-- **device:** —
-- **since:** —
-- **task:** —
+- **system:** cowork
+- **device:** Alexanders-MacBook-Pro-2
+- **since:** 2026-07-15T09:15:15-0700
+- **task:** Mini-hosted morning brief relay + in-flight UI
 <!-- END active-session -->
 
 ---
@@ -38,6 +38,15 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - Closed tasks require direct evidence before marking done.
 
 ## Current State
+
+### 2026-07-15 Morning brief moved to the Mac Mini (cross-machine relay) + in-flight arrival UI
+
+- The MacBook-asleep failure hit on cue (7:33 dark-wake froze the 7:30 generation; backfill recovered but the arrival showed the deterministic fallback with no explanation, and the late brief never attached to the already-created plan). Alex decided: the 24/7 Mini generates the brief; the arrival must show when a brief is being written.
+- **Shipped both** (see `docs/morning-brief.md` "Cross-machine relay" for the full design): write-once JSON relay over Syncthing (never SQLite), attempt-status channel so the MBP holds backfill while the Mini works, source-checkpoint gate so the Mini fails closed on stale synced sources, transactional import, guarded late-attach with a durable `arrival_interacted_at` marker, one-shot attach on load/visibility + 15s poll only while generation is live, and the "Your brief is being written…" arrival line.
+- **The Syncthing/SQLite hazard is closed**: both machines' forge.db (+ claude-runs, heartbeat, backups) are now stignored — applied BY HAND on both machines (Syncthing never syncs .stignore; its old header claimed otherwise and was corrected). `install-forge-local.sh --mini` refuses to install until the operator confirms the block is on both machines.
+- Ops state: Mini runs `com.forge.morning-brief` at 7:30 (logs at ~/Library/Logs/forge-morning-brief.log on the Mini); MBP's 7:30 one-shot is decommissioned; MBP worker publishes checkpoint + settlement relay. Mini claude auth verified in the gui launchd domain (SSH says "Not logged in" — expected, Keychain is locked over SSH).
+- Process: Sol spec review (FIX-SPEC-FIRST, 12 findings — all implemented), one scoped cross-model code review per Alex's trim decision (FIX-FIRST, 9 findings — all fixed), 136 targeted tests green, live acceptance end-to-end including the real 2026-07-15 brief late-attaching into Alex's open plan (verified on screen).
+- Watch tomorrow (2026-07-16 ~7:30): first fully autonomous Mini generation. Check `day_plan_briefs` on the Mini + relay file + MBP import; the MBP backfill covers any failure.
 
 ### 2026-07-14 Design-craft pass shipped; Morning Brief engine in build
 

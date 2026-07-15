@@ -19,6 +19,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 import type { DayPlanExecutionState } from '@/lib/data/day-plan';
 import type {
+  MorningBriefGeneration,
   MorningBriefSalesActionState,
   MorningBriefSuggestedAddition,
   PublicMorningBrief,
@@ -64,6 +65,9 @@ interface MorningArrivalProps {
   // narrative replaces the deterministic recommendation line, and its Watch and
   // Sales sections render below the cards. Absent brief: deterministic morning.
   brief?: PublicMorningBrief;
+  // In-flight generation state for today's date. When no brief is consumed yet
+  // and one is queued/running, the arrival shows a quiet "being written" line.
+  briefGeneration?: MorningBriefGeneration;
   recap?: string;
   freshnessLabel?: string;
   expandedItemId?: string | null;
@@ -81,6 +85,9 @@ interface MorningArrivalProps {
   titleId: string;
   descriptionId: string;
   escapeRef?: RefObject<(() => void) | null>;
+  // Fired on the first low-level interaction that no mutation covers (expanding a
+  // card, typing in the refine box) so the arrival freezes against a late brief.
+  onInteract?: () => void;
   onExpand: (itemId: string) => void;
   onOwnerChange: (itemId: string, owner: DayOwner) => void | Promise<void>;
   onDragReorder: (activeId: string, overId: string) => void | Promise<void>;
@@ -324,6 +331,7 @@ export default function MorningArrival({
   items,
   recommendation,
   brief,
+  briefGeneration,
   recap,
   freshnessLabel,
   expandedItemId,
@@ -339,6 +347,7 @@ export default function MorningArrival({
   titleId,
   descriptionId,
   escapeRef,
+  onInteract,
   onExpand,
   onOwnerChange,
   onDragReorder,
@@ -368,6 +377,11 @@ export default function MorningArrival({
   );
   const assistantActive = assistantTurn?.state === 'queued' || assistantTurn?.state === 'running';
   const anyExecutionBusy = executionBusyItemIds.size > 0;
+  // A brief is still being written for a plan that consumed none yet. A failed or
+  // idle generation stays silent (fail-open); a consumed brief hides this line.
+  const briefWriting =
+    !brief &&
+    (briefGeneration?.state === 'queued' || briefGeneration?.state === 'running');
 
   // Suggested additions are an approval inbox: Review pre-fills the bounded
   // plan assistant, so an accepted addition flows through the existing
@@ -473,6 +487,36 @@ export default function MorningArrival({
                 <p className="mt-1 text-sm leading-relaxed text-foreground">
                   {brief?.lensNarrative ?? recommendation}
                 </p>
+                {/* Quiet in-progress line, height-animated so it opens and resolves
+                    without a layout jump. Reduced motion collapses instantly and
+                    the pulse falls back to a static indicator. */}
+                <div
+                  className={`grid transition-[grid-template-rows] duration-300 ease-[var(--ease-out-forge)] motion-reduce:transition-none ${
+                    briefWriting ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+                  }`}
+                >
+                  <div className="overflow-hidden">
+                    <p
+                      className="mt-2 flex items-center gap-2 text-sm text-muted-foreground"
+                      aria-live="polite"
+                    >
+                      {briefWriting && (
+                        <>
+                          <span className="inline-flex items-center gap-1" aria-hidden="true">
+                            {[0, 1, 2].map((dot) => (
+                              <span
+                                key={dot}
+                                className="size-1.5 rounded-full bg-current opacity-35 motion-safe:animate-pulse"
+                                style={{ animationDelay: `${dot * 180}ms` }}
+                              />
+                            ))}
+                          </span>
+                          Your brief is being written…
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
               </section>
             </div>
 
@@ -613,6 +657,8 @@ export default function MorningArrival({
                   className="max-h-40 min-h-11 min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-accent-blue/40 disabled:opacity-60"
                   placeholder="Add context or change the order…"
                   onChange={(event) => {
+                    // First keystroke in the refine box is a real interaction.
+                    if (!assistantPrompt) onInteract?.();
                     setAssistantPrompt(event.target.value);
                     event.currentTarget.style.height = 'auto';
                     event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 160)}px`;

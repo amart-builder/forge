@@ -21,6 +21,7 @@ import {
   selectStartedExecutionRows,
   shortArrivalSummary,
   shouldKeepStartedView,
+  shouldPollBriefGeneration,
   staleSettlementNotice,
 } from '../src/lib/day-plan/presentation.ts';
 import {
@@ -239,6 +240,27 @@ test('the started view opens only when accepted agent work exists', () => {
     hasAgentOwnedAcceptedWork([{ ...acceptedItem('a', 'claude'), decision: 'later' }]),
     false,
   );
+});
+
+test('brief-generation poll runs only on a visible, untouched arrival while writing', () => {
+  const base = {
+    view: 'arrival',
+    documentVisible: true,
+    interacted: false,
+    hasConsumedBrief: false,
+    generationState: 'running',
+  };
+  assert.equal(shouldPollBriefGeneration(base), true);
+  assert.equal(shouldPollBriefGeneration({ ...base, generationState: 'queued' }), true);
+  // The gate closes on every off condition.
+  assert.equal(shouldPollBriefGeneration({ ...base, view: 'started' }), false);
+  assert.equal(shouldPollBriefGeneration({ ...base, documentVisible: false }), false);
+  assert.equal(shouldPollBriefGeneration({ ...base, interacted: true }), false);
+  assert.equal(shouldPollBriefGeneration({ ...base, hasConsumedBrief: true }), false);
+  // A resolved generation stops the poll: nothing is being written.
+  assert.equal(shouldPollBriefGeneration({ ...base, generationState: 'failed' }), false);
+  assert.equal(shouldPollBriefGeneration({ ...base, generationState: 'idle' }), false);
+  assert.equal(shouldPollBriefGeneration({ ...base, generationState: undefined }), false);
 });
 
 test('claude resume deep link encodes the session id', () => {

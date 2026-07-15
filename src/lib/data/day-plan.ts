@@ -1,4 +1,5 @@
 import type {
+  MorningBriefGeneration,
   MorningBriefSalesActionRecord,
   MorningBriefSalesActionState,
   PublicMorningBrief,
@@ -27,6 +28,9 @@ export type DayPlanApiSnapshot = DayPlanReadModel & {
   // Present only on loopback requests, and only for the brief the current plan
   // consumed at ensure time.
   morningBrief?: PublicMorningBrief;
+  // In-flight brief generation for the current plan's date. Loopback-only,
+  // like morningBrief; absent on non-loopback and when there is no plan.
+  briefGeneration?: MorningBriefGeneration;
 };
 export type DayPlanExecutionState = {
   items: Array<{
@@ -120,6 +124,19 @@ export function mutateDayPlan(
   input: DayPlanMutationInput,
 ): Promise<DayPlanMutationResult> {
   return postDayPlan(input);
+}
+
+// Durably records the first meaningful arrival interaction on the server so a
+// late brief can never hot-swap after the user has touched the arrival. Never
+// bumps the plan version; safe to call fire-and-forget.
+export function markDayPlanArrivalInteraction(input: {
+  planId: string;
+  mutationId: string;
+}): Promise<{ plan: DayPlan; replayed: boolean }> {
+  return postDayPlan<{ plan: DayPlan; replayed: boolean }>({
+    action: "arrival_interact",
+    ...input,
+  });
 }
 
 export function acknowledgeDayPlanReconciliation(

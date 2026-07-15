@@ -114,8 +114,13 @@ export type DayPlan = {
   lastMutationId?: string;
   items: DayPlanItem[];
   // The Morning Brief artifact consumed when this plan was proposed, if any.
-  // Set once at ensure and never hot-swapped afterwards.
+  // Set at ensure, or attached once by a guarded late-attach before the arrival
+  // is touched; never hot-swapped after any interaction.
   briefId?: string;
+  // The durable first-interaction marker. Once set (by an explicit interaction
+  // mutation or automatically by any content mutation) the arrival is frozen
+  // against a late brief attach. Null on a pristine, untouched arrival.
+  arrivalInteractedAt?: string;
   recommendedFirstItemId?: string;
   recommendedFirstTaskId?: string;
   snoozedUntil?: string;
@@ -183,6 +188,8 @@ export type DayPlanEvent = {
 
 export type DayPlanEventType =
   | "ensure"
+  | "brief_attach"
+  | "arrival_interact"
   | "assistant_patch"
   | "item_kickoff"
   | DayPlanMutationAction;
@@ -211,6 +218,11 @@ export type EnsureDayPlanInput = {
   timezone: string;
   mutationId: string;
   candidates: RecommendationCandidate[];
+  // Late-brief poll mode: only attempt the guarded late-attach on an EXISTING
+  // plan. When nothing attaches, the call is a silent no-op — no ledger event,
+  // no mutation-id consumption — so a repeating poll never grows the ledger.
+  // Never creates a plan.
+  attachOnly?: boolean;
 };
 
 export type DayPlanMutationInput = {

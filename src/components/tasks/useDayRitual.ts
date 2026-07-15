@@ -13,6 +13,7 @@ import {
   getDayPlanExecutionState,
   getDayPlanState,
   kickoffDayPlanItem,
+  markDayPlanArrivalInteraction,
   markMorningBriefSalesAction,
   mutateDayPlan,
   newDayPlanMutationId,
@@ -20,6 +21,7 @@ import {
   type DayPlanExecutionState,
 } from '@/lib/data/day-plan';
 import type {
+  MorningBriefGeneration,
   MorningBriefSalesActionState,
   PublicMorningBrief,
 } from '@/lib/day-plan/brief';
@@ -41,8 +43,14 @@ import type {
 } from '@/lib/day-plan/types';
 import {
   hasAgentOwnedAcceptedWork,
+  shouldAttemptLateBriefAttach,
   shouldKeepStartedView,
+  shouldPollBriefGeneration,
 } from '@/lib/day-plan/presentation';
+
+// While the arrival is open with no brief and one is still being written, re-poll
+// the read model at this cadence to pick the brief up the moment it lands.
+const BRIEF_GENERATION_POLL_MS = 15_000;
 
 export type DayRitualView =
   | 'checking'
@@ -122,6 +130,16 @@ export default function useDayRitual({
 }: UseDayRitualInput) {
   const [plan, setPlan] = useState<DayPlan>();
   const [morningBrief, setMorningBrief] = useState<PublicMorningBrief>();
+  const [briefGeneration, setBriefGeneration] = useState<MorningBriefGeneration>();
+  // The arrival's no-hot-swap gate: a late brief may swap into a pristine arrival,
+  // but the first real interaction freezes it. The ref guards the sync setter; the
+  // state drives the polling effect.
+  const [arrivalInteracted, setArrivalInteracted] = useState(false);
+  const arrivalInteractedRef = useRef(false);
+  // Once-per-page-load (and once per visibility regain) guard for the one-shot
+  // attach-only ensure that picks up a brief which landed while the app was
+  // closed. Reset when a new plan arrives.
+  const lateAttachAttemptedRef = useRef(false);
   const [latestSnapshot, setLatestSnapshot] = useState<DaySnapshot>();
   const [pendingReconciliations, setPendingReconciliations] = useState<DayPlanReconciliation[]>([]);
   const [pendingTaskMutations, setPendingTaskMutations] = useState<DayPlanTaskMutation[]>([]);
@@ -154,7 +172,33 @@ export default function useDayRitual({
     setMorningBrief(next);
   }, []);
 
+  // The first content interaction inside an open arrival. It freezes the arrival
+  // against any late-brief hot-swap and stops the generation poll for the day,
+  // and durably records the interaction on the server so the guarded late-attach
+  // will not fire either. Fire-and-forget: the local freeze is authoritative for
+  // this session regardless of the request outcome.
+  const markArrivalInteraction = useCallback(() => {
+    if (arrivalInteractedRef.current) return;
+    arrivalInteractedRef.current = true;
+    setArrivalInteracted(true);
+    const current = planRef.current;
+    if (current) {
+      void markDayPlanArrivalInteraction({
+        planId: current.id,
+        mutationId: `arrival_interact:${current.id}:${newDayPlanMutationId()}`,
+      }).catch(() => undefined);
+    }
+  }, []);
+
   const acceptPlan = useCallback((nextPlan: DayPlan, snapshot?: DaySnapshot) => {
+    // A brand-new plan (a new day, or after settlement) is a fresh, untouched
+    // arrival; same-id updates from the user's own mutations keep the frozen flag.
+    if (planRef.current?.id !== nextPlan.id) {
+      arrivalInteractedRef.current = false;
+      setArrivalInteracted(false);
+      // A new plan gets its own one-shot late-attach attempt.
+      lateAttachAttemptedRef.current = false;
+    }
     planRef.current = nextPlan;
     setPlan(nextPlan);
     if (snapshot) setLatestSnapshot(snapshot);
@@ -193,6 +237,7 @@ export default function useDayRitual({
     // The projection is pinned to the brief this plan consumed at ensure, so a
     // refresh can only re-deliver the same artifact, never hot-swap content.
     applyMorningBrief(readModel.morningBrief);
+    setBriefGeneration(readModel.briefGeneration);
     if (readModel.currentPlan) acceptPlan(readModel.currentPlan, readModel.latestSnapshot);
     return readModel.currentPlan;
   }, [acceptPlan, applyMorningBrief]);
@@ -248,6 +293,7 @@ export default function useDayRitual({
         setPendingReconciliations(readModel.pendingReconciliations);
         setPendingTaskMutations(readModel.pendingTaskMutations);
         applyMorningBrief(readModel.morningBrief);
+        setBriefGeneration(readModel.briefGeneration);
 
         let nextPlan = readModel.currentPlan;
         if (!nextPlan) {
@@ -280,7 +326,10 @@ export default function useDayRitual({
             // The plan consumed a Morning Brief at ensure; pick up its
             // loopback projection. Fail-open: arrival never waits on it.
             const refreshed = await getDayPlanState().catch(() => undefined);
-            if (!cancelled && refreshed) applyMorningBrief(refreshed.morningBrief);
+            if (!cancelled && refreshed) {
+              applyMorningBrief(refreshed.morningBrief);
+              setBriefGeneration(refreshed.briefGeneration);
+            }
           }
         }
 
@@ -442,6 +491,132 @@ export default function useDayRitual({
     };
   }, [executionState, refreshExecution]);
 
+  // One poll step. When the arrival still has no brief, it re-ensures with a
+  // fresh mutation id: the route imports any just-synced relay artifact and the
+  // store runs the guarded late-attach, so the brief actually lands on the plan
+  // (a plain GET could only ever re-deliver the same artifact). The re-ensure
+  // returns the same plan id, so acceptPlan keeps the untouched flag and the
+  // existing morningBriefSyncDecision governs the swap. Falls back to a GET
+  // refresh when candidates are not fresh enough to re-ensure.
+  const pollForLateBrief = useCallback(async () => {
+    const current = planRef.current;
+    const candidates = candidatesRef.current;
+    if (current && !current.briefId && candidatesReady && candidates.length > 0) {
+      try {
+        const ensured = await ensureDayPlan({
+          localDate: current.localDate,
+          timezone: current.timezone,
+          mutationId: `ensure:late-brief:${current.id}:${newDayPlanMutationId()}`,
+          candidates,
+          // Attach-or-silent-no-op: the server records nothing unless a brief
+          // actually attaches, so this 15s poll never grows the event ledger.
+          attachOnly: true,
+        });
+        acceptPlan(ensured.plan, ensured.snapshot);
+        const refreshed = await getDayPlanState().catch(() => undefined);
+        if (refreshed) {
+          applyMorningBrief(refreshed.morningBrief);
+          setBriefGeneration(refreshed.briefGeneration);
+        }
+        return;
+      } catch {
+        // Fall through to a plain refresh; the arrival never waits on the brief.
+      }
+    }
+    await refreshPlan().catch(() => undefined);
+  }, [acceptPlan, applyMorningBrief, candidatesReady, refreshPlan]);
+
+  // When the arrival is open with no consumed brief and one is still being
+  // written, re-poll so a late brief can swap in gently (via the existing
+  // morningBriefSyncDecision in acceptPlan). The poll runs only while the
+  // arrival is visible and untouched; the first interaction or a consumed brief
+  // closes the gate for the day (never a hot-swap after interaction).
+  useEffect(() => {
+    if (!enabled) return;
+    const gateOpen = () =>
+      shouldPollBriefGeneration({
+        view,
+        documentVisible:
+          typeof document === 'undefined' || document.visibilityState === 'visible',
+        interacted: arrivalInteractedRef.current,
+        hasConsumedBrief: Boolean(planRef.current?.briefId),
+        generationState: briefGeneration?.state,
+      });
+    if (!gateOpen()) return;
+
+    let cancelled = false;
+    let timeout: number | undefined;
+
+    const tick = async () => {
+      if (cancelled) return;
+      // Skip the fetch while hidden or interacted, but keep the timer so polling
+      // resumes on its own when the document becomes visible again.
+      if (
+        (typeof document === 'undefined' || document.visibilityState === 'visible') &&
+        !arrivalInteractedRef.current
+      ) {
+        // Re-ensure so the server imports + late-attaches a synced brief;
+        // acceptPlan applies the sync decision, so it swaps in here.
+        await pollForLateBrief();
+      }
+      if (!cancelled) timeout = window.setTimeout(() => void tick(), BRIEF_GENERATION_POLL_MS);
+    };
+
+    timeout = window.setTimeout(() => void tick(), BRIEF_GENERATION_POLL_MS);
+    return () => {
+      cancelled = true;
+      if (timeout !== undefined) window.clearTimeout(timeout);
+    };
+  }, [enabled, view, arrivalInteracted, briefGeneration?.state, plan?.briefId, pollForLateBrief]);
+
+  // One-shot late-attach for the relay's primary case: a brief that finished
+  // while the app was closed leaves plan.briefId null with NO queued/running
+  // generation, so the interval poll above never engages. On initialization
+  // (and again when the document regains visibility), a pristine arrival sends
+  // a single attach-only ensure: the server imports any synced artifact and
+  // runs its guarded late-attach, or answers with a silent no-op. Interval
+  // polling stays gated on an active generation (unchanged).
+  useEffect(() => {
+    if (!enabled) return;
+    const attempt = () => {
+      const current = planRef.current;
+      const open = shouldAttemptLateBriefAttach({
+        planState: current?.state,
+        arrivalState: current?.arrivalState,
+        hasConsumedBrief: Boolean(current?.briefId),
+        arrivalInteractedAt: current?.arrivalInteractedAt,
+        interacted: arrivalInteractedRef.current,
+        documentVisible:
+          typeof document === 'undefined' || document.visibilityState === 'visible',
+        candidatesReady,
+        candidateCount: candidatesRef.current.length,
+        alreadyAttempted: lateAttachAttemptedRef.current,
+      });
+      if (!open) return;
+      lateAttachAttemptedRef.current = true;
+      void pollForLateBrief();
+    };
+    attempt();
+    if (typeof document === 'undefined') return;
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      // A fresh look at the app earns one fresh attempt; the durable
+      // interaction marker and briefId still gate inside attempt().
+      lateAttachAttemptedRef.current = false;
+      attempt();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [
+    enabled,
+    plan?.id,
+    plan?.briefId,
+    plan?.arrivalState,
+    plan?.arrivalInteractedAt,
+    candidatesReady,
+    pollForLateBrief,
+  ]);
+
   const enqueueMutation = useCallback(
     async (
       action: DayPlanMutationAction,
@@ -533,30 +708,34 @@ export default function useDayRitual({
   }, [enqueueMutation]);
 
   const setOwner = useCallback(async (itemId: string, owner: DayPlanOwner) => {
+    markArrivalInteraction();
     await enqueueMutation('item_owner', { itemId, owner }, {
       itemId,
       announce: `Owner changed to ${owner === 'me' ? 'Me' : owner === 'claude' ? 'Claude' : 'Together'}.`,
     });
-  }, [enqueueMutation]);
+  }, [enqueueMutation, markArrivalInteraction]);
 
   const reorder = useCallback(async (itemId: string, position: number, title: string) => {
+    markArrivalInteraction();
     await enqueueMutation('item_reorder', { itemId, position }, {
       itemId,
       announce: `${title} moved to priority ${position + 1}.`,
     });
-  }, [enqueueMutation]);
+  }, [enqueueMutation, markArrivalInteraction]);
 
   const dismissItem = useCallback(async (itemId: string, title: string) => {
+    markArrivalInteraction();
     await enqueueMutation('item_dismiss', { itemId }, {
       itemId,
       announce: `${title} removed from today’s essentials. The task is still in All Work.`,
     });
-  }, [enqueueMutation]);
+  }, [enqueueMutation, markArrivalInteraction]);
 
   const submitAssistantPrompt = useCallback(async (userText: string) => {
     const current = planRef.current;
     if (!current) throw new Error('The day plan is not ready.');
     if (assistantSubmittingRef.current) throw new Error('Forge is sending the previous prompt.');
+    markArrivalInteraction();
     assistantSubmittingRef.current = true;
     setAssistantSubmitting(true);
     setAssistantError(undefined);
@@ -582,7 +761,7 @@ export default function useDayRitual({
       assistantSubmittingRef.current = false;
       setAssistantSubmitting(false);
     }
-  }, [acceptPlan]);
+  }, [acceptPlan, markArrivalInteraction]);
 
   const configureExecution = useCallback(async (
     itemId: string,
@@ -593,6 +772,7 @@ export default function useDayRitual({
   ) => {
     const current = planRef.current;
     if (!current) throw new Error('The day plan is not ready.');
+    markArrivalInteraction();
     setExecutionBusyItemIds((items) => new Set(items).add(itemId));
     setExecutionError(undefined);
     try {
@@ -638,7 +818,7 @@ export default function useDayRitual({
         return next;
       });
     }
-  }, [acceptExecutionState, acceptPlan]);
+  }, [acceptExecutionState, acceptPlan, markArrivalInteraction]);
 
   const kickoffExecution = useCallback(async (
     itemId: string,
@@ -649,6 +829,7 @@ export default function useDayRitual({
   ) => {
     const current = planRef.current;
     if (!current) throw new Error('The day plan is not ready.');
+    markArrivalInteraction();
     setExecutionBusyItemIds((items) => new Set(items).add(itemId));
     setExecutionError(undefined);
     try {
@@ -723,7 +904,7 @@ export default function useDayRitual({
         return next;
       });
     }
-  }, [acceptExecutionState, acceptPlan]);
+  }, [acceptExecutionState, acceptPlan, markArrivalInteraction]);
 
   const cancelExecution = useCallback(async (runId: string) => {
     const run = executionStateRef.current?.runs.find((candidate) => candidate.id === runId);
@@ -906,6 +1087,7 @@ export default function useDayRitual({
     // The post-settlement refetch carries the fresh projection; acceptPlan
     // below reconciles it against the plan that ends up current.
     applyMorningBrief(readModel.morningBrief);
+    setBriefGeneration(readModel.briefGeneration);
     let nextPlan = readModel.currentPlan;
     if (!nextPlan) {
       nextPlan = (await ensureDayPlan({
@@ -997,6 +1179,7 @@ export default function useDayRitual({
   return {
     plan,
     morningBrief,
+    briefGeneration,
     latestSnapshot,
     pendingReconciliations,
     pendingTaskMutations,
@@ -1019,6 +1202,7 @@ export default function useDayRitual({
       view === 'started' ||
       view === 'settlement',
     openArrival,
+    markArrivalInteraction,
     snooze,
     skip,
     bypass,
