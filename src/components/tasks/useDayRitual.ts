@@ -13,11 +13,17 @@ import {
   getDayPlanExecutionState,
   getDayPlanState,
   kickoffDayPlanItem,
+  markMorningBriefSalesAction,
   mutateDayPlan,
   newDayPlanMutationId,
   onceOnlyDayPlanMutationId,
   type DayPlanExecutionState,
 } from '@/lib/data/day-plan';
+import type {
+  MorningBriefSalesActionState,
+  PublicMorningBrief,
+} from '@/lib/day-plan/brief';
+import { morningBriefSyncDecision } from '@/lib/day-plan/brief-view';
 import type {
   DayPlan,
   DayPlanAssistantTurn,
@@ -115,6 +121,7 @@ export default function useDayRitual({
   candidatesReady,
 }: UseDayRitualInput) {
   const [plan, setPlan] = useState<DayPlan>();
+  const [morningBrief, setMorningBrief] = useState<PublicMorningBrief>();
   const [latestSnapshot, setLatestSnapshot] = useState<DaySnapshot>();
   const [pendingReconciliations, setPendingReconciliations] = useState<DayPlanReconciliation[]>([]);
   const [pendingTaskMutations, setPendingTaskMutations] = useState<DayPlanTaskMutation[]>([]);
@@ -132,6 +139,7 @@ export default function useDayRitual({
   const [executionBusyItemIds, setExecutionBusyItemIds] = useState<Set<string>>(new Set());
   const [executionError, setExecutionError] = useState<string>();
   const planRef = useRef<DayPlan | undefined>(undefined);
+  const morningBriefRef = useRef<PublicMorningBrief | undefined>(undefined);
   const assistantTurnRef = useRef<DayPlanAssistantTurn | undefined>(undefined);
   const assistantSubmittingRef = useRef(false);
   const executionStateRef = useRef<DayPlanExecutionState | undefined>(undefined);
@@ -141,10 +149,33 @@ export default function useDayRitual({
 
   candidatesRef.current = candidates;
 
+  const applyMorningBrief = useCallback((next: PublicMorningBrief | undefined) => {
+    morningBriefRef.current = next;
+    setMorningBrief(next);
+  }, []);
+
   const acceptPlan = useCallback((nextPlan: DayPlan, snapshot?: DaySnapshot) => {
     planRef.current = nextPlan;
     setPlan(nextPlan);
     if (snapshot) setLatestSnapshot(snapshot);
+    // The held brief is keyed to plan.briefId: a plan that consumed no brief
+    // clears it (yesterday's content must never render against today's plan),
+    // and a plan whose brief we do not hold refetches the pinned projection.
+    const decision = morningBriefSyncDecision(nextPlan.briefId, morningBriefRef.current);
+    if (decision === 'clear') {
+      applyMorningBrief(undefined);
+    } else if (decision === 'refresh') {
+      void getDayPlanState()
+        .then((readModel) => {
+          if (planRef.current?.id !== nextPlan.id) return;
+          applyMorningBrief(
+            readModel.morningBrief && readModel.morningBrief.id === nextPlan.briefId
+              ? readModel.morningBrief
+              : undefined,
+          );
+        })
+        .catch(() => undefined);
+    }
     setView((current) => {
       const inferred = inferView(nextPlan);
       // An active plan infers 'none', but the started payoff view stays open across
@@ -152,16 +183,25 @@ export default function useDayRitual({
       // transitions (settlement opening, arrival reopening) still apply.
       return shouldKeepStartedView(current, inferred, nextPlan.state) ? current : inferred;
     });
-  }, []);
+  }, [applyMorningBrief]);
 
   const refreshPlan = useCallback(async () => {
     const readModel = await getDayPlanState();
     setLatestSnapshot(readModel.latestSnapshot);
     setPendingReconciliations(readModel.pendingReconciliations);
     setPendingTaskMutations(readModel.pendingTaskMutations);
+    // The projection is pinned to the brief this plan consumed at ensure, so a
+    // refresh can only re-deliver the same artifact, never hot-swap content.
+    applyMorningBrief(readModel.morningBrief);
     if (readModel.currentPlan) acceptPlan(readModel.currentPlan, readModel.latestSnapshot);
     return readModel.currentPlan;
-  }, [acceptPlan]);
+  }, [acceptPlan, applyMorningBrief]);
+
+  // Keep the ref current for paths that update brief state functionally
+  // (optimistic sales-action marks); acceptPlan reads it synchronously.
+  useEffect(() => {
+    morningBriefRef.current = morningBrief;
+  }, [morningBrief]);
 
   const acceptExecutionState = useCallback((next: DayPlanExecutionState) => {
     executionStateRef.current = next;
@@ -207,6 +247,7 @@ export default function useDayRitual({
         setLatestSnapshot(readModel.latestSnapshot);
         setPendingReconciliations(readModel.pendingReconciliations);
         setPendingTaskMutations(readModel.pendingTaskMutations);
+        applyMorningBrief(readModel.morningBrief);
 
         let nextPlan = readModel.currentPlan;
         if (!nextPlan) {
@@ -235,6 +276,12 @@ export default function useDayRitual({
           });
           nextPlan = ensured.plan;
           if (ensured.snapshot) setLatestSnapshot(ensured.snapshot);
+          if (nextPlan.briefId) {
+            // The plan consumed a Morning Brief at ensure; pick up its
+            // loopback projection. Fail-open: arrival never waits on it.
+            const refreshed = await getDayPlanState().catch(() => undefined);
+            if (!cancelled && refreshed) applyMorningBrief(refreshed.morningBrief);
+          }
         }
 
         if (cancelled) return;
@@ -330,7 +377,7 @@ export default function useDayRitual({
     return () => {
       cancelled = true;
     };
-  }, [acceptPlan, candidatesReady, enabled]);
+  }, [acceptPlan, applyMorningBrief, candidatesReady, enabled]);
 
   useEffect(() => {
     if (!enabled || !plan?.id) return;
@@ -856,6 +903,9 @@ export default function useDayRitual({
       throw new Error('Forge needs a fresh task refresh before it can prepare today.');
     }
     const readModel = await getDayPlanState();
+    // The post-settlement refetch carries the fresh projection; acceptPlan
+    // below reconciles it against the plan that ends up current.
+    applyMorningBrief(readModel.morningBrief);
     let nextPlan = readModel.currentPlan;
     if (!nextPlan) {
       nextPlan = (await ensureDayPlan({
@@ -882,7 +932,55 @@ export default function useDayRitual({
     acceptPlan(nextPlan, readModel.latestSnapshot);
     reconciliationBlockedRef.current = false;
     setAnnouncement('The previous day is closed. Morning Arrival is ready.');
-  }, [acceptPlan, candidatesReady]);
+  }, [acceptPlan, applyMorningBrief, candidatesReady]);
+
+  // Marks one brief sales action approved, edited, or skipped. State only;
+  // Forge never sends anything. Optimistic, reconciled from the server reply.
+  const markBriefSalesAction = useCallback(async (
+    actionIndex: number,
+    state: MorningBriefSalesActionState,
+    editedText?: string,
+  ) => {
+    const current = morningBrief;
+    if (!current) return;
+    setMorningBrief({
+      ...current,
+      salesActions: current.salesActions.map((action, index) =>
+        index === actionIndex ? { ...action, state, editedText } : action,
+      ),
+    });
+    try {
+      const result = await markMorningBriefSalesAction({
+        briefId: current.id,
+        actionIndex,
+        state,
+        editedText,
+      });
+      setMorningBrief((latest) => {
+        if (!latest || latest.id !== current.id) return latest;
+        const byIndex = new Map(result.states.map((record) => [record.actionIndex, record]));
+        return {
+          ...latest,
+          salesActions: latest.salesActions.map((action, index) => {
+            const record = byIndex.get(index);
+            return { ...action, state: record?.state, editedText: record?.editedText };
+          }),
+        };
+      });
+    } catch (nextError) {
+      // Roll back the optimistic mark, but only when the held brief is still
+      // the one we marked: a plan transition mid-flight may have cleared or
+      // replaced it, and restoring the old brief would break the briefId key.
+      setMorningBrief((latest) =>
+        latest && latest.id === current.id ? current : latest,
+      );
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Forge couldn't save that sales action.",
+      );
+    }
+  }, [morningBrief]);
 
   const acknowledgeReconciliation = useCallback(async (reconciliationId: string) => {
     await acknowledgeDayPlanReconciliation(reconciliationId);
@@ -898,6 +996,7 @@ export default function useDayRitual({
 
   return {
     plan,
+    morningBrief,
     latestSnapshot,
     pendingReconciliations,
     pendingTaskMutations,
@@ -940,5 +1039,6 @@ export default function useDayRitual({
     openCurrentDayAfterSettlement,
     acknowledgeReconciliation,
     acknowledgeTaskMutation,
+    markBriefSalesAction,
   };
 }

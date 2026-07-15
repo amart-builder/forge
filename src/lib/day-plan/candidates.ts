@@ -156,10 +156,13 @@ function candidateForTask(
  * Builds a small, deterministic arrival set from accepted task records only.
  * It intentionally does not infer urgency, ownership, duration, or people
  * waiting from prose. New source types can be added only with their own
- * freshness and evidence rules.
+ * freshness and evidence rules. The default keeps the classic three-item
+ * proposal; a larger maximum gives the Morning Brief overlay a deterministic
+ * pool to rank within (the server still keeps at most three).
  */
 export function buildDayPlanCandidates(
   input: BuildDayPlanCandidatesInput,
+  maximum = 3,
 ): RecommendationCandidate[] {
   const candidates = input.tasks
     .map((task) => ({
@@ -192,7 +195,7 @@ export function buildDayPlanCandidates(
     seenTasks.add(candidate.taskId);
     seenOutcomes.add(candidate.outcomeKey);
     result.push(candidate);
-    if (result.length === 3) break;
+    if (result.length === Math.max(1, maximum)) break;
   }
   return result;
 }

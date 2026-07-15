@@ -7,12 +7,30 @@ import { chmodSync, closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import path from "node:path";
 import type { DayPlanStore } from "../day-plan/store";
 import {
+  assembleMorningBriefContext,
+  localDateInTimezone,
+  morningBriefInputHash,
+  validateMorningBrief,
+  MORNING_BRIEF_PROMPT_VERSION,
+  MORNING_BRIEF_SCHEMA_VERSION,
+  type MorningBriefArtifact,
+} from "../day-plan/brief";
+import {
+  collectMorningBriefSources,
+  type CollectedBriefSources,
+} from "../day-plan/brief-sources";
+import {
   buildAssistantPlannerCommand,
   buildExecutionCommand,
   parseAssistantPlannerOutput,
   parseExecutionResultSummary,
   type ClaudeCommand,
 } from "./commands";
+import {
+  buildMorningBriefCommand,
+  morningBriefModelConfig,
+  parseMorningBriefOutput,
+} from "./brief-commands";
 
 type SpawnImpl = typeof spawn;
 
@@ -396,6 +414,155 @@ export async function runOneExecution(options: ClaudeWorkerOptions): Promise<boo
     log?.close();
   }
   return true;
+}
+
+export type MorningBriefWorkerOptions = ClaudeWorkerOptions & {
+  // Test seam; production uses the real collector (files + loopback task fetch).
+  collectBriefSources?: (store: DayPlanStore) => Promise<CollectedBriefSources>;
+  briefTimeoutMs?: number;
+};
+
+// The Morning Brief lane. It reuses the same bounded spawn machinery as the
+// other lanes but drains through its own loop, so a brief can never starve
+// behind a long execution run. Brief output carries contact names and drafts,
+// so unlike executions it is never mirrored into an on-disk log.
+export async function runOneMorningBrief(
+  options: MorningBriefWorkerOptions,
+): Promise<boolean> {
+  const clock = options.now ?? (() => new Date());
+  // The stale sweep must always outlast the configured run timeout, or a
+  // long-budget brief could be marked interrupted while still running.
+  const staleAfterMs = Math.max(
+    20 * 60 * 1000,
+    (options.briefTimeoutMs ?? morningBriefModelConfig().timeoutMs) + 5 * 60 * 1000,
+  );
+  options.store.interruptStaleMorningBriefs(cutoff(clock(), staleAfterMs));
+  const claimed = options.store.claimNextMorningBrief();
+  if (!claimed) return false;
+  try {
+    const collect =
+      options.collectBriefSources ??
+      ((store: DayPlanStore) => collectMorningBriefSources({ store }));
+    const collected = await collect(options.store);
+    const context = assembleMorningBriefContext(collected.sources, {
+      now: clock(),
+    });
+    if (context.missingRequired.length > 0) {
+      options.store.failMorningBrief(
+        claimed.id,
+        `required_source_missing:${context.missingRequired.join(",")}`,
+      );
+      return true;
+    }
+    // The hash covers the full generation envelope: the bounded sections
+    // exactly as sent, target date, contract versions, model configuration,
+    // and per-source freshness states.
+    const inputs = options.store.recordMorningBriefInputs(claimed.id, {
+      inputHash: morningBriefInputHash({
+        targetLocalDate: claimed.targetLocalDate,
+        sections: context.sections,
+        sourceFreshness: context.manifest.sources.map((source) => ({
+          id: source.id,
+          freshness: source.freshness,
+        })),
+        promptVersion: MORNING_BRIEF_PROMPT_VERSION,
+        schemaVersion: MORNING_BRIEF_SCHEMA_VERSION,
+        modelAlias: claimed.modelAlias,
+        effort: claimed.effort,
+        budgetUsd: claimed.budgetUsd,
+      }),
+      sourceManifest: context.manifest,
+      promptVersion: MORNING_BRIEF_PROMPT_VERSION,
+      schemaVersion: MORNING_BRIEF_SCHEMA_VERSION,
+    });
+    // Identical inputs already produced an artifact; nothing new to generate.
+    if (inputs.duplicateOfId) return true;
+    const command = buildMorningBriefCommand({
+      claudePath: options.claudePath,
+      emptyMcpConfigPath: options.emptyMcpConfigPath,
+      cwd: options.fallbackCwd,
+      targetLocalDate: claimed.targetLocalDate,
+      sections: context.sections,
+      manifest: context.manifest,
+      modelAlias: claimed.modelAlias,
+      effort: claimed.effort,
+      budgetUsd: claimed.budgetUsd,
+    });
+    const result = await spawnCommand(command, {
+      spawnImpl: options.spawnImpl ?? spawn,
+      timeoutMs: options.briefTimeoutMs ?? morningBriefModelConfig().timeoutMs,
+      maxStdoutBytes: 1024 * 1024,
+      maxStderrBytes: 64 * 1024,
+      terminationGraceMs: options.terminationGraceMs ?? 2000,
+      abortSignal: options.abortSignal,
+    });
+    if (result.terminatedBy || result.signal) {
+      options.store.failMorningBrief(
+        claimed.id,
+        result.terminatedBy === "timeout" ? "brief_timeout" : "worker_interrupted",
+      );
+      return true;
+    }
+    if (result.exitCode !== 0 || result.overflowed) {
+      options.store.failMorningBrief(
+        claimed.id,
+        result.overflowed ? "brief_output_too_large" : "claude_failed",
+      );
+      return true;
+    }
+    const validated = validateMorningBrief(parseMorningBriefOutput(result.stdout), {
+      knownTaskIds: collected.knownTaskIds,
+      // Bounded grounding: watch items and sales actions must cite sources the
+      // model actually received bytes of (missing or fully-trimmed-out sources
+      // cannot ground anything; citing them is fabrication by construction).
+      sourceIds: new Set(
+        context.manifest.sources
+          .filter((source) => source.freshness !== "missing" && source.chars > 0)
+          .map((source) => source.id),
+      ),
+    });
+    options.store.completeMorningBrief(claimed.id, JSON.stringify(validated.brief));
+  } catch (error) {
+    options.store.failMorningBrief(
+      claimed.id,
+      error instanceof Error ? error.message : "brief_failed",
+    );
+  }
+  return true;
+}
+
+// Scheduled entry point (the ~7:30 local LaunchAgent run, which may fire late
+// on wake). Targets today in the plan timezone: the open plan's zone first,
+// then the latest settlement's, then the machine's. Skips cleanly when an
+// eligible artifact for today already exists.
+export function enqueueDueMorningBrief(
+  store: DayPlanStore,
+  now: Date = new Date(),
+): MorningBriefArtifact | undefined {
+  const readModel = store.getReadModel();
+  const timezone =
+    readModel.currentPlan?.timezone ??
+    readModel.latestSnapshot?.timezone ??
+    Intl.DateTimeFormat().resolvedOptions().timeZone ??
+    "UTC";
+  let target: string;
+  try {
+    target = localDateInTimezone(now, timezone);
+  } catch {
+    target = localDateInTimezone(now, "UTC");
+  }
+  if (store.latestEligibleMorningBrief(target)) return undefined;
+  return store.enqueueMorningBrief(target, morningBriefModelConfig()).brief;
+}
+
+export async function watchMorningBriefQueue(
+  options: MorningBriefWorkerOptions,
+  pollIntervalMs = 2000,
+): Promise<void> {
+  while (!options.abortSignal?.aborted) {
+    const processed = await runOneMorningBrief(options);
+    if (!processed) await waitForPoll(pollIntervalMs, options.abortSignal);
+  }
 }
 
 export async function drainClaudeQueues(options: ClaudeWorkerOptions): Promise<number> {

@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { hasDayPlanRouteAccess } from "@/app/api/day-plan/route";
+import {
+  currentDayPlanAccessMode,
+  hasDayPlanRouteAccess,
+} from "@/app/api/day-plan/route";
+import { publicDayPlan } from "@/lib/day-plan/public-execution";
 import {
   DayPlanInvalidTransition,
   DayPlanNotFound,
@@ -47,7 +51,10 @@ export function parseAssistantTurnPostBody(value: unknown) {
 function errorResponse(error: unknown): NextResponse {
   if (error instanceof DayPlanVersionConflict) {
     return NextResponse.json(
-      { error: "version_conflict", currentPlan: error.currentPlan },
+      {
+        error: "version_conflict",
+        currentPlan: publicDayPlan(error.currentPlan, currentDayPlanAccessMode()),
+      },
       { status: 409 },
     );
   }

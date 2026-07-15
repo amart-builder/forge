@@ -1,0 +1,1127 @@
+import assert from 'node:assert/strict';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { buildDayPlanCandidates } from '../src/lib/day-plan/candidates.ts';
+import { createDayPlanStore } from '../src/lib/day-plan/store.ts';
+import {
+  assembleMorningBriefContext,
+  localDateInTimezone,
+  morningBriefFromArtifact,
+  morningBriefInputHash,
+  nextBriefTargetLocalDate,
+  overlayBriefOnCandidates,
+  selectEligibleMorningBrief,
+  settlementReconciliationComplete,
+  validateMorningBrief,
+  MORNING_BRIEF_PROMPT_VERSION,
+  MORNING_BRIEF_SCHEMA_VERSION,
+} from '../src/lib/day-plan/brief.ts';
+import {
+  collectMorningBriefSources,
+  defaultBriefWebBase,
+} from '../src/lib/day-plan/brief-sources.ts';
+import { maybeQueueMorningBrief } from '../src/lib/day-plan/brief-triggers.ts';
+import { morningBriefSyncDecision } from '../src/lib/day-plan/brief-view.ts';
+import { publicDayPlan } from '../src/lib/day-plan/public-execution.ts';
+import {
+  buildMorningBriefCommand,
+  MORNING_BRIEF_JSON_SCHEMA,
+} from '../src/lib/claude-execution/brief-commands.ts';
+import {
+  enqueueDueMorningBrief,
+  runOneMorningBrief,
+} from '../src/lib/claude-execution/worker.ts';
+
+const CLOCK = '2026-07-14T13:00:00.000Z';
+const VERSIONS = {
+  promptVersion: MORNING_BRIEF_PROMPT_VERSION,
+  schemaVersion: MORNING_BRIEF_SCHEMA_VERSION,
+};
+
+const WIRE_BRIEF = {
+  lens_narrative: 'Protect client delivery first, then push the Jarvis Pro funnel.',
+  existing_task_candidates: [
+    {
+      task_id: 'task-c',
+      why_today: 'The funnel is the scoreboard and this ask is stage one.',
+      suggested_owner: 'claude',
+      what_claude_can_start: 'Draft the referral messages for review.',
+      evidence_refs: ['goals:jarvis-pro'],
+    },
+    {
+      task_id: 'task-a',
+      why_today: 'Client delivery blocks are protected on the calendar first.',
+      suggested_owner: 'me',
+      what_claude_can_start: '',
+    },
+  ],
+  suggested_additions: [
+    {
+      title: 'Prep the Fonte call kit',
+      outcome: 'A one-page prep kit exists for the call.',
+      why: 'The call tests the Buyer-View Books thesis this week.',
+      suggested_owner: 'claude',
+    },
+  ],
+  watch_items: [
+    {
+      label: 'Gio lead',
+      evidence: 'Marked hot in the sprint memo.',
+      last_seen_state: 'No reply for 4 days.',
+      evidence_refs: ['sprint_memo:gio'],
+    },
+  ],
+  sales_actions: [
+    {
+      contact: 'Zack Bright',
+      channel: 'text',
+      evidence_refs: ['sprint_memo:zack'],
+      draft_kind: 'beats_only',
+      draft_or_beats: 'Beats: channel pilot, 20 percent, first three installs.',
+      approval_required: true,
+    },
+  ],
+};
+
+function candidatePool() {
+  return buildDayPlanCandidates({
+    localDate: '2026-07-14',
+    timezone: 'America/Los_Angeles',
+    tasks: [
+      {
+        id: 'task-a',
+        title: 'Deliver the MHA weekly block',
+        description: 'The weekly MHA advisory work is delivered.',
+        priority: 'high',
+        position: 0,
+        column: 'today',
+        status: 'open',
+        updatedAt: '2026-07-14T12:00:00.000Z',
+        refreshedAt: CLOCK,
+      },
+      {
+        id: 'task-b',
+        title: 'Send referral blast batch two',
+        description: 'Eight more referral asks go out.',
+        priority: 'medium',
+        position: 1,
+        column: 'today',
+        status: 'open',
+        updatedAt: '2026-07-14T12:00:00.000Z',
+        refreshedAt: CLOCK,
+      },
+      {
+        id: 'task-c',
+        title: 'Follow up with Gio on the setup',
+        description: 'Gio gets a concrete setup proposal.',
+        priority: 'low',
+        position: 2,
+        column: 'in_flight',
+        status: 'open',
+        updatedAt: '2026-07-14T12:00:00.000Z',
+        refreshedAt: CLOCK,
+      },
+    ],
+  }, 10);
+}
+
+function briefFixture(t) {
+  const dir = path.join(os.tmpdir(), `forge-brief-${process.pid}-${Date.now()}-${Math.random()}`);
+  mkdirSync(dir, { recursive: true });
+  let nowIso = CLOCK;
+  const store = createDayPlanStore({
+    dbPath: path.join(dir, 'forge.db'),
+    now: () => new Date(nowIso),
+  });
+  t.after(() => {
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  return { dir, store, setNow: (value) => { nowIso = value; } };
+}
+
+function fakeClaude(dir, output) {
+  const executable = path.join(dir, 'fake-claude');
+  const capture = path.join(dir, 'capture.json');
+  writeFileSync(executable, `#!/usr/bin/env node
+const fs = require('node:fs');
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => input += chunk);
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ args: process.argv.slice(2), input }));
+  process.stdout.write(${JSON.stringify(output)});
+});
+`);
+  chmodSync(executable, 0o700);
+  return { executable, capture };
+}
+
+function briefWorkerOptions(dir, store, claudePath, collectBriefSources) {
+  const emptyMcpConfigPath = path.join(dir, 'empty-mcp.json');
+  writeFileSync(emptyMcpConfigPath, '{"mcpServers":{}}');
+  return {
+    store,
+    claudePath,
+    emptyMcpConfigPath,
+    logDir: path.join(dir, 'logs'),
+    fallbackCwd: dir,
+    now: () => new Date(CLOCK),
+    briefTimeoutMs: 5_000,
+    collectBriefSources,
+  };
+}
+
+function collectedSources({ goals = 'North star: 30k a month.' } = {}) {
+  return {
+    sources: [
+      // An empty string reads as missing (whitespace-only content is absent).
+      { id: 'goals', label: 'GOALS', required: true, maxChars: 9000, priority: 1, content: goals || undefined, asOf: CLOCK },
+      { id: 'sprint_memo', label: 'SPRINT_MEMO', required: true, maxChars: 12000, priority: 2, content: 'Four setups this month.', asOf: CLOCK },
+      { id: 'task_snapshot', label: 'OPEN_TASKS', required: true, maxChars: 14000, priority: 3, content: '- [today] id=task-a "Deliver the MHA weekly block"', asOf: CLOCK },
+      { id: 'settlement_summary', label: 'RECENT_SETTLEMENTS', required: true, maxChars: 6000, priority: 4, content: 'No settlement snapshots exist yet.' },
+      { id: 'email_brief', label: 'EMAIL_BRIEF', required: false, maxChars: 3000, priority: 5 },
+      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 4000, priority: 6, note: 'not_configured' },
+    ],
+    knownTaskIds: new Set(['task-a', 'task-b', 'task-c']),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Collector assembly: bounding, manifest, coverage.
+// ---------------------------------------------------------------------------
+
+test('assembly bounds each source, trims least important first, and reports coverage honestly', () => {
+  const context = assembleMorningBriefContext(
+    [
+      { id: 'goals', label: 'GOALS', required: true, maxChars: 10, priority: 1, content: 'A'.repeat(40) },
+      { id: 'sprint_memo', label: 'SPRINT_MEMO', required: true, maxChars: 100, priority: 2, content: 'B'.repeat(20) },
+      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 100, priority: 6, content: 'C'.repeat(30) },
+      { id: 'email_brief', label: 'EMAIL_BRIEF', required: false, maxChars: 100, priority: 5 },
+    ],
+    { totalMaxChars: 35 },
+  );
+  const byId = Object.fromEntries(context.manifest.sources.map((source) => [source.id, source]));
+  // Per-source cap first: goals 40 -> 10, recorded as trimmed.
+  assert.equal(byId.goals.chars, 10);
+  assert.equal(byId.goals.trimmed, true);
+  // Total cap trims the least important source (priority 6) down to fit.
+  assert.equal(context.manifest.totalChars <= 35, true);
+  assert.equal(byId.memory_decisions.trimmed, true);
+  assert.equal(byId.sprint_memo.trimmed, false);
+  assert.ok(context.manifest.trims.some((entry) => entry.startsWith('goals:')));
+  assert.ok(context.manifest.trims.some((entry) => entry.startsWith('memory_decisions:')));
+  // Coverage: calendar and CRM are missing by design; absent optional is missing.
+  assert.equal(context.manifest.coverage.calendar, 'missing');
+  assert.equal(context.manifest.coverage.crm_last_touch, 'missing');
+  assert.equal(context.manifest.coverage.email_brief, 'missing');
+  assert.equal(context.manifest.coverage.goals, 'included');
+  // The missing optional source is absent from sections but present in manifest.
+  assert.equal(context.sections.some((section) => section.id === 'email_brief'), false);
+  assert.equal(byId.email_brief.freshness, 'missing');
+  assert.deepEqual(context.missingRequired, []);
+});
+
+test('missing required sources are named and hashes stay content-based', () => {
+  const context = assembleMorningBriefContext([
+    { id: 'goals', label: 'GOALS', required: true, maxChars: 100, priority: 1 },
+    { id: 'sprint_memo', label: 'SPRINT_MEMO', required: true, maxChars: 100, priority: 2, content: 'memo' },
+  ]);
+  assert.deepEqual(context.missingRequired, ['goals']);
+  const memo = context.manifest.sources.find((source) => source.id === 'sprint_memo');
+  assert.equal(typeof memo.hash, 'string');
+  assert.equal(context.manifest.sources.find((source) => source.id === 'goals').hash, undefined);
+});
+
+test('a source fully trimmed out by the total cap is covered as missing', () => {
+  const context = assembleMorningBriefContext(
+    [
+      { id: 'goals', label: 'GOALS', required: true, maxChars: 100, priority: 1, content: 'A'.repeat(30) },
+      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 100, priority: 6, content: 'C'.repeat(30) },
+    ],
+    { totalMaxChars: 30 },
+  );
+  const memory = context.manifest.sources.find((source) => source.id === 'memory_decisions');
+  // Zero bytes shipped: the model never saw it, so coverage says missing even
+  // though the source was readable (the report keeps the operator story).
+  assert.equal(memory.chars, 0);
+  assert.equal(memory.trimmed, true);
+  assert.equal(context.manifest.coverage.memory_decisions, 'missing');
+  assert.equal(context.sections.some((section) => section.id === 'memory_decisions'), false);
+  // It was still readable, so it is not a missing REQUIRED source.
+  assert.deepEqual(context.missingRequired, []);
+});
+
+test('assembly reports staleness from asOf against per-source thresholds', () => {
+  const now = new Date('2026-07-14T13:00:00.000Z');
+  const context = assembleMorningBriefContext(
+    [
+      // 30-day threshold, 74 days old: stale.
+      { id: 'goals', label: 'GOALS', required: true, maxChars: 100, priority: 1, content: 'g', asOf: '2026-05-01T00:00:00.000Z', freshnessThresholdHours: 720 },
+      // 7-day threshold, a day and a half old: current.
+      { id: 'sprint_memo', label: 'SPRINT_MEMO', required: true, maxChars: 100, priority: 2, content: 's', asOf: '2026-07-13T00:00:00.000Z', freshnessThresholdHours: 168 },
+      // No threshold: never stale by age.
+      { id: 'task_snapshot', label: 'OPEN_TASKS', required: true, maxChars: 100, priority: 3, content: 't', asOf: '2020-01-01T00:00:00.000Z' },
+    ],
+    { now },
+  );
+  const byId = Object.fromEntries(context.manifest.sources.map((source) => [source.id, source]));
+  assert.equal(byId.goals.freshness, 'stale');
+  assert.equal(context.manifest.coverage.goals, 'stale');
+  assert.equal(byId.sprint_memo.freshness, 'current');
+  assert.equal(byId.task_snapshot.freshness, 'current');
+});
+
+test('the task snapshot default web base targets the installed port 3200', () => {
+  const previous = process.env.FORGE_BRIEF_WEB_BASE;
+  delete process.env.FORGE_BRIEF_WEB_BASE;
+  try {
+    assert.equal(defaultBriefWebBase(), 'http://127.0.0.1:3200');
+  } finally {
+    if (previous !== undefined) process.env.FORGE_BRIEF_WEB_BASE = previous;
+  }
+});
+
+test('the collector marks candidate_ok only on the arrival-eligible tasks', async (t) => {
+  const dir = path.join(os.tmpdir(), `forge-brief-collect-${process.pid}-${Date.now()}`);
+  mkdirSync(dir, { recursive: true });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(path.join(dir, 'goals.md'), 'North star: 30k a month.');
+  writeFileSync(path.join(dir, 'memo.md'), 'Four setups this month.');
+  const columns = [
+    { id: 'col-today', name: 'Must happen today' },
+    { id: 'col-flight', name: 'In Flight / Waiting' },
+    { id: 'col-ns', name: 'Not Started' },
+  ];
+  const tasks = [
+    { id: 't1', column_id: 'col-today', title: 'Ship it', status: 'open', priority: 'high' },
+    // Jarvis-held work is context only, never a candidate (case-insensitive,
+    // tags arrive as a JSON string from the rest surface).
+    { id: 't2', column_id: 'col-today', title: 'Held work', status: 'open', tags: JSON.stringify(['Jarvis-Held']) },
+    { id: 't3', column_id: 'col-today', title: 'Emails: 4 need replies', description: 'Reply to Gio.', status: 'open' },
+    { id: 't4', column_id: 'col-ns', title: 'Someday item', status: 'open', tags: ['other'] },
+    { id: 't5', column_id: 'col-flight', title: 'Waiting on Gio', status: 'open' },
+  ];
+  const collected = await collectMorningBriefSources({
+    store: { listRecentSnapshots: () => [] },
+    goalsPath: path.join(dir, 'goals.md'),
+    sprintMemoPath: path.join(dir, 'memo.md'),
+    webBaseUrl: 'http://forge.test',
+    fetchImpl: async (url) => ({
+      ok: true,
+      json: async () => (String(url).includes('task_columns') ? columns : tasks),
+    }),
+  });
+  // knownTaskIds now matches the arrival pool exactly, so every valid brief
+  // candidate can rehydrate at ensure time.
+  assert.deepEqual([...collected.knownTaskIds].sort(), ['t1', 't5']);
+  const snapshot = collected.sources.find((source) => source.id === 'task_snapshot').content;
+  const lineFor = (id) => snapshot.split('\n').find((line) => line.includes(`id=${id} `));
+  assert.match(lineFor('t1'), / candidate_ok/);
+  assert.match(lineFor('t5'), / candidate_ok/);
+  for (const excluded of ['t2', 't3', 't4']) {
+    assert.equal(lineFor(excluded).includes('candidate_ok'), false, excluded);
+  }
+  const email = collected.sources.find((source) => source.id === 'email_brief');
+  assert.match(email.content, /^Emails: 4 need replies/);
+});
+
+// ---------------------------------------------------------------------------
+// Composite input hash.
+// ---------------------------------------------------------------------------
+
+test('the generation-envelope hash is stable, order-independent, and sensitive to every component', () => {
+  const envelope = {
+    targetLocalDate: '2026-07-14',
+    sections: [
+      { id: 'goals', label: 'GOALS', text: 'North star.' },
+      { id: 'sprint_memo', label: 'SPRINT_MEMO', text: 'Four setups.' },
+    ],
+    sourceFreshness: [
+      { id: 'goals', freshness: 'current' },
+      { id: 'sprint_memo', freshness: 'current' },
+    ],
+    ...VERSIONS,
+    modelAlias: 'opus',
+    effort: 'high',
+    budgetUsd: 1.5,
+  };
+  const hash = morningBriefInputHash(envelope);
+  // Section and freshness ordering never changes the hash.
+  assert.equal(
+    morningBriefInputHash({
+      ...envelope,
+      sections: [...envelope.sections].reverse(),
+      sourceFreshness: [...envelope.sourceFreshness].reverse(),
+    }),
+    hash,
+  );
+  // Every envelope component participates: the bounded text as sent, target
+  // date, both versions, model config, and freshness states.
+  const variants = [
+    { sections: [{ id: 'goals', label: 'GOALS', text: 'Different.' }, envelope.sections[1]] },
+    { targetLocalDate: '2026-07-15' },
+    { promptVersion: VERSIONS.promptVersion + 1 },
+    { schemaVersion: VERSIONS.schemaVersion + 1 },
+    { modelAlias: 'sonnet' },
+    { effort: 'medium' },
+    { budgetUsd: 2 },
+    { sourceFreshness: [{ id: 'goals', freshness: 'stale' }, envelope.sourceFreshness[1]] },
+  ];
+  for (const variant of variants) {
+    assert.notEqual(morningBriefInputHash({ ...envelope, ...variant }), hash, JSON.stringify(variant));
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Output contract validation.
+// ---------------------------------------------------------------------------
+
+test('validation accepts the contract, normalizes it, and filters unknown tasks with warnings', () => {
+  const { brief, warnings } = validateMorningBrief(
+    {
+      ...WIRE_BRIEF,
+      existing_task_candidates: [
+        ...WIRE_BRIEF.existing_task_candidates,
+        { task_id: 'task-ghost', why_today: 'Invented.', suggested_owner: 'claude', what_claude_can_start: 'x' },
+      ],
+    },
+    { knownTaskIds: new Set(['task-a', 'task-c']) },
+  );
+  assert.equal(brief.lensNarrative, WIRE_BRIEF.lens_narrative);
+  assert.deepEqual(brief.existingTaskCandidates.map((candidate) => candidate.taskId), ['task-c', 'task-a']);
+  assert.deepEqual(warnings, ['unknown_task:task-ghost']);
+  assert.equal(brief.salesActions[0].approvalRequired, true);
+  assert.equal(brief.watchItems[0].lastSeenState, 'No reply for 4 days.');
+});
+
+test('sales actions enforce draft kinds and the always-true approval gate', () => {
+  assert.throws(
+    () => validateMorningBrief({
+      ...WIRE_BRIEF,
+      sales_actions: [{ ...WIRE_BRIEF.sales_actions[0], draft_kind: 'confident' }],
+    }),
+    /sales_0_draft_kind/,
+  );
+  assert.throws(
+    () => validateMorningBrief({
+      ...WIRE_BRIEF,
+      sales_actions: [{ ...WIRE_BRIEF.sales_actions[0], approval_required: false }],
+    }),
+    /sales_0_approval_required/,
+  );
+  assert.throws(() => validateMorningBrief({ ...WIRE_BRIEF, lens_narrative: '' }), /lens_narrative_required/);
+  assert.throws(
+    () => validateMorningBrief({ ...WIRE_BRIEF, existing_task_candidates: Array(4).fill(WIRE_BRIEF.existing_task_candidates[0]) }),
+    /existing_task_candidates_bounds/,
+  );
+});
+
+test('watch items and sales actions require resolvable evidence refs', () => {
+  const sourceIds = new Set(['goals', 'sprint_memo']);
+  const { brief } = validateMorningBrief(
+    {
+      ...WIRE_BRIEF,
+      watch_items: [
+        WIRE_BRIEF.watch_items[0],
+        { label: 'Ghost', evidence: 'x', last_seen_state: 'y', evidence_refs: ['crm:lead'] },
+        { label: 'Empty', evidence: 'x', last_seen_state: 'y', evidence_refs: [] },
+      ],
+      sales_actions: [
+        WIRE_BRIEF.sales_actions[0],
+        { ...WIRE_BRIEF.sales_actions[0], contact: 'Nobody', evidence_refs: ['calendar:today'] },
+      ],
+    },
+    { sourceIds },
+  );
+  assert.deepEqual(brief.watchItems.map((item) => item.label), ['Gio lead']);
+  assert.deepEqual(brief.salesActions.map((action) => action.contact), ['Zack Bright']);
+  assert.deepEqual(brief.validationNotes, [
+    'dropped_watch_item:1:unresolved_evidence',
+    'dropped_watch_item:2:unresolved_evidence',
+    'dropped_sales_action:1:unresolved_evidence',
+  ]);
+  // Without a source registry, non-empty refs pass but empty refs still drop:
+  // evidence is required for these item kinds, full stop.
+  const bare = validateMorningBrief({
+    ...WIRE_BRIEF,
+    watch_items: [{ label: 'NoRefs', evidence: 'x', last_seen_state: 'y', evidence_refs: [] }],
+  }).brief;
+  assert.equal(bare.watchItems.length, 0);
+  assert.deepEqual(bare.validationNotes, ['dropped_watch_item:0:unresolved_evidence']);
+});
+
+// ---------------------------------------------------------------------------
+// Rehydration overlay + deterministic backfill.
+// ---------------------------------------------------------------------------
+
+test('overlay ranks brief selections first, drops vanished tasks, and backfills deterministically', () => {
+  const pool = candidatePool();
+  const { brief } = validateMorningBrief({
+    ...WIRE_BRIEF,
+    existing_task_candidates: [
+      { task_id: 'task-vanished', why_today: 'Gone.', suggested_owner: 'me', what_claude_can_start: 'x' },
+      ...WIRE_BRIEF.existing_task_candidates,
+    ],
+  });
+  const selection = overlayBriefOnCandidates(pool, brief);
+  assert.deepEqual(
+    selection.map((entry) => entry.candidate.taskId),
+    ['task-c', 'task-a', 'task-b'],
+  );
+  assert.equal(selection[0].brief.suggestedOwner, 'claude');
+  assert.equal(selection[0].brief.whatClaudeCanStart, 'Draft the referral messages for review.');
+  assert.equal(selection[1].brief.whyToday, 'Client delivery blocks are protected on the calendar first.');
+  // Backfilled item carries no brief annotation; its evidence line stands.
+  assert.equal(selection[2].brief, undefined);
+});
+
+test('suggested additions can never become candidates', () => {
+  const pool = candidatePool();
+  const { brief } = validateMorningBrief(WIRE_BRIEF);
+  const selection = overlayBriefOnCandidates(pool, brief);
+  // The addition has no taskId in the pool, so nothing in the selection can be it.
+  assert.equal(
+    selection.some((entry) => entry.candidate.title === 'Prep the Fonte call kit'),
+    false,
+  );
+  assert.equal(selection.length, 3);
+  // The addition still exists on its own list, untouched.
+  assert.equal(brief.suggestedAdditions[0].title, 'Prep the Fonte call kit');
+});
+
+// ---------------------------------------------------------------------------
+// Artifact selection, staleness, scheduling math.
+// ---------------------------------------------------------------------------
+
+test('eligible selection picks the newest succeeded artifact for the date and versions', () => {
+  const artifacts = [
+    { id: 'old', targetLocalDate: '2026-07-14', status: 'succeeded', ...VERSIONS, briefJson: '{}', createdAt: '2026-07-14T05:00:00.000Z', updatedAt: '2026-07-14T05:00:00.000Z', finishedAt: '2026-07-14T05:05:00.000Z', modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 },
+    { id: 'new', targetLocalDate: '2026-07-14', status: 'succeeded', ...VERSIONS, briefJson: '{}', createdAt: '2026-07-14T06:00:00.000Z', updatedAt: '2026-07-14T06:00:00.000Z', finishedAt: '2026-07-14T06:05:00.000Z', modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 },
+    { id: 'failed', targetLocalDate: '2026-07-14', status: 'failed', ...VERSIONS, createdAt: '2026-07-14T07:00:00.000Z', updatedAt: '2026-07-14T07:00:00.000Z', modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 },
+    { id: 'other-day', targetLocalDate: '2026-07-13', status: 'succeeded', ...VERSIONS, briefJson: '{}', createdAt: '2026-07-14T08:00:00.000Z', updatedAt: '2026-07-14T08:00:00.000Z', finishedAt: '2026-07-14T08:05:00.000Z', modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 },
+    { id: 'old-schema', targetLocalDate: '2026-07-14', status: 'succeeded', promptVersion: VERSIONS.promptVersion, schemaVersion: VERSIONS.schemaVersion + 1, briefJson: '{}', createdAt: '2026-07-14T09:00:00.000Z', updatedAt: '2026-07-14T09:00:00.000Z', finishedAt: '2026-07-14T09:05:00.000Z', modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 },
+  ];
+  assert.equal(selectEligibleMorningBrief(artifacts, '2026-07-14')?.id, 'new');
+  assert.equal(selectEligibleMorningBrief(artifacts, '2026-07-12'), undefined);
+});
+
+test('scheduling math uses the plan timezone, never server-local date parts', () => {
+  // 04:30 UTC on Jul 15 is still Jul 14 in Los Angeles but already Jul 15 in Tokyo.
+  const evening = new Date('2026-07-15T04:30:00.000Z');
+  assert.equal(localDateInTimezone(evening, 'America/Los_Angeles'), '2026-07-14');
+  assert.equal(localDateInTimezone(evening, 'Asia/Tokyo'), '2026-07-15');
+  // Evening settlement: the brief targets tomorrow.
+  assert.equal(nextBriefTargetLocalDate('2026-07-14', evening, 'America/Los_Angeles'), '2026-07-15');
+  // A stale plan settled the next morning briefs that same morning.
+  const morning = new Date('2026-07-15T15:00:00.000Z');
+  assert.equal(nextBriefTargetLocalDate('2026-07-14', morning, 'America/Los_Angeles'), '2026-07-15');
+  // Month boundary rolls correctly.
+  assert.equal(nextBriefTargetLocalDate('2026-07-31', new Date('2026-08-01T04:30:00.000Z'), 'America/Los_Angeles'), '2026-08-01');
+});
+
+test('settlement reconciliation completes when no immediate work remains for this settlement', () => {
+  assert.equal(settlementReconciliationComplete([]), true);
+  assert.equal(
+    settlementReconciliationComplete([
+      { state: 'scheduled', action: 'resurface' },
+      { state: 'applied', action: 'defer' },
+    ]),
+    true,
+  );
+  assert.equal(
+    settlementReconciliationComplete([{ state: 'pending', action: 'defer' }]),
+    false,
+  );
+  // Resurfaces never participate, whatever their state.
+  assert.equal(
+    settlementReconciliationComplete([{ state: 'pending', action: 'resurface' }]),
+    true,
+  );
+  // Scoped to a snapshot: an earlier settlement's pending defer never blocks
+  // this one, but this settlement's own pending defer does.
+  const rows = [
+    { state: 'pending', action: 'defer', snapshotId: 'snap-earlier' },
+    { state: 'applied', action: 'drop', snapshotId: 'snap-now' },
+  ];
+  assert.equal(settlementReconciliationComplete(rows, 'snap-now'), true);
+  assert.equal(settlementReconciliationComplete(rows, 'snap-earlier'), false);
+  // Unscoped stays conservative across everything pending.
+  assert.equal(settlementReconciliationComplete(rows), false);
+});
+
+// ---------------------------------------------------------------------------
+// Store lifecycle: dedupe, duplicate inputs, no-clobber, sales action states.
+// ---------------------------------------------------------------------------
+
+test('enqueue dedupes active requests and the worker lifecycle produces immutable artifacts', (t) => {
+  const { store, setNow } = briefFixture(t);
+  const provenance = { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 };
+  const first = store.enqueueMorningBrief('2026-07-14', provenance);
+  const second = store.enqueueMorningBrief('2026-07-14', provenance);
+  assert.equal(first.created, true);
+  assert.equal(second.created, false);
+  assert.equal(second.brief.id, first.brief.id);
+
+  const claimed = store.claimNextMorningBrief();
+  assert.equal(claimed.id, first.brief.id);
+  assert.equal(claimed.status, 'running');
+  // Single flight: nothing else can claim while one runs.
+  assert.equal(store.claimNextMorningBrief(), undefined);
+
+  const manifest = { sources: [], coverage: { calendar: 'missing' }, trims: [], totalChars: 0 };
+  assert.deepEqual(
+    store.recordMorningBriefInputs(claimed.id, { inputHash: 'hash-1', sourceManifest: manifest, ...VERSIONS }),
+    {},
+  );
+  const { brief } = validateMorningBrief(WIRE_BRIEF);
+  setNow('2026-07-14T13:05:00.000Z');
+  const completed = store.completeMorningBrief(claimed.id, JSON.stringify(brief));
+  assert.equal(completed.status, 'succeeded');
+  assert.equal(morningBriefFromArtifact(completed).lensNarrative, brief.lensNarrative);
+
+  // Identical inputs later: the new request resolves as a duplicate, no session.
+  setNow('2026-07-14T14:00:00.000Z');
+  const rerun = store.enqueueMorningBrief('2026-07-14', provenance);
+  assert.equal(rerun.created, true);
+  const rerunClaim = store.claimNextMorningBrief();
+  const duplicate = store.recordMorningBriefInputs(rerunClaim.id, {
+    inputHash: 'hash-1',
+    sourceManifest: manifest,
+    ...VERSIONS,
+  });
+  assert.equal(duplicate.duplicateOfId, completed.id);
+  assert.equal(store.getMorningBrief(rerunClaim.id).status, 'failed');
+  assert.equal(store.getMorningBrief(rerunClaim.id).errorCode, 'duplicate_input');
+  assert.equal(store.latestEligibleMorningBrief('2026-07-14').id, completed.id);
+});
+
+test('a late-finishing older generation never clobbers a newer artifact', (t) => {
+  const { store, setNow } = briefFixture(t);
+  const provenance = { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 };
+  const manifest = { sources: [], coverage: {}, trims: [], totalChars: 0 };
+  const { brief } = validateMorningBrief(WIRE_BRIEF);
+
+  const older = store.enqueueMorningBrief('2026-07-14', provenance).brief;
+  store.claimNextMorningBrief();
+  store.recordMorningBriefInputs(older.id, { inputHash: 'hash-old', sourceManifest: manifest, ...VERSIONS });
+
+  // The run goes quiet; the stale sweep frees the lane.
+  setNow('2026-07-14T14:00:00.000Z');
+  assert.equal(store.interruptStaleMorningBriefs('2026-07-14T13:30:00.000Z'), 1);
+
+  const newer = store.enqueueMorningBrief('2026-07-14', provenance).brief;
+  store.claimNextMorningBrief();
+  store.recordMorningBriefInputs(newer.id, { inputHash: 'hash-new', sourceManifest: manifest, ...VERSIONS });
+  setNow('2026-07-14T14:05:00.000Z');
+  store.completeMorningBrief(newer.id, JSON.stringify(brief));
+
+  // The older generation finishes late: its row stays failed, both rows exist,
+  // and selection keeps the newer artifact.
+  setNow('2026-07-14T14:10:00.000Z');
+  assert.equal(store.completeMorningBrief(older.id, JSON.stringify(brief)), undefined);
+  assert.equal(store.getMorningBrief(older.id).status, 'failed');
+  assert.equal(store.latestEligibleMorningBrief('2026-07-14').id, newer.id);
+  assert.equal(store.listMorningBriefs('2026-07-14').length, 2);
+});
+
+test('sales action states mark approve, edit, and skip without touching the artifact', (t) => {
+  const { store } = briefFixture(t);
+  const provenance = { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 };
+  const manifest = { sources: [], coverage: {}, trims: [], totalChars: 0 };
+  const { brief } = validateMorningBrief(WIRE_BRIEF);
+  const artifact = store.enqueueMorningBrief('2026-07-14', provenance).brief;
+  store.claimNextMorningBrief();
+  store.recordMorningBriefInputs(artifact.id, { inputHash: 'h', sourceManifest: manifest, ...VERSIONS });
+  store.completeMorningBrief(artifact.id, JSON.stringify(brief));
+
+  store.setMorningBriefSalesActionState(artifact.id, 0, 'edited', 'Shorter beats.');
+  const states = store.listMorningBriefSalesActionStates(artifact.id);
+  assert.equal(states.length, 1);
+  assert.equal(states[0].state, 'edited');
+  assert.equal(states[0].editedText, 'Shorter beats.');
+  // The artifact itself is untouched.
+  assert.equal(store.getMorningBrief(artifact.id).briefJson, JSON.stringify(brief));
+  assert.throws(
+    () => store.setMorningBriefSalesActionState(artifact.id, 9, 'approved'),
+    /Unknown sales action/,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Arrival consumption: ensure overlay, backfill, and fail-open.
+// ---------------------------------------------------------------------------
+
+function succeededArtifact(store, briefJson, date = '2026-07-14') {
+  const artifact = store.enqueueMorningBrief(date, { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 }).brief;
+  store.claimNextMorningBrief();
+  store.recordMorningBriefInputs(artifact.id, {
+    inputHash: `hash-${Math.random()}`,
+    sourceManifest: { sources: [], coverage: {}, trims: [], totalChars: 0 },
+    ...VERSIONS,
+  });
+  return store.completeMorningBrief(artifact.id, briefJson);
+}
+
+test('ensure consumes a valid brief: ranking, rationale, and owner overlay with deterministic backfill', (t) => {
+  const { store } = briefFixture(t);
+  const { brief } = validateMorningBrief(WIRE_BRIEF);
+  const artifact = succeededArtifact(store, JSON.stringify(brief));
+
+  const plan = store.ensureDayPlan({
+    localDate: '2026-07-14',
+    timezone: 'America/Los_Angeles',
+    mutationId: 'ensure:brief',
+    candidates: candidatePool(),
+  }).plan;
+
+  assert.equal(plan.briefId, artifact.id);
+  assert.deepEqual(plan.items.map((item) => item.taskId), ['task-c', 'task-a', 'task-b']);
+  // Owner suggestion is preselected but the evidence fields stay deterministic.
+  assert.equal(plan.items[0].owner, 'claude');
+  assert.equal(plan.items[0].brief.whyToday, 'The funnel is the scoreboard and this ask is stage one.');
+  assert.equal(plan.items[0].whyToday, 'This is accepted work already in flight.');
+  assert.equal(plan.items[1].owner, 'me');
+  assert.equal(plan.items[2].brief, undefined);
+  assert.equal(plan.items.every((item) => item.decision === 'preselected'), true);
+  // The suggested addition never became an item.
+  assert.equal(plan.items.some((item) => item.title === 'Prep the Fonte call kit'), false);
+});
+
+test('ensure fails open to the deterministic proposal on a corrupt or absent brief', (t) => {
+  const { store } = briefFixture(t);
+  succeededArtifact(store, 'this is not json');
+  const plan = store.ensureDayPlan({
+    localDate: '2026-07-14',
+    timezone: 'America/Los_Angeles',
+    mutationId: 'ensure:corrupt',
+    candidates: candidatePool(),
+  }).plan;
+  assert.equal(plan.briefId, undefined);
+  assert.deepEqual(plan.items.map((item) => item.taskId), ['task-a', 'task-b', 'task-c']);
+  assert.equal(plan.items.every((item) => item.brief === undefined), true);
+});
+
+test('a stored artifact with malformed nested entries fails open to deterministic, never 500', (t) => {
+  const { store } = briefFixture(t);
+  const { brief } = validateMorningBrief(WIRE_BRIEF);
+  // Valid JSON, valid top-level shape, malformed nested entry: exactly the
+  // defect a shallow shape check would let through into the overlay.
+  succeededArtifact(store, JSON.stringify({ ...brief, existingTaskCandidates: [null] }));
+  const plan = store.ensureDayPlan({
+    localDate: '2026-07-14',
+    timezone: 'America/Los_Angeles',
+    mutationId: 'ensure:nested-null',
+    candidates: candidatePool(),
+  }).plan;
+  assert.equal(plan.briefId, undefined);
+  assert.deepEqual(plan.items.map((item) => item.taskId), ['task-a', 'task-b', 'task-c']);
+  assert.equal(plan.items.every((item) => item.brief === undefined), true);
+
+  // The deep parse itself rejects nested defects across every list.
+  const base = { status: 'succeeded' };
+  const cases = [
+    { ...brief, existingTaskCandidates: [null] },
+    { ...brief, existingTaskCandidates: [{ taskId: 42 }] },
+    { ...brief, watchItems: [{ label: 'x' }] },
+    { ...brief, salesActions: [{ ...brief.salesActions[0], approvalRequired: false }] },
+    { ...brief, suggestedAdditions: ['not-an-object'] },
+    { ...brief, validationNotes: [7] },
+  ];
+  for (const [index, defect] of cases.entries()) {
+    assert.equal(
+      morningBriefFromArtifact({ ...base, briefJson: JSON.stringify(defect) }),
+      undefined,
+      `case ${index}`,
+    );
+  }
+  // And a valid stored brief round-trips intact.
+  const parsed = morningBriefFromArtifact({ ...base, briefJson: JSON.stringify(brief) });
+  assert.deepEqual(parsed, brief);
+});
+
+test('ensure keeps at most three items from a larger deterministic pool', (t) => {
+  const { store } = briefFixture(t);
+  // Oversized pools are rejected before any plan exists.
+  assert.throws(
+    () => store.ensureDayPlan({
+      localDate: '2026-07-14',
+      timezone: 'America/Los_Angeles',
+      mutationId: 'ensure:toomany',
+      candidates: Array.from({ length: 11 }, (_, index) => ({
+        ...candidatePool()[0],
+        taskId: `task-${index}`,
+        candidateId: `task:task-${index}`,
+        outcomeKey: `task:task-${index}`,
+        sourceRefs: [{ ...candidatePool()[0].sourceRefs[0], recordId: `task-${index}` }],
+      })),
+    }),
+    /at most ten/,
+  );
+  const plan = store.ensureDayPlan({
+    localDate: '2026-07-14',
+    timezone: 'America/Los_Angeles',
+    mutationId: 'ensure:pool',
+    candidates: candidatePool(),
+  }).plan;
+  assert.equal(plan.items.length, 3);
+});
+
+// ---------------------------------------------------------------------------
+// Worker lane: bounded toolless session, fail-open error paths.
+// ---------------------------------------------------------------------------
+
+test('the brief command is the exact bounded toolless invocation', () => {
+  const command = buildMorningBriefCommand({
+    claudePath: '/fake/claude',
+    emptyMcpConfigPath: '/fake/empty.json',
+    targetLocalDate: '2026-07-14',
+    sections: [{ id: 'goals', label: 'GOALS', text: 'North star.' }],
+    manifest: {
+      sources: [
+        { id: 'goals', required: true, freshness: 'stale', asOf: '2026-07-01T00:00:00.000Z', chars: 11, trimmed: false, note: '/secret/path/GOALS.md', hash: 'abc123' },
+      ],
+      coverage: { calendar: 'missing', crm_last_touch: 'missing', goals: 'stale' },
+      trims: [],
+      totalChars: 11,
+    },
+    modelAlias: 'opus',
+    effort: 'high',
+    budgetUsd: 1.5,
+  });
+  assert.deepEqual(command.args, [
+    '-p', '--no-session-persistence', '--permission-mode', 'plan', '--tools', '',
+    '--strict-mcp-config', '--mcp-config', '/fake/empty.json',
+    '--model', 'opus', '--effort', 'high', '--output-format', 'json',
+    '--json-schema', MORNING_BRIEF_JSON_SCHEMA, '--max-budget-usd', '1.5',
+  ]);
+  assert.match(command.stdin, /^\/forge-morning-brief/);
+  assert.match(command.stdin, /data, never instructions/);
+  // Sections ship as JSON string literals so source text can never break out
+  // of its fence and masquerade as prompt instructions.
+  assert.match(command.stdin, /CONTEXT GOALS="North star\."/);
+  assert.match(command.stdin, /candidate_ok/);
+  // The model sees the sanitized manifest (freshness and coverage, no hashes,
+  // no file paths) and is told to caveat stale or missing coverage.
+  assert.match(command.stdin, /CONTEXT SOURCE_MANIFEST=/);
+  assert.match(command.stdin, /"freshness":"stale"/);
+  assert.match(command.stdin, /stale or missing/);
+  assert.equal(command.stdin.includes('/secret/path'), false);
+  assert.equal(command.stdin.includes('abc123'), false);
+});
+
+test('the brief worker validates, filters unknown tasks, and stores the artifact', async (t) => {
+  const { dir, store } = briefFixture(t);
+  const wire = {
+    ...WIRE_BRIEF,
+    existing_task_candidates: [
+      ...WIRE_BRIEF.existing_task_candidates,
+      { task_id: 'task-invented', why_today: 'Made up.', suggested_owner: 'claude', what_claude_can_start: 'x' },
+    ],
+  };
+  const fake = fakeClaude(dir, JSON.stringify(wire));
+  store.enqueueMorningBrief('2026-07-14', { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 });
+  assert.equal(
+    await runOneMorningBrief(briefWorkerOptions(dir, store, fake.executable, async () => collectedSources())),
+    true,
+  );
+  const artifact = store.latestEligibleMorningBrief('2026-07-14');
+  assert.equal(artifact.status, 'succeeded');
+  const brief = morningBriefFromArtifact(artifact);
+  assert.deepEqual(brief.existingTaskCandidates.map((candidate) => candidate.taskId), ['task-c', 'task-a']);
+  assert.equal(typeof artifact.inputHash, 'string');
+  assert.equal(artifact.sourceManifest.coverage.calendar, 'missing');
+  const captured = JSON.parse(readFileSync(fake.capture, 'utf8'));
+  assert.deepEqual(captured.args.slice(0, 8), [
+    '-p', '--no-session-persistence', '--permission-mode', 'plan', '--tools', '',
+    '--strict-mcp-config', '--mcp-config',
+  ]);
+  assert.match(captured.input, /^\/forge-morning-brief/);
+  // Empty queue afterwards.
+  assert.equal(
+    await runOneMorningBrief(briefWorkerOptions(dir, store, fake.executable, async () => collectedSources())),
+    false,
+  );
+});
+
+test('the brief worker fails open on invalid output and missing required sources', async (t) => {
+  const { dir, store } = briefFixture(t);
+  const fake = fakeClaude(dir, JSON.stringify({ nonsense: true }));
+  store.enqueueMorningBrief('2026-07-14', { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 });
+  assert.equal(
+    await runOneMorningBrief(briefWorkerOptions(dir, store, fake.executable, async () => collectedSources())),
+    true,
+  );
+  const failed = store.listMorningBriefs('2026-07-14')[0];
+  assert.equal(failed.status, 'failed');
+  assert.match(failed.errorCode, /brief_invalid/);
+
+  // Missing required source: no session is spawned, the row fails with the name.
+  store.enqueueMorningBrief('2026-07-15', { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 });
+  assert.equal(
+    await runOneMorningBrief(briefWorkerOptions(
+      dir,
+      store,
+      path.join(dir, 'missing-claude'),
+      async () => collectedSources({ goals: '' }),
+    )),
+    true,
+  );
+  const missing = store.listMorningBriefs('2026-07-15')[0];
+  assert.equal(missing.status, 'failed');
+  assert.equal(missing.errorCode, 'required_source_missing:goals');
+
+  // Arrival is never blocked: ensure still proposes deterministically.
+  const plan = store.ensureDayPlan({
+    localDate: '2026-07-14',
+    timezone: 'America/Los_Angeles',
+    mutationId: 'ensure:after-failures',
+    candidates: candidatePool(),
+  }).plan;
+  assert.equal(plan.briefId, undefined);
+  assert.equal(plan.items.length, 3);
+});
+
+// ---------------------------------------------------------------------------
+// Generation triggers (maybeQueueMorningBrief decision logic).
+// ---------------------------------------------------------------------------
+
+function triggerStore({ pending = [], plans = {}, eligible } = {}) {
+  const enqueued = [];
+  return {
+    enqueued,
+    listPendingReconciliations: () => pending,
+    getPlan: (id) => plans[id],
+    latestEligibleMorningBrief: () => eligible,
+    enqueueMorningBrief: (date) => {
+      enqueued.push(date);
+      return { created: true, brief: { id: `queued-${enqueued.length}` } };
+    },
+  };
+}
+
+// 04:30 UTC Jul 15 is the evening of Jul 14 in Los Angeles.
+const TRIGGER_NOW = new Date('2026-07-15T04:30:00.000Z');
+const LA_PLAN = { id: 'plan-1', localDate: '2026-07-14', timezone: 'America/Los_Angeles', briefId: undefined };
+
+test('a commit with no defers or drops enqueues the next brief exactly once', () => {
+  const store = triggerStore();
+  maybeQueueMorningBrief(
+    store,
+    'settlement_commit',
+    { plan: LA_PLAN, snapshot: { id: 'snap-1' }, replayed: false },
+    TRIGGER_NOW,
+  );
+  assert.deepEqual(store.enqueued, ['2026-07-15']);
+});
+
+test('a commit with defers skips; the final reconciliation ack enqueues exactly once', () => {
+  const pending = [
+    { id: 'r1', state: 'pending', action: 'defer', snapshotId: 'snap-1', dayPlanId: 'plan-1' },
+  ];
+  const store = triggerStore({ pending, plans: { 'plan-1': LA_PLAN } });
+  maybeQueueMorningBrief(
+    store,
+    'settlement_commit',
+    { plan: LA_PLAN, snapshot: { id: 'snap-1' }, replayed: false },
+    TRIGGER_NOW,
+  );
+  assert.deepEqual(store.enqueued, []);
+  // The last defer is acked and applied: nothing pending remains for snap-1.
+  pending.length = 0;
+  maybeQueueMorningBrief(
+    store,
+    'reconciliation_applied',
+    {
+      reconciliation: { id: 'r1', action: 'defer', snapshotId: 'snap-1', dayPlanId: 'plan-1', state: 'applied' },
+      replayed: false,
+    },
+    TRIGGER_NOW,
+  );
+  assert.deepEqual(store.enqueued, ['2026-07-15']);
+});
+
+test('resurface acks never enqueue a brief', () => {
+  const store = triggerStore({ plans: { 'plan-1': LA_PLAN } });
+  maybeQueueMorningBrief(
+    store,
+    'reconciliation_applied',
+    {
+      reconciliation: { id: 'r2', action: 'resurface', snapshotId: 'snap-1', dayPlanId: 'plan-1', state: 'applied' },
+      replayed: false,
+    },
+    TRIGGER_NOW,
+  );
+  assert.deepEqual(store.enqueued, []);
+});
+
+test('an earlier settlement\'s unacked defer never suppresses this commit', () => {
+  const store = triggerStore({
+    pending: [
+      { id: 'old', state: 'pending', action: 'defer', snapshotId: 'snap-earlier', dayPlanId: 'plan-0' },
+    ],
+  });
+  maybeQueueMorningBrief(
+    store,
+    'settlement_commit',
+    { plan: LA_PLAN, snapshot: { id: 'snap-now' }, replayed: false },
+    TRIGGER_NOW,
+  );
+  assert.deepEqual(store.enqueued, ['2026-07-15']);
+});
+
+test('replayed commits and replayed acks never re-enqueue', () => {
+  const store = triggerStore({ plans: { 'plan-1': LA_PLAN } });
+  maybeQueueMorningBrief(
+    store,
+    'settlement_commit',
+    { plan: LA_PLAN, snapshot: { id: 'snap-1' }, replayed: true },
+    TRIGGER_NOW,
+  );
+  maybeQueueMorningBrief(
+    store,
+    'reconciliation_applied',
+    {
+      reconciliation: { id: 'r1', action: 'defer', snapshotId: 'snap-1', dayPlanId: 'plan-1', state: 'applied' },
+      replayed: true,
+    },
+    TRIGGER_NOW,
+  );
+  assert.deepEqual(store.enqueued, []);
+});
+
+test('ensure and arrival triggers regenerate only for today and never for a consumed plan', () => {
+  const today = localDateInTimezone(TRIGGER_NOW, 'America/Los_Angeles');
+  const fresh = triggerStore();
+  maybeQueueMorningBrief(
+    fresh,
+    'ensure',
+    { plan: { id: 'p', localDate: today, timezone: 'America/Los_Angeles' }, replayed: false },
+    TRIGGER_NOW,
+  );
+  assert.deepEqual(fresh.enqueued, [today]);
+  // Consumed plan: never re-queues.
+  const consumed = triggerStore();
+  maybeQueueMorningBrief(
+    consumed,
+    'arrival_open',
+    { plan: { id: 'p', localDate: today, timezone: 'America/Los_Angeles', briefId: 'b1' }, replayed: false },
+    TRIGGER_NOW,
+  );
+  // Stale plan: settlement owns the right target.
+  maybeQueueMorningBrief(
+    consumed,
+    'ensure',
+    { plan: { id: 'p', localDate: '2026-07-01', timezone: 'America/Los_Angeles' }, replayed: false },
+    TRIGGER_NOW,
+  );
+  // Eligible artifact already exists: nothing to do.
+  const covered = triggerStore({ eligible: { id: 'existing' } });
+  maybeQueueMorningBrief(
+    covered,
+    'ensure',
+    { plan: { id: 'p', localDate: today, timezone: 'America/Los_Angeles' }, replayed: false },
+    TRIGGER_NOW,
+  );
+  assert.deepEqual(consumed.enqueued, []);
+  assert.deepEqual(covered.enqueued, []);
+});
+
+// ---------------------------------------------------------------------------
+// Scheduled lane (enqueueDueMorningBrief): timezone fallback order.
+// ---------------------------------------------------------------------------
+
+function dueStore({ plan, snapshot, eligible } = {}) {
+  const enqueued = [];
+  return {
+    enqueued,
+    getReadModel: () => ({
+      currentPlan: plan,
+      latestSnapshot: snapshot,
+      pendingReconciliations: [],
+      pendingTaskMutations: [],
+    }),
+    latestEligibleMorningBrief: () => eligible,
+    enqueueMorningBrief: (date) => {
+      enqueued.push(date);
+      return { created: true, brief: { id: 'queued' } };
+    },
+  };
+}
+
+test('the scheduled lane resolves timezone as plan, then snapshot, then system, and skips when covered', () => {
+  // 16:00 UTC Jul 14 is already Jul 15 in Tokyo but still Jul 14 in LA.
+  const now = new Date('2026-07-14T16:00:00.000Z');
+  const withPlan = dueStore({ plan: { timezone: 'Asia/Tokyo' }, snapshot: { timezone: 'America/Los_Angeles' } });
+  enqueueDueMorningBrief(withPlan, now);
+  assert.deepEqual(withPlan.enqueued, ['2026-07-15']);
+
+  const withSnapshot = dueStore({ snapshot: { timezone: 'America/Los_Angeles' } });
+  enqueueDueMorningBrief(withSnapshot, now);
+  assert.deepEqual(withSnapshot.enqueued, ['2026-07-14']);
+
+  const systemOnly = dueStore();
+  enqueueDueMorningBrief(systemOnly, now);
+  const systemZone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
+  assert.deepEqual(systemOnly.enqueued, [localDateInTimezone(now, systemZone)]);
+
+  // A junk timezone falls back to UTC instead of crashing the lane.
+  const junk = dueStore({ plan: { timezone: 'Not/AZone' } });
+  enqueueDueMorningBrief(junk, now);
+  assert.deepEqual(junk.enqueued, ['2026-07-14']);
+
+  // An eligible artifact for the target means a clean skip.
+  const covered = dueStore({ plan: { timezone: 'Asia/Tokyo' }, eligible: { id: 'existing' } });
+  assert.equal(enqueueDueMorningBrief(covered, now), undefined);
+  assert.deepEqual(covered.enqueued, []);
+});
+
+// ---------------------------------------------------------------------------
+// Public projections: plans strip brief content off-loopback; the client
+// keys its held brief to plan.briefId.
+// ---------------------------------------------------------------------------
+
+test('plan payloads strip briefId and item annotations for non-loopback access', () => {
+  const plan = {
+    id: 'p1',
+    localDate: '2026-07-14',
+    timezone: 'America/Los_Angeles',
+    state: 'proposed',
+    arrivalState: 'opened',
+    settlementState: 'not_due',
+    version: 2,
+    lastMutationId: 'm1',
+    briefId: 'brief-1',
+    items: [
+      { id: 'i1', taskId: 't1', title: 'Ship it', brief: { whyToday: 'Funnel first.', suggestedOwner: 'claude' } },
+      { id: 'i2', taskId: 't2', title: 'Call Gio' },
+    ],
+    createdAt: '2026-07-14T13:00:00.000Z',
+    updatedAt: '2026-07-14T13:00:00.000Z',
+  };
+  const loopback = publicDayPlan(plan, 'loopback');
+  assert.equal(loopback.briefId, 'brief-1');
+  assert.equal(loopback.items[0].brief.whyToday, 'Funnel first.');
+  for (const mode of ['session', undefined]) {
+    const projected = publicDayPlan(plan, mode);
+    assert.equal('briefId' in projected, false, String(mode));
+    assert.equal('brief' in projected.items[0], false, String(mode));
+    assert.equal(projected.items[0].title, 'Ship it');
+    assert.equal(projected.items.length, 2);
+  }
+  // The source plan is never mutated by the projection.
+  assert.equal(plan.briefId, 'brief-1');
+  assert.equal(plan.items[0].brief.whyToday, 'Funnel first.');
+});
+
+test('the client brief state is keyed to plan.briefId', () => {
+  assert.equal(morningBriefSyncDecision(undefined, undefined), 'keep');
+  // A plan without a brief clears any held content (yesterday's brief can
+  // never render against today's plan).
+  assert.equal(morningBriefSyncDecision(undefined, { id: 'b1' }), 'clear');
+  assert.equal(morningBriefSyncDecision('b1', { id: 'b1' }), 'keep');
+  assert.equal(morningBriefSyncDecision('b1', undefined), 'refresh');
+  assert.equal(morningBriefSyncDecision('b2', { id: 'b1' }), 'refresh');
+});

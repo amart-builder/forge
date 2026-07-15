@@ -82,10 +82,20 @@ export type RecommendationCandidate = {
   rankReasons: string[];
 };
 
+// Morning Brief presentation overlaid on an arrival item at ensure time. It is
+// rationale only: the item's own whyToday, evidence, and dates stay the
+// deterministic task-backed values.
+export type DayPlanItemBriefAnnotation = {
+  whyToday: string;
+  whatClaudeCanStart?: string;
+  suggestedOwner?: DayPlanOwner;
+};
+
 export type DayPlanItem = RecommendationCandidate & {
   id: string;
   position: number;
   decision: DayPlanItemDecision;
+  brief?: DayPlanItemBriefAnnotation;
   settlementDecision?: {
     disposition: SettlementDisposition;
     deferUntil?: string;
@@ -103,6 +113,9 @@ export type DayPlan = {
   version: number;
   lastMutationId?: string;
   items: DayPlanItem[];
+  // The Morning Brief artifact consumed when this plan was proposed, if any.
+  // Set once at ensure and never hot-swapped afterwards.
+  briefId?: string;
   recommendedFirstItemId?: string;
   recommendedFirstTaskId?: string;
   snoozedUntil?: string;

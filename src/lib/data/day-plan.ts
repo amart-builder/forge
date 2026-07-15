@@ -1,4 +1,9 @@
 import type {
+  MorningBriefSalesActionRecord,
+  MorningBriefSalesActionState,
+  PublicMorningBrief,
+} from "../day-plan/brief";
+import type {
   DayPlan,
   DayPlanAssistantTurn,
   DayPlanExecutionConfig,
@@ -17,7 +22,12 @@ import type {
   ConfigureDayPlanExecutionInput,
 } from "../day-plan/types";
 
-export type DayPlanApiSnapshot = DayPlanReadModel & { csrfToken: string };
+export type DayPlanApiSnapshot = DayPlanReadModel & {
+  csrfToken: string;
+  // Present only on loopback requests, and only for the brief the current plan
+  // consumed at ensure time.
+  morningBrief?: PublicMorningBrief;
+};
 export type DayPlanExecutionState = {
   items: Array<{
     itemId: string;
@@ -127,6 +137,20 @@ export function acknowledgeDayPlanTaskMutation(
   return postDayPlan<DayPlanTaskMutationResult>({
     action: "task_mutation_applied",
     mutationId,
+  });
+}
+
+// Marks a Morning Brief sales action approved, edited, or skipped. State only:
+// nothing is ever sent on the user's behalf.
+export function markMorningBriefSalesAction(input: {
+  briefId: string;
+  actionIndex: number;
+  state: MorningBriefSalesActionState;
+  editedText?: string;
+}): Promise<{ states: MorningBriefSalesActionRecord[] }> {
+  return postDayPlan<{ states: MorningBriefSalesActionRecord[] }>({
+    action: "brief_action",
+    ...input,
   });
 }
 

@@ -4,15 +4,18 @@ import path from "node:path";
 import { createDayPlanStore } from "../src/lib/day-plan/store";
 import {
   drainClaudeQueues,
+  enqueueDueMorningBrief,
   runOneAssistantTurn,
   runOneExecution,
+  runOneMorningBrief,
   watchClaudeQueues,
+  watchMorningBriefQueue,
 } from "../src/lib/claude-execution/worker";
 
 async function main(): Promise<number> {
   const laneIndex = process.argv.indexOf("--lane");
   const lane = laneIndex >= 0 ? process.argv[laneIndex + 1] : undefined;
-  if (!["assistant", "execution", "all", "watch"].includes(lane ?? "")) return 2;
+  if (!["assistant", "execution", "all", "watch", "brief"].includes(lane ?? "")) return 2;
   if (process.env.FORGE_CLAUDE_WORKER_ENABLED !== "1") return 3;
   const repoDir = process.cwd();
   const claudePath = process.env.FORGE_CLAUDE_BIN ?? path.join(homedir(), ".local", "bin", "claude");
@@ -50,7 +53,27 @@ async function main(): Promise<number> {
     if (lane === "assistant") await runOneAssistantTurn(options);
     else if (lane === "execution") await runOneExecution(options);
     else if (lane === "all") await drainClaudeQueues(options);
-    else await watchClaudeQueues(options);
+    else if (lane === "brief") {
+      // Scheduled one-shot (the ~7:30 local run): enqueue today's brief when
+      // none exists, then drain the brief lane completely. Enqueueing is
+      // best-effort: a transient SQLITE_BUSY must not exit-1 the whole run
+      // (the drain below and the arrival trigger both cover the miss).
+      try {
+        enqueueDueMorningBrief(store);
+      } catch (error) {
+        console.error("morning-brief enqueue failed (continuing to drain):", error);
+      }
+      while (await runOneMorningBrief(options)) {
+        if (shutdown.signal.aborted) break;
+      }
+    } else {
+      // Watch mode runs the serial assistant/execution loop and the dedicated
+      // brief loop side by side, so briefs never queue behind execution runs.
+      await Promise.all([
+        watchClaudeQueues(options),
+        watchMorningBriefQueue(options),
+      ]);
+    }
     return 0;
   } finally {
     if (heartbeat) clearInterval(heartbeat);

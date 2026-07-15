@@ -41,6 +41,17 @@ import {
 } from "./execution-readiness";
 import { applyAssistantProposal, validateAssistantProposal } from "./assistant-patch";
 import {
+  morningBriefFromArtifact,
+  overlayBriefOnCandidates,
+  MORNING_BRIEF_PROMPT_VERSION,
+  MORNING_BRIEF_SCHEMA_VERSION,
+  type MorningBriefArtifact,
+  type MorningBriefSalesActionRecord,
+  type MorningBriefSalesActionState,
+  type MorningBriefSourceManifest,
+  type MorningBriefStatus,
+} from "./brief";
+import {
   DayPlanInvalidTransition,
   DayPlanNotFound,
   DayPlanVersionConflict,
@@ -58,6 +69,7 @@ type DayPlanRow = {
   version: number;
   last_mutation_id: string | null;
   items_json: string;
+  brief_id: string | null;
   recommended_first_item_id: string | null;
   recommended_first_task_id: string | null;
   snoozed_until: string | null;
@@ -143,6 +155,25 @@ type ExecutionConfigRow = {
   updated_at: string;
 };
 
+type MorningBriefRow = {
+  id: string;
+  target_local_date: string;
+  status: MorningBriefStatus;
+  input_hash: string | null;
+  prompt_version: number;
+  schema_version: number;
+  source_manifest_json: string | null;
+  model_alias: string;
+  effort: string;
+  budget_usd: number;
+  brief_json: string | null;
+  error_code: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 type ExecutionRunRow = {
   id: string;
   day_plan_id: string;
@@ -186,6 +217,7 @@ CREATE TABLE IF NOT EXISTS day_plans (
   version INTEGER NOT NULL CHECK (version > 0),
   last_mutation_id TEXT,
   items_json TEXT NOT NULL,
+  brief_id TEXT,
   recommended_first_item_id TEXT,
   recommended_first_task_id TEXT,
   snoozed_until TEXT,
@@ -330,6 +362,38 @@ CREATE TABLE IF NOT EXISTS day_plan_execution_mutations (
   created_at TEXT NOT NULL,
   FOREIGN KEY (day_plan_id) REFERENCES day_plans(id)
 );
+CREATE TABLE IF NOT EXISTS day_plan_briefs (
+  id TEXT PRIMARY KEY,
+  target_local_date TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed')),
+  input_hash TEXT,
+  prompt_version INTEGER NOT NULL,
+  schema_version INTEGER NOT NULL,
+  source_manifest_json TEXT,
+  model_alias TEXT NOT NULL,
+  effort TEXT NOT NULL,
+  budget_usd REAL NOT NULL,
+  brief_json TEXT,
+  error_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  UNIQUE (target_local_date, input_hash, prompt_version, schema_version)
+);
+CREATE INDEX IF NOT EXISTS day_plan_briefs_queue
+  ON day_plan_briefs(status, created_at, id);
+CREATE INDEX IF NOT EXISTS day_plan_briefs_by_date
+  ON day_plan_briefs(target_local_date, finished_at DESC, created_at DESC);
+CREATE TABLE IF NOT EXISTS day_plan_brief_action_states (
+  brief_id TEXT NOT NULL,
+  action_index INTEGER NOT NULL CHECK (action_index >= 0),
+  state TEXT NOT NULL CHECK (state IN ('approved','edited','skipped')),
+  edited_text TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (brief_id, action_index),
+  FOREIGN KEY (brief_id) REFERENCES day_plan_briefs(id)
+);
 `;
 
 export { DayPlanInvalidTransition, DayPlanNotFound, DayPlanVersionConflict };
@@ -353,6 +417,7 @@ function planFromRow(row: DayPlanRow): DayPlan {
     version: row.version,
     lastMutationId: row.last_mutation_id ?? undefined,
     items: parseJson<DayPlanItem[]>(row.items_json, "day plan items"),
+    briefId: row.brief_id ?? undefined,
     recommendedFirstItemId: row.recommended_first_item_id ?? undefined,
     recommendedFirstTaskId: row.recommended_first_task_id ?? undefined,
     snoozedUntil: row.snoozed_until ?? undefined,
@@ -449,6 +514,29 @@ function executionConfigFromRow(row: ExecutionConfigRow): DayPlanExecutionConfig
     lastMutationId: row.last_mutation_id,
     configuredAt: row.configured_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function morningBriefFromRow(row: MorningBriefRow): MorningBriefArtifact {
+  return {
+    id: row.id,
+    targetLocalDate: row.target_local_date,
+    status: row.status,
+    inputHash: row.input_hash ?? undefined,
+    promptVersion: row.prompt_version,
+    schemaVersion: row.schema_version,
+    sourceManifest: row.source_manifest_json
+      ? parseJson<MorningBriefSourceManifest>(row.source_manifest_json, "brief manifest")
+      : undefined,
+    modelAlias: row.model_alias,
+    effort: row.effort,
+    budgetUsd: row.budget_usd,
+    briefJson: row.brief_json ?? undefined,
+    errorCode: row.error_code ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at ?? undefined,
+    finishedAt: row.finished_at ?? undefined,
   };
 }
 
@@ -563,6 +651,14 @@ export function createDayPlanStore(options: {
   );
   if (!taskMutationColumns.has("sequence")) {
     db.exec("ALTER TABLE day_plan_task_mutations ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0");
+  }
+  const dayPlanColumns = new Set(
+    (db.pragma("table_info(day_plans)") as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  );
+  if (!dayPlanColumns.has("brief_id")) {
+    db.exec("ALTER TABLE day_plans ADD COLUMN brief_id TEXT");
   }
 
   const selectPlan = db.prepare("SELECT * FROM day_plans WHERE id = ?");
@@ -1490,6 +1586,282 @@ export function createDayPlanStore(options: {
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
+  // -------------------------------------------------------------------------
+  // Morning Brief artifacts. Rows are immutable once succeeded; regeneration
+  // creates new rows and the newest eligible artifact wins at selection time.
+  // -------------------------------------------------------------------------
+
+  function getMorningBrief(id: string): MorningBriefArtifact | undefined {
+    const row = db
+      .prepare("SELECT * FROM day_plan_briefs WHERE id = ?")
+      .get(id) as MorningBriefRow | undefined;
+    return row ? morningBriefFromRow(row) : undefined;
+  }
+
+  function listMorningBriefs(targetLocalDate: string): MorningBriefArtifact[] {
+    return (db
+      .prepare(
+        "SELECT * FROM day_plan_briefs WHERE target_local_date = ? ORDER BY created_at, id",
+      )
+      .all(targetLocalDate) as MorningBriefRow[]).map(morningBriefFromRow);
+  }
+
+  function latestEligibleMorningBrief(
+    targetLocalDate: string,
+    versions: { promptVersion: number; schemaVersion: number } = {
+      promptVersion: MORNING_BRIEF_PROMPT_VERSION,
+      schemaVersion: MORNING_BRIEF_SCHEMA_VERSION,
+    },
+  ): MorningBriefArtifact | undefined {
+    const row = db
+      .prepare(
+        `SELECT * FROM day_plan_briefs
+         WHERE target_local_date = ? AND status = 'succeeded'
+           AND prompt_version = ? AND schema_version = ? AND brief_json IS NOT NULL
+         ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC, id DESC
+         LIMIT 1`,
+      )
+      .get(targetLocalDate, versions.promptVersion, versions.schemaVersion) as
+      | MorningBriefRow
+      | undefined;
+    return row ? morningBriefFromRow(row) : undefined;
+  }
+
+  function enqueueMorningBrief(
+    targetLocalDate: string,
+    provenance: { modelAlias: string; effort: string; budgetUsd: number },
+  ): { brief: MorningBriefArtifact; created: boolean } {
+    return immediate(() => {
+      const active = db
+        .prepare(
+          `SELECT * FROM day_plan_briefs
+           WHERE target_local_date = ? AND status IN ('queued','running')
+           ORDER BY created_at, id LIMIT 1`,
+        )
+        .get(targetLocalDate) as MorningBriefRow | undefined;
+      if (active) return { brief: morningBriefFromRow(active), created: false };
+      const createdAt = now().toISOString();
+      const id = randomUUID();
+      db.prepare(
+        `INSERT INTO day_plan_briefs
+          (id, target_local_date, status, prompt_version, schema_version,
+           model_alias, effort, budget_usd, created_at, updated_at)
+         VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        targetLocalDate,
+        MORNING_BRIEF_PROMPT_VERSION,
+        MORNING_BRIEF_SCHEMA_VERSION,
+        provenance.modelAlias,
+        provenance.effort,
+        provenance.budgetUsd,
+        createdAt,
+        createdAt,
+      );
+      return { brief: getMorningBrief(id)!, created: true };
+    });
+  }
+
+  function claimNextMorningBrief(): MorningBriefArtifact | undefined {
+    return immediate(() => {
+      const row = db
+        .prepare(
+          `SELECT * FROM day_plan_briefs
+           WHERE status = 'queued'
+             AND NOT EXISTS (
+               SELECT 1 FROM day_plan_briefs active WHERE active.status = 'running'
+             )
+           ORDER BY created_at, id LIMIT 1`,
+        )
+        .get() as MorningBriefRow | undefined;
+      if (!row) return undefined;
+      const startedAt = now().toISOString();
+      db.prepare(
+        `UPDATE day_plan_briefs
+         SET status = 'running', started_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'queued'`,
+      ).run(startedAt, startedAt, row.id);
+      return getMorningBrief(row.id);
+    });
+  }
+
+  function recordMorningBriefInputs(
+    id: string,
+    inputs: {
+      inputHash: string;
+      sourceManifest: MorningBriefSourceManifest;
+      promptVersion: number;
+      schemaVersion: number;
+    },
+  ): { duplicateOfId?: string } {
+    return immediate(() => {
+      const row = db
+        .prepare("SELECT * FROM day_plan_briefs WHERE id = ?")
+        .get(id) as MorningBriefRow | undefined;
+      if (!row || row.status !== "running") return {};
+      const updatedAt = now().toISOString();
+      const duplicate = db
+        .prepare(
+          `SELECT id FROM day_plan_briefs
+           WHERE target_local_date = ? AND input_hash = ?
+             AND prompt_version = ? AND schema_version = ? AND status = 'succeeded'
+           LIMIT 1`,
+        )
+        .get(
+          row.target_local_date,
+          inputs.inputHash,
+          inputs.promptVersion,
+          inputs.schemaVersion,
+        ) as { id: string } | undefined;
+      if (duplicate) {
+        // Identical inputs already produced an artifact; skip the session and
+        // let selection keep using the existing brief.
+        db.prepare(
+          `UPDATE day_plan_briefs
+           SET status = 'failed', error_code = 'duplicate_input', finished_at = ?, updated_at = ?
+           WHERE id = ? AND status = 'running'`,
+        ).run(updatedAt, updatedAt, id);
+        return { duplicateOfId: duplicate.id };
+      }
+      // Dead failed attempts with the same composite key would collide with the
+      // unique index; they carry no artifact, so prune them.
+      db.prepare(
+        `DELETE FROM day_plan_briefs
+         WHERE target_local_date = ? AND input_hash = ?
+           AND prompt_version = ? AND schema_version = ? AND status = 'failed'`,
+      ).run(
+        row.target_local_date,
+        inputs.inputHash,
+        inputs.promptVersion,
+        inputs.schemaVersion,
+      );
+      db.prepare(
+        `UPDATE day_plan_briefs
+         SET input_hash = ?, prompt_version = ?, schema_version = ?,
+             source_manifest_json = ?, updated_at = ?
+         WHERE id = ? AND status = 'running'`,
+      ).run(
+        inputs.inputHash,
+        inputs.promptVersion,
+        inputs.schemaVersion,
+        JSON.stringify(inputs.sourceManifest),
+        updatedAt,
+        id,
+      );
+      return {};
+    });
+  }
+
+  function completeMorningBrief(
+    id: string,
+    briefJson: string,
+  ): MorningBriefArtifact | undefined {
+    return immediate(() => {
+      const finishedAt = now().toISOString();
+      // Only a running row can succeed. A late finisher whose row was already
+      // interrupted stays failed, so it can never clobber a newer artifact.
+      const changed = db
+        .prepare(
+          `UPDATE day_plan_briefs
+           SET status = 'succeeded', brief_json = ?, error_code = NULL,
+               finished_at = ?, updated_at = ?
+           WHERE id = ? AND status = 'running'`,
+        )
+        .run(briefJson, finishedAt, finishedAt, id).changes;
+      return changed > 0 ? getMorningBrief(id) : undefined;
+    });
+  }
+
+  function failMorningBrief(id: string, errorCode: string): void {
+    immediate(() => {
+      const finishedAt = now().toISOString();
+      db.prepare(
+        `UPDATE day_plan_briefs
+         SET status = 'failed', error_code = ?, finished_at = ?, updated_at = ?
+         WHERE id = ? AND status IN ('queued','running')`,
+      ).run(errorCode.slice(0, 200), finishedAt, finishedAt, id);
+    });
+  }
+
+  function interruptStaleMorningBriefs(staleBefore: string): number {
+    return db
+      .prepare(
+        `UPDATE day_plan_briefs
+         SET status = 'failed', error_code = 'worker_interrupted', finished_at = ?, updated_at = ?
+         WHERE status = 'running' AND started_at < ?`,
+      )
+      .run(now().toISOString(), now().toISOString(), staleBefore).changes;
+  }
+
+  function setMorningBriefSalesActionState(
+    briefId: string,
+    actionIndex: number,
+    state: MorningBriefSalesActionState,
+    editedText?: string,
+  ): MorningBriefSalesActionRecord {
+    return immediate(() => {
+      const artifact = getMorningBrief(briefId);
+      const brief = morningBriefFromArtifact(artifact);
+      if (!artifact || !brief) {
+        throw new DayPlanInvalidTransition("Morning brief not found.");
+      }
+      if (
+        !Number.isInteger(actionIndex) ||
+        actionIndex < 0 ||
+        actionIndex >= brief.salesActions.length
+      ) {
+        throw new DayPlanInvalidTransition("Unknown sales action.");
+      }
+      const updatedAt = now().toISOString();
+      db.prepare(
+        `INSERT INTO day_plan_brief_action_states
+          (brief_id, action_index, state, edited_text, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(brief_id, action_index) DO UPDATE SET
+           state = excluded.state, edited_text = excluded.edited_text,
+           updated_at = excluded.updated_at`,
+      ).run(briefId, actionIndex, state, editedText ?? null, updatedAt);
+      return {
+        briefId,
+        actionIndex,
+        state,
+        editedText: editedText ?? undefined,
+        updatedAt,
+      };
+    });
+  }
+
+  function listMorningBriefSalesActionStates(
+    briefId: string,
+  ): MorningBriefSalesActionRecord[] {
+    return (db
+      .prepare(
+        `SELECT brief_id, action_index, state, edited_text, updated_at
+         FROM day_plan_brief_action_states WHERE brief_id = ? ORDER BY action_index`,
+      )
+      .all(briefId) as Array<{
+        brief_id: string;
+        action_index: number;
+        state: MorningBriefSalesActionState;
+        edited_text: string | null;
+        updated_at: string;
+      }>).map((row) => ({
+        briefId: row.brief_id,
+        actionIndex: row.action_index,
+        state: row.state,
+        editedText: row.edited_text ?? undefined,
+        updatedAt: row.updated_at,
+      }));
+  }
+
+  function listRecentSnapshots(limit = 3): DaySnapshot[] {
+    return (db
+      .prepare(
+        "SELECT * FROM day_snapshots ORDER BY local_date DESC, created_at DESC LIMIT ?",
+      )
+      .all(Math.max(1, Math.min(20, limit))) as SnapshotRow[]).map(snapshotFromRow);
+  }
+
   function ensureDayPlan(input: EnsureDayPlanInput): DayPlanMutationResult {
     return immediate(() => {
       const existingEvent = selectEvent.get(input.mutationId) as EventRow | undefined;
@@ -1518,8 +1890,8 @@ export function createDayPlanStore(options: {
         return { plan: existing, snapshot: getSnapshot(existing.id), replayed: false };
       }
 
-      if (input.candidates.length > 3) {
-        throw new DayPlanInvalidTransition("Arrival supports at most three candidates.");
+      if (input.candidates.length > 10) {
+        throw new DayPlanInvalidTransition("Arrival supports at most ten candidates.");
       }
       if (
         new Set(input.candidates.map((candidate) => candidate.taskId)).size !==
@@ -1547,11 +1919,37 @@ export function createDayPlanStore(options: {
 
       const createdAt = now().toISOString();
       const id = randomUUID();
-      const items: DayPlanItem[] = input.candidates.map((candidate, position) => ({
+      // Consume today's Morning Brief when a valid one exists: its ranking,
+      // rationale, and owner suggestions overlay the fresh candidate pool, and
+      // deterministic order backfills anything the brief missed or that
+      // vanished. Any brief problem falls open to the deterministic proposal.
+      let briefArtifact: MorningBriefArtifact | undefined;
+      let briefContent: ReturnType<typeof morningBriefFromArtifact>;
+      let selection: ReturnType<typeof overlayBriefOnCandidates>;
+      // One fallback boundary around lookup, parse, AND overlay: any defect in
+      // a stored brief (including one the deep parse cannot anticipate) must
+      // degrade to the deterministic proposal, never fail the ensure.
+      try {
+        briefArtifact = latestEligibleMorningBrief(input.localDate);
+        briefContent = morningBriefFromArtifact(briefArtifact);
+        selection = overlayBriefOnCandidates(input.candidates, briefContent);
+      } catch {
+        briefArtifact = undefined;
+        briefContent = undefined;
+        selection = overlayBriefOnCandidates(input.candidates, undefined);
+      }
+      const items: DayPlanItem[] = selection.map(({ candidate, brief }, position) => ({
         ...structuredClone(candidate),
         id: candidate.candidateId,
         position,
         decision: "preselected",
+        ...(brief
+          ? {
+              brief,
+              // The owner suggestion is preselected but fully overridable in arrival.
+              owner: brief.suggestedOwner ?? candidate.owner,
+            }
+          : {}),
       }));
       const plan: DayPlan = {
         id,
@@ -1563,6 +1961,7 @@ export function createDayPlanStore(options: {
         version: 1,
         lastMutationId: input.mutationId,
         items,
+        briefId: briefContent && briefArtifact ? briefArtifact.id : undefined,
         createdAt,
         updatedAt: createdAt,
       };
@@ -1570,8 +1969,8 @@ export function createDayPlanStore(options: {
       db.prepare(
         `INSERT INTO day_plans
           (id, local_date, timezone, open_slot, plan_state, arrival_state, settlement_state,
-           version, last_mutation_id, items_json, created_at, updated_at)
-         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           version, last_mutation_id, items_json, brief_id, created_at, updated_at)
+         VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         plan.id,
         plan.localDate,
@@ -1582,6 +1981,7 @@ export function createDayPlanStore(options: {
         plan.version,
         plan.lastMutationId,
         JSON.stringify(plan.items),
+        plan.briefId ?? null,
         plan.createdAt,
         plan.updatedAt,
       );
@@ -2216,6 +2616,18 @@ export function createDayPlanStore(options: {
     listEvents,
     listPendingReconciliations,
     listPendingTaskMutations,
+    listRecentSnapshots,
+    getMorningBrief,
+    listMorningBriefs,
+    latestEligibleMorningBrief,
+    enqueueMorningBrief,
+    claimNextMorningBrief,
+    recordMorningBriefInputs,
+    completeMorningBrief,
+    failMorningBrief,
+    interruptStaleMorningBriefs,
+    setMorningBriefSalesActionState,
+    listMorningBriefSalesActionStates,
     close: () => {
       if (db.open) db.close();
     },

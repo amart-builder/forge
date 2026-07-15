@@ -301,19 +301,26 @@ function proposalCandidate(value: unknown): unknown {
   return value;
 }
 
-export function parseAssistantPlannerOutput(raw: string): DayPlanAssistantProposal {
+// Shared extraction for bounded headless sessions that return one structured
+// JSON object (--output-format json with a --json-schema). The label prefixes
+// error codes so each caller keeps its own failure vocabulary.
+export function parseStructuredClaudeOutput(raw: string, label: string): unknown {
   if (Buffer.byteLength(raw, "utf8") > 1024 * 1024) {
-    throw new Error("assistant_output_too_large");
+    throw new Error(`${label}_output_too_large`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new Error("assistant_output_invalid_json");
+    throw new Error(`${label}_output_invalid_json`);
   }
   const candidate = proposalCandidate(parsed);
   if (!candidate || typeof candidate !== "object") {
-    throw new Error("assistant_output_missing_proposal");
+    throw new Error(`${label}_output_missing_result`);
   }
-  return candidate as DayPlanAssistantProposal;
+  return candidate;
+}
+
+export function parseAssistantPlannerOutput(raw: string): DayPlanAssistantProposal {
+  return parseStructuredClaudeOutput(raw, "assistant") as DayPlanAssistantProposal;
 }

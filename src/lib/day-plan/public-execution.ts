@@ -1,4 +1,5 @@
 import type {
+  DayPlan,
   DayPlanExecutionReadiness,
   DayPlanExecutionRun,
   DayPlanExecutionRunStatus,
@@ -6,6 +7,28 @@ import type {
 } from "./types";
 
 export type DayPlanExecutionAccessMode = "loopback" | "session";
+
+// Morning Brief content (and anything derived from it) is loopback-only. The
+// full blob is already gated, but item.brief annotations (whyToday,
+// whatClaudeCanStart) and plan.briefId are persisted into the plan itself, so
+// every response that carries a plan must strip them for non-loopback access:
+// the main GET, mutation results, and 409 conflict payloads alike.
+export function publicDayPlan(
+  plan: DayPlan,
+  accessMode: DayPlanExecutionAccessMode | undefined,
+): DayPlan {
+  if (accessMode === "loopback") return plan;
+  const publicPlan = { ...plan };
+  delete publicPlan.briefId;
+  return {
+    ...publicPlan,
+    items: plan.items.map((item) => {
+      const publicItem = { ...item };
+      delete publicItem.brief;
+      return publicItem;
+    }),
+  };
+}
 
 // A run's claudeSessionId is a resumable handle into a local Claude CLI session. It is
 // only safe to expose when the request is loopback (same machine, not a remote session)

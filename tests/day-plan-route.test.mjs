@@ -83,9 +83,9 @@ test('rejects unstructured, stale, duplicate, and oversized candidates', () => {
         localDate: '2026-07-10',
         timezone: 'America/Los_Angeles',
         mutationId: 'ensure:2026-07-10',
-        candidates: [base, base, base, base],
+        candidates: Array.from({ length: 11 }, () => base),
       }),
-    /at most three/,
+    /at most ten/,
   );
   assert.throws(
     () =>

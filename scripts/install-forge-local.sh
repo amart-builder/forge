@@ -68,6 +68,7 @@ BACKUP_PLIST="$LA_DIR/com.forge.local.backup.plist"
 REMINDERS_PLIST="$LA_DIR/com.forge.reminders.plist"
 TRIAGE_PLIST="$LA_DIR/com.forge.email-triage.plist"
 WORKER_PLIST="$LA_DIR/com.forge.claude-worker.plist"
+BRIEF_PLIST="$LA_DIR/com.forge.morning-brief.plist"
 
 # --- Server: next start on localhost:3200 ---
 cat > "$SERVER_PLIST" <<EOF
@@ -148,6 +149,54 @@ cat > "$WORKER_PLIST" <<EOF
     <string>1</string>
     <key>FORGE_CLAUDE_BIN</key>
     <string>$CLAUDE_BIN</string>
+    <key>FORGE_BRIEF_WEB_BASE</key>
+    <string>http://127.0.0.1:3200</string>
+  </dict>
+</dict>
+</plist>
+EOF
+
+# --- Morning Brief: enqueue and drain the brief lane daily at 7:30am local ---
+# One-shot run (no KeepAlive): it enqueues today's brief if none is eligible,
+# drains the brief queue, and exits. The watch worker also drains this lane,
+# so the two never conflict (single-flight claim in the store).
+cat > "$BRIEF_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.forge.morning-brief</string>
+  <key>WorkingDirectory</key>
+  <string>$REPO_DIR</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$TSX_BIN</string>
+    <string>$REPO_DIR/scripts/forge-claude-worker.ts</string>
+    <string>--lane</string>
+    <string>brief</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>7</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>$LOG_DIR/forge-morning-brief.log</string>
+  <key>StandardErrorPath</key>
+  <string>$LOG_DIR/forge-morning-brief.error.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$NODE_BIN:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    <key>HOME</key>
+    <string>$HOME</string>
+    <key>FORGE_CLAUDE_WORKER_ENABLED</key>
+    <string>1</string>
+    <key>FORGE_CLAUDE_BIN</key>
+    <string>$CLAUDE_BIN</string>
+    <key>FORGE_BRIEF_WEB_BASE</key>
+    <string>http://127.0.0.1:3200</string>
   </dict>
 </dict>
 </plist>
@@ -279,10 +328,12 @@ launchctl bootout "gui/$UID_NUM/com.forge.local.backup" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.reminders" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.email-triage" 2>/dev/null || true
 launchctl bootout "gui/$UID_NUM/com.forge.claude-worker" 2>/dev/null || true
+launchctl bootout "gui/$UID_NUM/com.forge.morning-brief" 2>/dev/null || true
 launchctl bootstrap "gui/$UID_NUM" "$SERVER_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$BACKUP_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$REMINDERS_PLIST"
 launchctl bootstrap "gui/$UID_NUM" "$WORKER_PLIST"
+launchctl bootstrap "gui/$UID_NUM" "$BRIEF_PLIST"
 if [ -f "$TRIAGE_PLIST" ]; then launchctl bootstrap "gui/$UID_NUM" "$TRIAGE_PLIST"; fi
 launchctl enable "gui/$UID_NUM/com.forge.local" 2>/dev/null || true
 launchctl enable "gui/$UID_NUM/com.forge.claude-worker" 2>/dev/null || true
@@ -317,6 +368,7 @@ if [ -n "$UP" ]; then
   echo "Server logs: $LOG_DIR/forge.log"
   echo "Daily database backups: $REPO_DIR/data/backups"
   echo "Claude worker: supervised by com.forge.claude-worker"
+  echo "Morning Brief: scheduled daily at 7:30 by com.forge.morning-brief"
   echo "Autonomous execution remains off until FORGE_CLAUDE_EXECUTION_ENABLED=1 and an allowlisted workspace config are explicitly added."
 else
   echo "Forge did not respond on http://localhost:3200 within 20 seconds." >&2

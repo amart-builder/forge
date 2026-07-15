@@ -698,6 +698,8 @@ function TodayExperience({
       localDateParts.map((part) => [part.type, part.value]),
     );
     const localDate = `${dateValues.year}-${dateValues.month}-${dateValues.day}`;
+    // A pool of up to ten deterministic candidates: the Morning Brief overlay
+    // ranks within this pool server-side, and the plan still keeps three.
     return buildDayPlanCandidates({
       localDate,
       timezone,
@@ -716,7 +718,7 @@ function TodayExperience({
         freshness: candidateEvidence?.freshness ?? 'stale',
         project: task.tags[0],
       })),
-    });
+    }, 10);
   }, [candidateEvidence, commitments, inFlightColumn?._id]);
 
   const dayRitual = useDayRitual({
@@ -1575,7 +1577,9 @@ function TodayExperience({
         title: item.title,
         summary: shortArrivalSummary(fullDescription, item.title),
         description: fullDescription,
-        whyToday: item.whyToday,
+        // The Morning Brief's rationale wins the card copy when this item was
+        // brief-ranked; the deterministic evidence line remains the fallback.
+        whyToday: item.brief?.whyToday ?? item.whyToday,
         definitionOfDone: item.definitionOfDone,
         project: helpfulProjectLabel(item.project),
         deadline: item.dueAt
@@ -2174,6 +2178,7 @@ function TodayExperience({
                 plan={dayRitual.plan}
                 items={arrivalItems}
                 recommendation={recommendation}
+                brief={dayRitual.morningBrief}
                 recap={morningRecap}
                 freshnessLabel={planEvidenceRefreshedAt
                   ? `Evidence refreshed ${new Date(planEvidenceRefreshedAt).toLocaleTimeString([], {
@@ -2206,6 +2211,7 @@ function TodayExperience({
                 onAssistantSubmit={dayRitual.submitAssistantPrompt}
                 onKickoffExecution={dayRitual.kickoffExecution}
                 onCancelExecution={dayRitual.cancelExecution}
+                onSalesAction={dayRitual.markBriefSalesAction}
                 onSnooze={() => dayRitual.snooze().catch(() => undefined)}
                 onSkip={() => dayRitual.skip().catch(() => undefined)}
                 onBypass={() => dayRitual.bypass().catch(() => undefined)}

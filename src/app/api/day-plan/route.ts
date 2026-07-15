@@ -8,6 +8,7 @@ import {
   DayPlanVersionConflict,
   getDayPlanStore,
 } from "@/lib/day-plan/store";
+import type { DayPlanStore } from "@/lib/day-plan/store";
 import type {
   DayPlanMutationAction,
   DayPlanMutationInput,
@@ -19,6 +20,13 @@ import type {
 } from "@/lib/day-plan/types";
 import { isClaudeWorkerAvailable } from "@/lib/claude-execution/trigger";
 import {
+  morningBriefFromArtifact,
+  publicMorningBrief,
+  type MorningBriefSalesActionState,
+} from "@/lib/day-plan/brief";
+import { maybeQueueMorningBrief } from "@/lib/day-plan/brief-triggers";
+import {
+  publicDayPlan,
   publicExecutionRun,
   publicUnreadyItem,
 } from "@/lib/day-plan/public-execution";
@@ -89,6 +97,13 @@ type ParsedPost =
   | { action: "ensure"; input: EnsureDayPlanInput }
   | { action: "reconciliation_applied"; reconciliationId: string }
   | { action: "task_mutation_applied"; mutationId: string }
+  | {
+      action: "brief_action";
+      briefId: string;
+      actionIndex: number;
+      state: MorningBriefSalesActionState;
+      editedText?: string;
+    }
   | { action: DayPlanMutationAction; input: DayPlanMutationInput };
 
 export function hasDayPlanRouteAccess(
@@ -349,8 +364,10 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
   const body = recordValue(value, "request body");
   const action = stringValue(body.action, "action", { required: true, max: 40 });
   if (action === "ensure") {
-    if (!Array.isArray(body.candidates) || body.candidates.length > 3) {
-      throw new Error("Arrival supports at most three candidates.");
+    // The client sends a small deterministic candidate pool; the store keeps
+    // at most three items after any Morning Brief overlay.
+    if (!Array.isArray(body.candidates) || body.candidates.length > 10) {
+      throw new Error("Arrival supports at most ten candidates.");
     }
     const candidates = body.candidates.map(candidateValue);
     if (new Set(candidates.map((candidate) => candidate.taskId)).size !== candidates.length) {
@@ -383,6 +400,23 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
     return {
       action,
       mutationId: stringValue(body.mutationId, "mutationId", { required: true, max: 200 })!,
+    };
+  }
+  if (action === "brief_action") {
+    const state = stringValue(body.state, "state", { required: true, max: 20 });
+    if (state !== "approved" && state !== "edited" && state !== "skipped") {
+      throw new Error("Unknown brief action state.");
+    }
+    const actionIndex = body.actionIndex;
+    if (!Number.isInteger(actionIndex) || (actionIndex as number) < 0) {
+      throw new Error("actionIndex must be a non-negative integer.");
+    }
+    return {
+      action,
+      briefId: stringValue(body.briefId, "briefId", { required: true, max: 200 })!,
+      actionIndex: actionIndex as number,
+      state,
+      editedText: stringValue(body.editedText, "editedText", { max: 2400 }),
     };
   }
 
@@ -431,13 +465,49 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
   };
 }
 
+// The consumed Morning Brief, projected for the read model. Content is only
+// exposed on loopback requests and only for the artifact this plan actually
+// consumed, so an arrival can never hot-swap to a different brief mid-day.
+function readModelMorningBrief(
+  store: DayPlanStore,
+  plan: { briefId?: string } | undefined,
+) {
+  try {
+    const accessMode = currentDayPlanAccessMode();
+    if (accessMode !== "loopback") return undefined;
+    if (!plan?.briefId) return undefined;
+    const artifact = store.getMorningBrief(plan.briefId);
+    if (!artifact) return undefined;
+    const brief = morningBriefFromArtifact(artifact);
+    if (!brief) return undefined;
+    return publicMorningBrief(
+      artifact,
+      brief,
+      store.listMorningBriefSalesActionStates(artifact.id),
+      accessMode,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 export async function GET(request: NextRequest) {
   if (!hasDayPlanRouteAccess(request)) {
     return NextResponse.json({ error: "Untrusted request host." }, { status: 403 });
   }
   try {
+    const store = getDayPlanStore();
+    const accessMode = currentDayPlanAccessMode();
+    // One read model read: the projection is derived from the same plan the
+    // response carries, so plan.briefId and the brief id always agree.
+    const readModel = store.getReadModel();
+    const morningBrief = readModelMorningBrief(store, readModel.currentPlan);
     return NextResponse.json({
-      ...getDayPlanStore().getReadModel(),
+      ...readModel,
+      currentPlan: readModel.currentPlan
+        ? publicDayPlan(readModel.currentPlan, accessMode)
+        : undefined,
+      ...(morningBrief ? { morningBrief } : {}),
       csrfToken: getQuietCurrentCsrfToken(),
     });
   } catch (error) {
@@ -468,6 +538,24 @@ export async function POST(request: NextRequest) {
     }
     const parsed = parseDayPlanPostBody(JSON.parse(text) as unknown);
     const store = getDayPlanStore();
+    if (parsed.action === "brief_action") {
+      // Brief content (contacts, drafts) is loopback-only; so is marking it.
+      if (currentDayPlanAccessMode() !== "loopback") {
+        return NextResponse.json(
+          { error: "Morning brief actions are only available on this machine." },
+          { status: 403 },
+        );
+      }
+      store.setMorningBriefSalesActionState(
+        parsed.briefId,
+        parsed.actionIndex,
+        parsed.state,
+        parsed.editedText,
+      );
+      return NextResponse.json({
+        states: store.listMorningBriefSalesActionStates(parsed.briefId),
+      });
+    }
     const result = parsed.action === "ensure"
       ? store.ensureDayPlan(parsed.input)
       : parsed.action === "reconciliation_applied"
@@ -475,13 +563,17 @@ export async function POST(request: NextRequest) {
         : parsed.action === "task_mutation_applied"
           ? store.acknowledgeTaskMutation(parsed.mutationId)
         : store.mutateDayPlan(parsed.input);
+    maybeQueueMorningBrief(store, parsed.action, result);
     const queuedRuns = parsed.action === "start_day" && "executionRuns" in result
       ? result.executionRuns?.filter((run) => run.status === "queued").length ?? 0
       : 0;
     const accessMode = currentDayPlanAccessMode();
-    const publicResult = "executionRuns" in result
+    // Every payload that carries a plan goes through the same public
+    // projection (brief annotations and briefId are loopback-only).
+    const publicResult = "plan" in result
       ? {
           ...result,
+          plan: publicDayPlan(result.plan, accessMode),
           executionRuns: result.executionRuns?.map((run) =>
             publicExecutionRun(run, accessMode),
           ),
@@ -502,7 +594,10 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     if (error instanceof DayPlanVersionConflict) {
       return NextResponse.json(
-        { error: "version_conflict", currentPlan: error.currentPlan },
+        {
+          error: "version_conflict",
+          currentPlan: publicDayPlan(error.currentPlan, currentDayPlanAccessMode()),
+        },
         { status: 409 },
       );
     }

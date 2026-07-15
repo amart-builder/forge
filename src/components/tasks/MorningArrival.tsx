@@ -19,6 +19,11 @@ import { CSS } from '@dnd-kit/utilities';
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 import type { DayPlanExecutionState } from '@/lib/data/day-plan';
 import type {
+  MorningBriefSalesActionState,
+  MorningBriefSuggestedAddition,
+  PublicMorningBrief,
+} from '@/lib/day-plan/brief';
+import type {
   DayPlan,
   DayPlanAssistantTurn,
   DayPlanExecutionMode,
@@ -55,6 +60,10 @@ interface MorningArrivalProps {
   plan: DayPlan;
   items: MorningArrivalItem[];
   recommendation: string;
+  // The Morning Brief this plan consumed at ensure, when one exists. Its lens
+  // narrative replaces the deterministic recommendation line, and its Watch and
+  // Sales sections render below the cards. Absent brief: deterministic morning.
+  brief?: PublicMorningBrief;
   recap?: string;
   freshnessLabel?: string;
   expandedItemId?: string | null;
@@ -85,6 +94,12 @@ interface MorningArrivalProps {
     budgetUsd?: number,
   ) => void | Promise<unknown>;
   onCancelExecution: (runId: string) => void | Promise<unknown>;
+  // Marks a sales action approved, edited, or skipped. State only; never sends.
+  onSalesAction?: (
+    actionIndex: number,
+    state: MorningBriefSalesActionState,
+    editedText?: string,
+  ) => void | Promise<void>;
   onSnooze: () => void | Promise<void>;
   onSkip: () => void | Promise<void>;
   onBypass: () => void | Promise<void>;
@@ -308,6 +323,7 @@ export default function MorningArrival({
   plan,
   items,
   recommendation,
+  brief,
   recap,
   freshnessLabel,
   expandedItemId,
@@ -330,6 +346,7 @@ export default function MorningArrival({
   onAssistantSubmit,
   onKickoffExecution,
   onCancelExecution,
+  onSalesAction,
   onSnooze,
   onSkip,
   onBypass,
@@ -351,6 +368,16 @@ export default function MorningArrival({
   );
   const assistantActive = assistantTurn?.state === 'queued' || assistantTurn?.state === 'running';
   const anyExecutionBusy = executionBusyItemIds.size > 0;
+
+  // Suggested additions are an approval inbox: Review pre-fills the bounded
+  // plan assistant, so an accepted addition flows through the existing
+  // mutation ledger with Alex's explicit send. Nothing is created directly.
+  function prefillSuggestedAddition(addition: MorningBriefSuggestedAddition) {
+    setAssistantPrompt(
+      `Add "${addition.title}" to today's plan. Outcome: ${addition.outcome} Owner: ${addition.suggestedOwner}.`,
+    );
+    assistantPromptRef.current?.focus();
+  }
 
   async function handleAssistantSubmit(event: FormEvent) {
     event.preventDefault();
@@ -443,7 +470,9 @@ export default function MorningArrival({
                 className="rounded-2xl border bg-card p-4"
               >
                 <h2 id={`${titleId}-recommendation`} className="text-sm font-semibold">Recommendation</h2>
-                <p className="mt-1 text-sm leading-relaxed text-foreground">{recommendation}</p>
+                <p className="mt-1 text-sm leading-relaxed text-foreground">
+                  {brief?.lensNarrative ?? recommendation}
+                </p>
               </section>
             </div>
 
@@ -503,6 +532,60 @@ export default function MorningArrival({
                   {onAddWhatChanged && <button type="button" className="min-h-11 rounded-xl border px-4 text-sm" onClick={onAddWhatChanged}>Add what changed</button>}
                   {onOpenAllWork && <button type="button" className="min-h-11 rounded-xl border px-4 text-sm" onClick={onOpenAllWork}>Open All Work</button>}
                 </div>
+              </section>
+            )}
+
+            {brief && brief.watchItems.length > 0 && (
+              <section aria-labelledby={`${titleId}-watch`} className="rounded-2xl border bg-card p-4">
+                <h2 id={`${titleId}-watch`} className="text-sm font-semibold text-foreground">
+                  Watching for you
+                </h2>
+                <ul className="mt-2 space-y-2">
+                  {brief.watchItems.map((watch, index) => (
+                    <li key={index} className="text-sm leading-relaxed">
+                      <span className="font-medium text-foreground">{watch.label}.</span>{' '}
+                      <span className="text-muted-foreground">
+                        {watch.evidence} Last seen: {watch.lastSeenState}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {brief && brief.salesActions.length > 0 && onSalesAction && (
+              <SalesCadenceSection
+                titleId={titleId}
+                brief={brief}
+                onSalesAction={onSalesAction}
+              />
+            )}
+
+            {brief && brief.suggestedAdditions.length > 0 && (
+              <section aria-labelledby={`${titleId}-additions`} className="rounded-2xl border bg-card p-4">
+                <h2 id={`${titleId}-additions`} className="text-sm font-semibold text-foreground">
+                  Claude suggests adding
+                </h2>
+                <ul className="mt-2 space-y-2">
+                  {brief.suggestedAdditions.map((addition, index) => (
+                    <li key={index} className="flex flex-wrap items-start justify-between gap-2 text-sm">
+                      <span className="min-w-0 flex-1 leading-relaxed">
+                        <span className="font-medium text-foreground">{addition.title}.</span>{' '}
+                        <span className="text-muted-foreground">{addition.why}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="press-scale min-h-9 shrink-0 rounded-lg border px-3 text-xs font-medium hover:bg-muted"
+                        onClick={() => prefillSuggestedAddition(addition)}
+                      >
+                        Review with Claude
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Nothing is added automatically. Review sends it through the plan assistant below for your approval.
+                </p>
               </section>
             )}
 
@@ -611,6 +694,130 @@ export default function MorningArrival({
           </footer>
         </div>
       </div>
+  );
+}
+
+const DRAFT_KIND_LABELS: Record<string, string> = {
+  full: 'Draft ready',
+  beats_only: 'Beats only',
+  pointer: 'Pointer',
+  blocked: 'Blocked',
+};
+
+// The day's sales cadence: each row shows the draft (or beats) with Approve,
+// Edit, and Skip. These only mark state so Alex can send in his own hands;
+// Forge never sends anything.
+function SalesCadenceSection({
+  titleId,
+  brief,
+  onSalesAction,
+}: {
+  titleId: string;
+  brief: PublicMorningBrief;
+  onSalesAction: NonNullable<MorningArrivalProps['onSalesAction']>;
+}) {
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+
+  return (
+    <section aria-labelledby={`${titleId}-sales`} className="rounded-2xl border bg-card p-4">
+      <h2 id={`${titleId}-sales`} className="text-sm font-semibold text-foreground">
+        Today&apos;s sales cadence
+      </h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Approve marks a message ready for you to send. Forge never sends anything itself.
+      </p>
+      <ul className="mt-3 space-y-3">
+        {brief.salesActions.map((action, index) => {
+          const editing = editingIndex === index;
+          return (
+            <li key={index} className="rounded-xl border bg-background p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-foreground">{action.contact}</span>
+                <span className="text-xs text-muted-foreground">{action.channel}</span>
+                <span className="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
+                  {DRAFT_KIND_LABELS[action.draftKind] ?? action.draftKind}
+                </span>
+                {action.state && (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium capitalize text-foreground">
+                    {action.state}
+                  </span>
+                )}
+              </div>
+              {editing ? (
+                <textarea
+                  value={editDraft}
+                  rows={3}
+                  maxLength={2400}
+                  aria-label={`Edit the message for ${action.contact}`}
+                  className="mt-2 w-full resize-y rounded-lg border bg-background p-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-accent-blue/40"
+                  onChange={(event) => setEditDraft(event.target.value)}
+                />
+              ) : (
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                  {action.editedText ?? action.draftOrBeats}
+                </p>
+              )}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {editing ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={!editDraft.trim()}
+                      className="press-scale min-h-9 rounded-lg bg-foreground px-3 text-xs font-semibold text-background disabled:opacity-40"
+                      onClick={() => {
+                        void onSalesAction(index, 'edited', editDraft.trim());
+                        setEditingIndex(null);
+                      }}
+                    >
+                      Save edit
+                    </button>
+                    <button
+                      type="button"
+                      className="press-scale min-h-9 rounded-lg border px-3 text-xs font-medium hover:bg-muted"
+                      onClick={() => setEditingIndex(null)}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="press-scale min-h-9 rounded-lg bg-foreground px-3 text-xs font-semibold text-background hover:opacity-90"
+                      onClick={() =>
+                        // Pass the existing edit through so approving an edited
+                        // draft keeps the edited text instead of discarding it.
+                        void onSalesAction(index, 'approved', action.editedText)
+                      }
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      className="press-scale min-h-9 rounded-lg border px-3 text-xs font-medium hover:bg-muted"
+                      onClick={() => {
+                        setEditingIndex(index);
+                        setEditDraft(action.editedText ?? action.draftOrBeats);
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="press-scale min-h-9 rounded-lg border px-3 text-xs font-medium hover:bg-muted"
+                      onClick={() => void onSalesAction(index, 'skipped', action.editedText)}
+                    >
+                      Skip
+                    </button>
+                  </>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

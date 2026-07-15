@@ -10,6 +10,7 @@ import {
   getDayPlanStore,
 } from "@/lib/day-plan/store";
 import {
+  publicDayPlan,
   publicExecutionReadiness,
   publicExecutionRun,
 } from "@/lib/day-plan/public-execution";
@@ -94,7 +95,10 @@ export function parseExecutionPostBody(value: unknown):
 function errorResponse(error: unknown): NextResponse {
   if (error instanceof DayPlanVersionConflict) {
     return NextResponse.json(
-      { error: "version_conflict", currentPlan: error.currentPlan },
+      {
+        error: "version_conflict",
+        currentPlan: publicDayPlan(error.currentPlan, currentDayPlanAccessMode()),
+      },
       { status: 409 },
     );
   }
@@ -171,6 +175,7 @@ export async function POST(request: NextRequest) {
       : undefined;
     return NextResponse.json({
       ...result,
+      plan: publicDayPlan(result.plan, accessMode),
       run: result.run ? publicExecutionRun(result.run, accessMode) : undefined,
       readiness: publicExecutionReadiness(result.readiness),
       worker,
