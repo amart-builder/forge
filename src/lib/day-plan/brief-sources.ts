@@ -2,8 +2,13 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { DayPlanStore } from "./store";
-import type { BriefSourceInput } from "./brief";
+import { localDateInTimezone, type BriefSourceInput } from "./brief";
 import { buildSettlementSummary, readSettlementRelay } from "./brief-relay";
+
+const EXTERNAL_FETCH_TIMEOUT_MS = 10_000;
+const DEFAULT_BRIEF_TIMEZONE = "America/Los_Angeles";
+const COMPOSIO_MCP_URL = "https://connect.composio.dev/mcp";
+const ATTIO_PEOPLE_QUERY_URL = "https://api.attio.com/v2/objects/people/records/query";
 
 // Required-source defaults. Both are configurable; these point at Alex's real
 // operating files so the default installation briefs from the same documents
@@ -50,6 +55,9 @@ export type MorningBriefSourceOptions = {
   goalsPath?: string;
   sprintMemoPath?: string;
   memoryDecisionsPath?: string;
+  targetLocalDate?: string;
+  targetTimezone?: string;
+  now?: Date;
   // Loopback base URL of the Forge web app; the task snapshot goes through the
   // same forge-rest surface the UI uses, so local and Supabase runtimes both work.
   webBaseUrl?: string;
@@ -59,6 +67,43 @@ export type MorningBriefSourceOptions = {
   // Tests point this at a temp dir to exercise the settlement relay fallback.
   dataDir?: string;
 };
+
+function readKeyFile(filePath: string): string | null {
+  try {
+    const resolved = filePath.startsWith("~/")
+      ? path.join(homedir(), filePath.slice(2))
+      : filePath;
+    return readFileSync(resolved, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function readEnvLocalVar(name: string): string | null {
+  if (Object.prototype.hasOwnProperty.call(process.env, name)) {
+    return process.env[name]?.trim() || null;
+  }
+  try {
+    const lines = readFileSync(path.join(process.cwd(), ".env.local"), "utf8").split(/\r?\n/);
+    for (const line of lines) {
+      const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+      if (!match || match[1] !== name) continue;
+      let value = match[2].trim();
+      const quote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : undefined;
+      if (quote) {
+        const closingQuote = value.indexOf(quote, 1);
+        if (closingQuote > 0) value = value.slice(1, closingQuote);
+      } else {
+        const inlineComment = value.indexOf(" #");
+        if (inlineComment >= 0) value = value.slice(0, inlineComment);
+      }
+      return value.trim() || null;
+    }
+  } catch {
+    // A missing or unreadable .env.local is the same as an absent variable.
+  }
+  return null;
+}
 
 type TaskRow = {
   id?: string;
@@ -140,6 +185,483 @@ async function fetchRows(
   return rows;
 }
 
+type UnknownRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): UnknownRecord | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as UnknownRecord)
+    : undefined;
+}
+
+function errorNote(error: unknown, fallback: string): string {
+  const reason = error instanceof Error ? error.message : fallback;
+  const bounded = reason.replace(/\s+/g, " ").trim().slice(0, 160);
+  return `error:${bounded || fallback}`;
+}
+
+function addCalendarDays(localDate: string, days: number): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(localDate);
+  if (!match) throw new Error("calendar target date invalid");
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + days, 12));
+  return date.toISOString().slice(0, 10);
+}
+
+function zonedMidnight(localDate: string, timezone: string): { instant: Date; offset: string } {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(localDate);
+  if (!match) throw new Error("calendar target date invalid");
+  const desiredEpoch = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (new Date(desiredEpoch).toISOString().slice(0, 10) !== localDate) {
+    throw new Error("calendar target date invalid");
+  }
+  const formatter = new Intl.DateTimeFormat("en-CA-u-ca-gregory-nu-latn", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  let instantEpoch = desiredEpoch;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const parts = Object.fromEntries(
+      formatter.formatToParts(new Date(instantEpoch)).map((part) => [part.type, part.value]),
+    );
+    const renderedEpoch = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    const nextEpoch = desiredEpoch - (renderedEpoch - instantEpoch);
+    if (nextEpoch === instantEpoch) break;
+    instantEpoch = nextEpoch;
+  }
+  const instant = new Date(instantEpoch);
+  if (localDateInTimezone(instant, timezone) !== localDate) {
+    throw new Error("calendar timezone conversion failed");
+  }
+  const offsetMinutes = Math.round((desiredEpoch - instantEpoch) / 60_000);
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absolute = Math.abs(offsetMinutes);
+  const offset = `${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+  return { instant, offset };
+}
+
+function calendarDayBounds(localDate: string, timezone: string): { timeMin: string; timeMax: string } {
+  const nextDate = addCalendarDays(localDate, 1);
+  const start = zonedMidnight(localDate, timezone);
+  const end = zonedMidnight(nextDate, timezone);
+  return {
+    timeMin: `${localDate}T00:00:00${start.offset}`,
+    timeMax: `${nextDate}T00:00:00${end.offset}`,
+  };
+}
+
+type CalendarEvent = {
+  summary?: string;
+  start?: { date?: string; dateTime?: string };
+  end?: { date?: string; dateTime?: string };
+  attendees?: Array<{ email?: string; self?: boolean; responseStatus?: string }>;
+  hangoutLink?: string;
+  conferenceData?: unknown;
+};
+
+function calendarTime(value: string, timezone: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "time unknown";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "numeric",
+    minute: "2-digit",
+  })
+    .format(new Date(timestamp))
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function formatCalendarEvents(events: readonly CalendarEvent[], timezone: string): string {
+  const visible = events
+    .filter(
+      (event) =>
+        !event.attendees?.some(
+          (attendee) => attendee.self === true && attendee.responseStatus === "declined",
+        ),
+    )
+    .sort((left, right) => {
+      const leftStart = left.start?.dateTime ?? left.start?.date ?? "";
+      const rightStart = right.start?.dateTime ?? right.start?.date ?? "";
+      return leftStart.localeCompare(rightStart);
+    });
+  if (visible.length === 0) return "No calendar events today.";
+  return visible
+    .map((event) => {
+      const summary = compactLine(event.summary, 240) || "Untitled event";
+      if (event.start?.date && !event.start.dateTime) return `all day — ${summary}`;
+      const start = event.start?.dateTime;
+      const end = event.end?.dateTime;
+      const startTime = start ? calendarTime(start, timezone) : "time unknown";
+      const endTime = end ? calendarTime(end, timezone) : undefined;
+      const range = startTime === "time unknown"
+        ? startTime
+        : `${startTime}${endTime && endTime !== "time unknown" ? `-${endTime}` : ""}`;
+      const otherAttendees = (event.attendees ?? [])
+        .filter((attendee) => !attendee.self && attendee.email)
+        .slice(0, 3)
+        .map((attendee) => attendee.email as string);
+      const people = otherAttendees.length > 0 ? ` (with ${otherAttendees.join(", ")})` : "";
+      const meeting = event.hangoutLink || event.conferenceData ? " [Meet]" : "";
+      return `${range} — ${summary}${people}${meeting}`;
+    })
+    .join("\n");
+}
+
+function parseCalendarItems(sse: string): CalendarEvent[] {
+  const dataLines = sse
+    .split(/\r?\n/)
+    .map((line) => /^data:\s?(.*)$/.exec(line)?.[1])
+    .filter((line): line is string => line !== undefined);
+  if (dataLines.length === 0) throw new Error("calendar MCP response missing data");
+  const frames = dataLines.map((line) => {
+    try {
+      return asRecord(JSON.parse(line));
+    } catch {
+      return undefined;
+    }
+  });
+  const rpc = [...frames]
+    .reverse()
+    .find((frame) => frame?.id === 2 || (frame && "result" in frame)) ?? frames.at(-1);
+  if (!rpc) throw new Error("calendar MCP response invalid");
+  const result = asRecord(rpc?.result);
+  const content = Array.isArray(result?.content) ? result.content : [];
+  const text = asRecord(content[0])?.text;
+  if (typeof text !== "string") throw new Error("calendar MCP response missing text");
+  const toolPayload = asRecord(JSON.parse(text));
+  const data = asRecord(toolPayload?.data);
+  const results = Array.isArray(data?.results) ? data.results : [];
+  const response = asRecord(asRecord(results[0])?.response);
+  const responseData = asRecord(response?.data);
+  if (!Array.isArray(responseData?.items)) throw new Error("calendar MCP items missing");
+  return responseData.items as CalendarEvent[];
+}
+
+async function calendarSource(
+  fetchImpl: typeof fetch,
+  targetLocalDate: string,
+  targetTimezone: string,
+  now: Date,
+): Promise<BriefSourceInput> {
+  const source = {
+    id: "calendar",
+    label: "CALENDAR_TODAY",
+    required: false,
+    maxChars: 3000,
+    priority: 4,
+  } as const;
+  const rawKey = process.env.FORGE_BRIEF_COMPOSIO_KEY?.trim();
+  const keyPath = process.env.FORGE_BRIEF_COMPOSIO_KEY_PATH?.trim()
+    || path.join(homedir(), ".config", "edge-ai", "composio.key");
+  const key = rawKey || readKeyFile(keyPath);
+  if (!key) return { ...source, note: "not_configured" };
+  try {
+    const baseHeaders = {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "x-consumer-api-key": key,
+    };
+    const initialized = await fetchImpl(COMPOSIO_MCP_URL, {
+      method: "POST",
+      headers: baseHeaders,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "forge-brief", version: "1.0" },
+        },
+      }),
+      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+    });
+    const sessionId = initialized.headers.get("mcp-session-id");
+    await initialized.text();
+    if (!initialized.ok) throw new Error(`calendar initialize ${initialized.status}`);
+    if (!sessionId) throw new Error("calendar MCP session missing");
+    const bounds = calendarDayBounds(targetLocalDate, targetTimezone);
+    const called = await fetchImpl(COMPOSIO_MCP_URL, {
+      method: "POST",
+      headers: { ...baseHeaders, "mcp-session-id": sessionId },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "COMPOSIO_MULTI_EXECUTE_TOOL",
+          arguments: {
+            tools: [
+              {
+                tool_slug: "GOOGLECALENDAR_EVENTS_LIST",
+                arguments: {
+                  calendarId: "primary",
+                  timeMin: bounds.timeMin,
+                  timeMax: bounds.timeMax,
+                  singleEvents: true,
+                  orderBy: "startTime",
+                },
+              },
+            ],
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+    });
+    if (!called.ok) throw new Error(`calendar tools call ${called.status}`);
+    return {
+      ...source,
+      content: formatCalendarEvents(parseCalendarItems(await called.text()), targetTimezone),
+      asOf: now.toISOString(),
+    };
+  } catch (error) {
+    return { ...source, note: errorNote(error, "calendar_failed") };
+  }
+}
+
+function firstAttioValue(record: UnknownRecord, slug: string): UnknownRecord | undefined {
+  const values = asRecord(record.values);
+  const entries = values?.[slug];
+  return Array.isArray(entries) ? asRecord(entries[0]) : undefined;
+}
+
+function attioEmailAddresses(record: UnknownRecord): string[] {
+  const values = asRecord(record.values);
+  const entries = values?.email_addresses;
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .map((entry) => {
+      const direct = asRecord(entry);
+      const value = asRecord(direct?.value) ?? direct;
+      return typeof value?.email_address === "string"
+        ? compactLine(value.email_address, 254)
+        : "";
+    })
+    .filter(Boolean);
+}
+
+function attioPersonName(record: UnknownRecord): string | undefined {
+  const entry = firstAttioValue(record, "name");
+  const value = asRecord(entry?.value) ?? entry;
+  const fullName = value?.full_name;
+  if (typeof fullName === "string" && fullName.trim()) return compactLine(fullName, 160);
+  const firstName = typeof value?.first_name === "string" ? value.first_name.trim() : "";
+  const lastName = typeof value?.last_name === "string" ? value.last_name.trim() : "";
+  const combinedName = compactLine(`${firstName} ${lastName}`, 160);
+  if (combinedName) return combinedName;
+  return attioEmailAddresses(record)[0];
+}
+
+type AttioInteraction = {
+  interactedAt: string;
+  interactionType?: string;
+};
+
+function attioInteraction(record: UnknownRecord, slug: string): AttioInteraction | undefined {
+  const entry = firstAttioValue(record, slug);
+  const nested = asRecord(entry?.value);
+  const interactedAt = typeof entry?.interacted_at === "string"
+    ? entry.interacted_at
+    : typeof nested?.interacted_at === "string"
+      ? nested.interacted_at
+      : undefined;
+  if (!interactedAt) return undefined;
+  const rawType = typeof entry?.interaction_type === "string"
+    ? entry.interaction_type
+    : typeof nested?.interaction_type === "string"
+      ? nested.interaction_type
+      : undefined;
+  const interactionType = compactLine(rawType, 80);
+  return { interactedAt, ...(interactionType ? { interactionType } : {}) };
+}
+
+function attioLastTouch(record: UnknownRecord): AttioInteraction | undefined {
+  return (
+    attioInteraction(record, "last_email_interaction") ??
+    attioInteraction(record, "last_interaction")
+  );
+}
+
+function formatCrmLastTouches(
+  records: readonly unknown[],
+  now: Date,
+  timezone: string,
+): string {
+  const people = records
+    .map((value) => {
+      const record = asRecord(value);
+      if (!record) return undefined;
+      const emails = attioEmailAddresses(record);
+      if (
+        emails.some((email) => {
+          const normalized = email.toLowerCase();
+          return normalized === "alex@joinedgeai.com" || normalized === "alex@edge-fund.io";
+        })
+      ) {
+        return undefined;
+      }
+      const name = attioPersonName(record);
+      if (!name) return undefined;
+      const interaction = attioLastTouch(record);
+      if (!interaction) return undefined;
+      const interactedMs = Date.parse(interaction.interactedAt);
+      if (!Number.isFinite(interactedMs)) return undefined;
+      return {
+        name,
+        interactedMs,
+        date: localDateInTimezone(new Date(interactedMs), timezone),
+        ageDays: Math.max(0, Math.floor((now.getTime() - interactedMs) / 86_400_000)),
+        interactionType: interaction.interactionType,
+      };
+    })
+    .filter((person): person is NonNullable<typeof person> => person !== undefined)
+    .sort((left, right) => right.interactedMs - left.interactedMs);
+  if (people.length === 0) return "No interaction history in CRM yet.";
+  const recent = people
+    .slice(0, 12)
+    .map(
+      (person) =>
+        `${person.name} — last touch ${person.ageDays}d ago (` +
+        `${person.date}${person.interactionType ? `, ${person.interactionType}` : ""})`,
+    );
+  const quiet = people
+    .filter((person) => person.ageDays > 14 && person.ageDays <= 120)
+    .slice(0, 15)
+    .map((person) => person.name);
+  return `Recent touches:\n${recent.join("\n")}\n\nGone quiet (>14d): ${quiet.length > 0 ? quiet.join(", ") : "None."}`;
+}
+
+async function crmSource(
+  fetchImpl: typeof fetch,
+  now: Date,
+  timezone: string,
+): Promise<BriefSourceInput> {
+  const source = {
+    id: "crm_last_touch",
+    label: "CRM_LAST_TOUCH",
+    required: false,
+    maxChars: 4000,
+    priority: 7,
+  } as const;
+  const key = readEnvLocalVar("ATTIO_API_KEY") ?? readEnvLocalVar("ATTIO_TOKEN");
+  if (!key) return { ...source, note: "not_configured" };
+  try {
+    const response = await fetchImpl(ATTIO_PEOPLE_QUERY_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        limit: 250,
+        sorts: [{ attribute: "last_interaction", field: "interacted_at", direction: "desc" }],
+      }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`Attio people query ${response.status}`);
+    const payload = asRecord(await response.json());
+    const firstData = payload?.data;
+    const records = Array.isArray(firstData)
+      ? firstData
+      : Array.isArray(asRecord(firstData)?.data)
+        ? (asRecord(firstData)?.data as unknown[])
+        : undefined;
+    if (!records) throw new Error("Attio people response shape");
+    return {
+      ...source,
+      content: formatCrmLastTouches(records, now, timezone),
+      asOf: now.toISOString(),
+    };
+  } catch (error) {
+    return { ...source, note: errorNote(error, "crm_failed") };
+  }
+}
+
+function formatDecisionResults(results: readonly unknown[]): string {
+  const contents = results
+    .map((result) => asRecord(result)?.content)
+    .filter((content): content is string => typeof content === "string" && content.trim().length > 0);
+  if (contents.length === 0) return "No recent decisions recorded.";
+  const decisions = contents.filter((content) => content.includes("[DECISION]"));
+  const selected = decisions.length >= 3 ? decisions : contents;
+  return selected
+    .map((content) => `- ${content.replace(/\s+/g, " ").trim().slice(0, 400)}`)
+    .join("\n");
+}
+
+async function memoryDecisionsSource(
+  fetchImpl: typeof fetch,
+  memoryPath: string | undefined,
+  now: Date,
+): Promise<BriefSourceInput> {
+  const sourceOptions = {
+    required: false,
+    maxChars: 4000,
+    priority: 8,
+    freshnessThresholdHours: staleThresholdHours("memory_decisions", 24 * 7),
+  } as const;
+  if (memoryPath) {
+    return fileSource("memory_decisions", "RECENT_DECISIONS", memoryPath, sourceOptions);
+  }
+  const tokenPath = process.env.FORGE_BRIEF_JARVIS_TOKEN_PATH?.trim()
+    || path.join(homedir(), ".config", "jarvis-v2", "hub_token");
+  const token = readKeyFile(tokenPath);
+  if (!token) {
+    return {
+      id: "memory_decisions",
+      label: "RECENT_DECISIONS",
+      ...sourceOptions,
+      note: "not_configured",
+    };
+  }
+  try {
+    const hubUrl = (process.env.FORGE_BRIEF_JARVIS_URL?.trim() || "http://100.102.6.81:3510")
+      .replace(/\/$/, "");
+    const response = await fetchImpl(`${hubUrl}/api/v2/scored_search`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: "recent decisions, commitments, and direction changes",
+        limit: 10,
+      }),
+      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`Jarvis scored search ${response.status}`);
+    const results = asRecord(await response.json())?.results;
+    if (!Array.isArray(results)) throw new Error("Jarvis search response shape");
+    return {
+      id: "memory_decisions",
+      label: "RECENT_DECISIONS",
+      ...sourceOptions,
+      content: formatDecisionResults(results),
+      asOf: now.toISOString(),
+    };
+  } catch (error) {
+    return {
+      id: "memory_decisions",
+      label: "RECENT_DECISIONS",
+      ...sourceOptions,
+      note: errorNote(error, "memory_failed"),
+    };
+  }
+}
+
 // Resolves configured sources, normalizes and bounds each, and reports every
 // outcome truthfully in the source list. Optional sources degrade to "missing"
 // on any failure; they are never a validity prerequisite.
@@ -149,6 +671,25 @@ export async function collectMorningBriefSources(
   const fetchImpl = options.fetchImpl ?? fetch;
   const baseUrl = (options.webBaseUrl ?? defaultBriefWebBase()).replace(/\/$/, "");
   const timeoutMs = options.timeoutMs ?? 8000;
+  const now = options.now ?? new Date();
+  const targetTimezone = options.targetTimezone ?? process.env.FORGE_BRIEF_TIMEZONE ?? DEFAULT_BRIEF_TIMEZONE;
+  let targetLocalDate = options.targetLocalDate;
+  if (!targetLocalDate) {
+    try {
+      targetLocalDate = localDateInTimezone(now, targetTimezone);
+    } catch {
+      // Keep non-calendar sources available even if a direct caller supplies a
+      // bad timezone. The calendar helper will report its own scoped error.
+      targetLocalDate = localDateInTimezone(now, DEFAULT_BRIEF_TIMEZONE);
+    }
+  }
+  const memoryPath = options.memoryDecisionsPath ?? process.env.FORGE_BRIEF_MEMORY_PATH;
+
+  // Start independent external reads together. Each helper catches its own
+  // failures so an optional integration can never reject the full collection.
+  const calendarPromise = calendarSource(fetchImpl, targetLocalDate, targetTimezone, now);
+  const crmPromise = crmSource(fetchImpl, now, targetTimezone);
+  const memoryPromise = memoryDecisionsSource(fetchImpl, memoryPath, now);
 
   const sources: BriefSourceInput[] = [
     fileSource("goals", "GOALS", options.goalsPath ?? defaultGoalsPath(), {
@@ -178,7 +719,7 @@ export async function collectMorningBriefSources(
     label: "EMAIL_BRIEF",
     required: false,
     maxChars: 3000,
-    priority: 5,
+    priority: 6,
     // Email triage runs twice a day; older than a day is stale.
     freshnessThresholdHours: staleThresholdHours("email_brief", 24),
   };
@@ -246,6 +787,8 @@ export async function collectMorningBriefSources(
     });
   }
 
+  sources.push(await calendarPromise);
+
   // Settlement summary: the local store is authoritative when it holds
   // snapshots. An empty local state (the Mini, whose DB no longer syncs) is
   // never treated as "no settlements"; it falls back to the relay file the MBP
@@ -282,7 +825,7 @@ export async function collectMorningBriefSources(
           label: "RECENT_SETTLEMENTS",
           required: true,
           maxChars: 6000,
-          priority: 4,
+          priority: 5,
           content: settlementContent,
           asOf: settlementAsOf,
           freshnessThresholdHours: settlementThreshold,
@@ -292,31 +835,14 @@ export async function collectMorningBriefSources(
           label: "RECENT_SETTLEMENTS",
           required: true,
           maxChars: 6000,
-          priority: 4,
+          priority: 5,
           note: "settlement_summary_unavailable",
         },
   );
 
   sources.push(emailBrief);
-
-  const memoryPath = options.memoryDecisionsPath ?? process.env.FORGE_BRIEF_MEMORY_PATH;
-  sources.push(
-    memoryPath
-      ? fileSource("memory_decisions", "RECENT_DECISIONS", memoryPath, {
-          required: false,
-          maxChars: 4000,
-          priority: 6,
-          freshnessThresholdHours: staleThresholdHours("memory_decisions", 24 * 7),
-        })
-      : {
-          id: "memory_decisions",
-          label: "RECENT_DECISIONS",
-          required: false,
-          maxChars: 4000,
-          priority: 6,
-          note: "not_configured",
-        },
-  );
+  sources.push(await crmPromise);
+  sources.push(await memoryPromise);
 
   return { sources, knownTaskIds };
 }

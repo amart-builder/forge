@@ -185,9 +185,9 @@ function collectedSources({ goals = 'North star: 30k a month.' } = {}) {
       { id: 'goals', label: 'GOALS', required: true, maxChars: 9000, priority: 1, content: goals || undefined, asOf: CLOCK },
       { id: 'sprint_memo', label: 'SPRINT_MEMO', required: true, maxChars: 12000, priority: 2, content: 'Four setups this month.', asOf: CLOCK },
       { id: 'task_snapshot', label: 'OPEN_TASKS', required: true, maxChars: 14000, priority: 3, content: '- [today] id=task-a "Deliver the MHA weekly block"', asOf: CLOCK },
-      { id: 'settlement_summary', label: 'RECENT_SETTLEMENTS', required: true, maxChars: 6000, priority: 4, content: 'No settlement snapshots exist yet.' },
-      { id: 'email_brief', label: 'EMAIL_BRIEF', required: false, maxChars: 3000, priority: 5 },
-      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 4000, priority: 6, note: 'not_configured' },
+      { id: 'settlement_summary', label: 'RECENT_SETTLEMENTS', required: true, maxChars: 6000, priority: 5, content: 'No settlement snapshots exist yet.' },
+      { id: 'email_brief', label: 'EMAIL_BRIEF', required: false, maxChars: 3000, priority: 6 },
+      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 4000, priority: 8, note: 'not_configured' },
     ],
     knownTaskIds: new Set(['task-a', 'task-b', 'task-c']),
   };
@@ -202,8 +202,8 @@ test('assembly bounds each source, trims least important first, and reports cove
     [
       { id: 'goals', label: 'GOALS', required: true, maxChars: 10, priority: 1, content: 'A'.repeat(40) },
       { id: 'sprint_memo', label: 'SPRINT_MEMO', required: true, maxChars: 100, priority: 2, content: 'B'.repeat(20) },
-      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 100, priority: 6, content: 'C'.repeat(30) },
-      { id: 'email_brief', label: 'EMAIL_BRIEF', required: false, maxChars: 100, priority: 5 },
+      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 100, priority: 8, content: 'C'.repeat(30) },
+      { id: 'email_brief', label: 'EMAIL_BRIEF', required: false, maxChars: 100, priority: 6 },
     ],
     { totalMaxChars: 35 },
   );
@@ -211,7 +211,7 @@ test('assembly bounds each source, trims least important first, and reports cove
   // Per-source cap first: goals 40 -> 10, recorded as trimmed.
   assert.equal(byId.goals.chars, 10);
   assert.equal(byId.goals.trimmed, true);
-  // Total cap trims the least important source (priority 6) down to fit.
+  // Total cap trims the least important source (priority 8) down to fit.
   assert.equal(context.manifest.totalChars <= 35, true);
   assert.equal(byId.memory_decisions.trimmed, true);
   assert.equal(byId.sprint_memo.trimmed, false);
@@ -243,7 +243,7 @@ test('a source fully trimmed out by the total cap is covered as missing', () => 
   const context = assembleMorningBriefContext(
     [
       { id: 'goals', label: 'GOALS', required: true, maxChars: 100, priority: 1, content: 'A'.repeat(30) },
-      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 100, priority: 6, content: 'C'.repeat(30) },
+      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 100, priority: 8, content: 'C'.repeat(30) },
     ],
     { totalMaxChars: 30 },
   );
