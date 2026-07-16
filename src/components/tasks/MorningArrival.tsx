@@ -2,12 +2,11 @@
 
 import {
   useEffect,
-  useId,
   useRef,
   useState,
-  type FormEvent,
   type RefObject,
 } from 'react';
+import { useBuddy, useBuddyStream } from '@/components/buddy/BuddyProvider';
 import type { DayPlanExecutionState } from '@/lib/data/day-plan';
 import { matchesArrivalAddition } from '@/lib/day-plan/arrival-addition';
 import type {
@@ -18,7 +17,6 @@ import type {
 } from '@/lib/day-plan/brief';
 import type {
   DayPlan,
-  DayPlanAssistantTurn,
   DayPlanExecutionMode,
   DayPlanItem,
   DayPlanModelAlias,
@@ -26,7 +24,6 @@ import type {
   DayPlanOwner as DayOwner,
 } from '@/lib/day-plan/types';
 import {
-  assistantTurnStatusLabel,
   resolveArrivalEscape,
   selectEssentialItems,
 } from '@/lib/day-plan/presentation';
@@ -58,9 +55,6 @@ interface MorningArrivalProps {
   expandedItemId?: string | null;
   busy?: boolean;
   error?: string;
-  assistantTurn?: DayPlanAssistantTurn;
-  assistantSubmitting?: boolean;
-  assistantError?: string;
   executionState?: DayPlanExecutionState;
   executionLoading?: boolean;
   executionBusyItemIds?: ReadonlySet<string>;
@@ -73,7 +67,6 @@ interface MorningArrivalProps {
   onOwnerChange: (itemId: string, owner: DayOwner) => void | Promise<void>;
   onDragReorder: (activeId: string, overId: string) => void | Promise<void>;
   onDismiss: (itemId: string, title: string) => void | Promise<void>;
-  onAssistantSubmit: (userText: string) => void | Promise<unknown>;
   onKickoffExecution: (
     itemId: string,
     mode: DayPlanExecutionMode,
@@ -117,127 +110,6 @@ const STEP_ANNOUNCEMENTS: Record<ArrivalStep, string> = {
   extras: 'anything else',
 };
 
-function RefinePanel({
-  headingId,
-  open,
-  setOpen,
-  assistantPrompt,
-  setAssistantPrompt,
-  assistantPromptRef,
-  assistantSubmitting,
-  assistantTurn,
-  assistantError,
-  assistantActive,
-  onInteract,
-  onSubmit,
-}: {
-  headingId: string;
-  open: boolean;
-  setOpen: (open: boolean) => void;
-  assistantPrompt: string;
-  setAssistantPrompt: (value: string) => void;
-  assistantPromptRef: RefObject<HTMLTextAreaElement | null>;
-  assistantSubmitting: boolean;
-  assistantTurn?: DayPlanAssistantTurn;
-  assistantError?: string;
-  assistantActive: boolean;
-  onInteract?: () => void;
-  onSubmit: (event: FormEvent) => void;
-}) {
-  return (
-    <section aria-labelledby={headingId}>
-      <h2 id={headingId} className="sr-only">Refine today with Claude</h2>
-      <button
-        type="button"
-        className="press-scale min-h-9 text-sm font-medium text-muted-foreground hover:text-foreground hover:underline hover:underline-offset-4"
-        aria-expanded={open}
-        aria-controls={`${headingId}-form`}
-        onClick={() => {
-          onInteract?.();
-          setOpen(!open);
-          if (!open) window.requestAnimationFrame(() => assistantPromptRef.current?.focus());
-        }}
-      >
-        Refine with Claude
-      </button>
-
-      {open && (
-        <div
-          id={`${headingId}-form`}
-          className="mt-3 opacity-100 transition-opacity duration-150 ease-[var(--ease-out-forge)] motion-reduce:transition-none"
-        >
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            Tell Claude what’s missing, add context, or reprioritize today.
-          </p>
-          <form className="mt-3 flex flex-col gap-2 sm:flex-row" onSubmit={onSubmit}>
-            <label className="sr-only" htmlFor={`${headingId}-prompt`}>
-              Changes for today’s plan
-            </label>
-            <textarea
-              ref={assistantPromptRef}
-              id={`${headingId}-prompt`}
-              value={assistantPrompt}
-              maxLength={4000}
-              rows={2}
-              disabled={assistantSubmitting}
-              className="max-h-40 min-h-11 min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-accent-blue/40 disabled:opacity-60"
-              placeholder="Add context or change the order…"
-              onChange={(event) => {
-                if (!assistantPrompt) onInteract?.();
-                setAssistantPrompt(event.target.value);
-                event.currentTarget.style.height = 'auto';
-                event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 160)}px`;
-              }}
-            />
-            <button
-              type="submit"
-              disabled={!assistantPrompt.trim() || assistantSubmitting}
-              aria-label={assistantSubmitting ? 'Sending to Claude' : 'Send'}
-              className="press-scale min-h-11 min-w-20 rounded-xl border px-4 text-sm font-semibold text-foreground transition-[color,background-color,transform] duration-150 ease-[var(--ease-out-forge)] hover:bg-muted motion-reduce:transform-none motion-reduce:transition-none disabled:text-muted-foreground disabled:opacity-50"
-            >
-              {assistantSubmitting ? (
-                <span aria-hidden="true" className="inline-block size-1.5 rounded-full bg-current opacity-50 motion-safe:animate-pulse" />
-              ) : 'Send'}
-            </button>
-          </form>
-        </div>
-      )}
-
-      {(assistantTurn || assistantError) && (
-        <div
-          className="mt-3 max-h-32 overflow-y-auto rounded-xl bg-muted/60 p-3 text-sm"
-          role={assistantError || assistantTurn?.state === 'failed' ? 'alert' : 'status'}
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          {assistantTurn && (
-            <p className="flex items-center gap-2 font-medium text-foreground">
-              {assistantActive && (
-                <span className="inline-flex items-center gap-1" aria-hidden="true">
-                  {[0, 1, 2].map((dot) => (
-                    <span
-                      key={dot}
-                      className="size-1.5 rounded-full bg-current opacity-35 motion-safe:animate-pulse"
-                      style={{ animationDelay: `${dot * 180}ms` }}
-                    />
-                  ))}
-                </span>
-              )}
-              {assistantActive ? 'Claude is working' : assistantTurnStatusLabel(assistantTurn)}
-            </p>
-          )}
-          {assistantTurn?.proposal?.assistantText && (
-            <p className="mt-1 whitespace-pre-wrap leading-relaxed text-muted-foreground">
-              {assistantTurn.proposal.assistantText}
-            </p>
-          )}
-          {assistantError && <p className="mt-1 text-accent-red">{assistantError}</p>}
-        </div>
-      )}
-    </section>
-  );
-}
-
 export default function MorningArrival({
   plan,
   items,
@@ -249,9 +121,6 @@ export default function MorningArrival({
   expandedItemId,
   busy = false,
   error,
-  assistantTurn,
-  assistantSubmitting = false,
-  assistantError,
   executionState,
   executionLoading = false,
   executionBusyItemIds = new Set<string>(),
@@ -264,7 +133,6 @@ export default function MorningArrival({
   onOwnerChange,
   onDragReorder,
   onDismiss,
-  onAssistantSubmit,
   onKickoffExecution,
   onCancelExecution,
   onSalesAction,
@@ -276,12 +144,10 @@ export default function MorningArrival({
   onAddWhatChanged,
   onOpenAllWork,
 }: MorningArrivalProps) {
-  const assistantHeadingId = useId();
-  const [assistantPrompt, setAssistantPrompt] = useState('');
-  const [refineOpen, setRefineOpen] = useState(false);
+  const { setPageContext, busy: buddyBusy } = useBuddy();
+  const { streamingTurn } = useBuddyStream();
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState('');
-  const assistantPromptRef = useRef<HTMLTextAreaElement>(null);
   const draggingRef = useRef(false);
   const disclosureRefs = useRef(new Map<string, HTMLButtonElement>());
   const ownerChipEscapeRef = useRef<OwnerChipEscapeHandler | null>(null);
@@ -309,7 +175,7 @@ export default function MorningArrival({
       plan.items.some((item) => matchesArrivalAddition(item, addition)) ? [index] : [],
     ) ?? [],
   );
-  const assistantActive = assistantTurn?.state === 'queued' || assistantTurn?.state === 'running';
+  const buddyActive = buddyBusy || Boolean(streamingTurn);
   const anyExecutionBusy = executionBusyItemIds.size > 0;
   const currentStepIndex = Math.max(0, availableSteps.indexOf(step));
   const isFinalStep = currentStepIndex === availableSteps.length - 1;
@@ -326,20 +192,16 @@ export default function MorningArrival({
     return () => window.cancelAnimationFrame(focusFrame);
   }, [availableSteps.length, currentStepIndex, step, titleId]);
 
-  async function handleAssistantSubmit(event: FormEvent) {
-    event.preventDefault();
-    const userText = assistantPrompt.trim();
-    if (!userText || assistantSubmitting) return;
-    try {
-      await onAssistantSubmit(userText);
-      setAssistantPrompt('');
-      window.requestAnimationFrame(() => {
-        if (assistantPromptRef.current) assistantPromptRef.current.style.height = 'auto';
-      });
-    } catch {
-      // Keep the typed prompt so the user can retry or revise it.
-    }
-  }
+  useEffect(() => {
+    setPageContext({
+      view: 'morning-arrival',
+      step,
+      planId: plan.id,
+      planVersion: plan.version,
+    });
+  }, [plan.id, plan.version, setPageContext, step]);
+
+  useEffect(() => () => setPageContext({ view: 'tasks' }), [setPageContext]);
 
   function setDisclosureRef(itemId: string, node: HTMLButtonElement | null) {
     if (node) disclosureRefs.current.set(itemId, node);
@@ -398,23 +260,6 @@ export default function MorningArrival({
     onInteract?.();
     setStep(nextStep);
   }
-
-  const refineContent = (
-    <RefinePanel
-      headingId={assistantHeadingId}
-      open={refineOpen}
-      setOpen={setRefineOpen}
-      assistantPrompt={assistantPrompt}
-      setAssistantPrompt={setAssistantPrompt}
-      assistantPromptRef={assistantPromptRef}
-      assistantSubmitting={assistantSubmitting}
-      assistantTurn={assistantTurn}
-      assistantError={assistantError}
-      assistantActive={assistantActive}
-      onInteract={onInteract}
-      onSubmit={handleAssistantSubmit}
-    />
-  );
 
   return (
     <div
@@ -486,7 +331,6 @@ export default function MorningArrival({
               onOwnerChipClose={handleOwnerChipClose}
               onAddWhatChanged={onAddWhatChanged}
               onOpenAllWork={onOpenAllWork}
-              refineContent={refineContent}
             />
           ) : (
             <ArrivalStepExtras
@@ -501,7 +345,6 @@ export default function MorningArrival({
               addedSuggestionIndexes={addedSuggestionIndexes}
               onOwnerChoiceOpen={handleOwnerChipOpen}
               onOwnerChoiceClose={handleOwnerChipClose}
-              refineContent={refineContent}
             />
           )}
         </div>
@@ -548,8 +391,7 @@ export default function MorningArrival({
             data-ritual-primary={isFinalStep ? '' : undefined}
             disabled={isFinalStep && (
               busy ||
-              assistantSubmitting ||
-              assistantActive ||
+              buddyActive ||
               anyExecutionBusy ||
               visibleItems.length === 0
             )}

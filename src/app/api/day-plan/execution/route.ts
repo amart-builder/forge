@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   currentDayPlanAccessMode,
   hasDayPlanRouteAccess,
-} from "@/app/api/day-plan/route";
+} from "@/lib/request-security";
 import {
   DayPlanInvalidTransition,
   DayPlanNotFound,

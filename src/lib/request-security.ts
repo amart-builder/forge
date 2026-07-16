@@ -1,3 +1,5 @@
+import { timingSafeEqual } from 'node:crypto';
+
 export type TrustedOriginInput = {
   origin?: string | null;
   host?: string | null;
@@ -11,6 +13,9 @@ type RequestLike = {
   headers: { get(name: string): string | null };
   nextUrl: { host: string; protocol: string };
 };
+
+export type DayPlanAccessMode = 'loopback' | 'session';
+const LOOPBACK_ACCESS_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 
 type ForgeHostEnvironment = {
   [key: string]: string | undefined;
@@ -117,4 +122,35 @@ export function isTrustedForgeRequest(
     requestProtocol: request.nextUrl.protocol,
     allowedHosts,
   });
+}
+
+export function isLoopbackForgeRequest(request: RequestLike): boolean {
+  return isTrustedForgeRequest(request, LOOPBACK_ACCESS_HOSTS);
+}
+
+export function currentDayPlanAccessMode(): DayPlanAccessMode | undefined {
+  return process.env.FORGE_DAY_PLAN_ACCESS_MODE as DayPlanAccessMode | undefined;
+}
+
+export function hasDayPlanRouteAccess(
+  request: RequestLike,
+  options: {
+    accessMode?: DayPlanAccessMode;
+    sessionToken?: string;
+  } = {
+    accessMode: process.env.FORGE_DAY_PLAN_ACCESS_MODE as DayPlanAccessMode | undefined,
+    sessionToken: process.env.FORGE_DAY_PLAN_REMOTE_TOKEN,
+  },
+): boolean {
+  if (options.accessMode === 'loopback') {
+    return isTrustedForgeRequest(request, LOOPBACK_ACCESS_HOSTS);
+  }
+  if (!isTrustedForgeRequest(request)) return false;
+  if (options.accessMode !== 'session') return false;
+  const supplied = request.headers.get('x-forge-day-plan-session');
+  if (!options.sessionToken || !supplied) return false;
+  const expectedBytes = Buffer.from(options.sessionToken);
+  const suppliedBytes = Buffer.from(supplied);
+  return expectedBytes.length === suppliedBytes.length &&
+    timingSafeEqual(expectedBytes, suppliedBytes);
 }

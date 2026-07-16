@@ -6,10 +6,8 @@ import {
   acknowledgeDayPlanTaskMutation,
   cancelDayPlanExecutionRun,
   configureDayPlanExecution,
-  createDayPlanAssistantTurn,
   DayPlanApiConflict,
   ensureDayPlan,
-  getDayPlanAssistantTurn,
   getDayPlanExecutionState,
   getDayPlanState,
   kickoffDayPlanItem,
@@ -27,10 +25,10 @@ import type {
   PublicMorningBrief,
 } from '@/lib/day-plan/brief';
 import { morningBriefSyncDecision } from '@/lib/day-plan/brief-view';
+import { useDataChanged } from '@/lib/data/refresh-bus';
 import { matchesArrivalAddition } from '@/lib/day-plan/arrival-addition';
 import type {
   DayPlan,
-  DayPlanAssistantTurn,
   DayPlanExecutionMode,
   DayPlanModelAlias,
   DayPlanMutationAction,
@@ -100,7 +98,6 @@ function stableMutationId(action: string, plan: DayPlan): string {
   return `${action}:${plan.id}:${plan.version}`;
 }
 
-const ACTIVE_ASSISTANT_STATES = new Set(['queued', 'running']);
 const ACTIVE_EXECUTION_STATES = new Set(['queued', 'starting', 'running', 'cancelling']);
 
 function assertAutonomousSetup(
@@ -151,17 +148,12 @@ export default function useDayRitual({
   const [error, setError] = useState<string>();
   const [announcement, setAnnouncement] = useState('');
   const [transitionMessage, setTransitionMessage] = useState('');
-  const [assistantTurn, setAssistantTurn] = useState<DayPlanAssistantTurn>();
-  const [assistantSubmitting, setAssistantSubmitting] = useState(false);
-  const [assistantError, setAssistantError] = useState<string>();
   const [executionState, setExecutionState] = useState<DayPlanExecutionState>();
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionBusyItemIds, setExecutionBusyItemIds] = useState<Set<string>>(new Set());
   const [executionError, setExecutionError] = useState<string>();
   const planRef = useRef<DayPlan | undefined>(undefined);
   const morningBriefRef = useRef<PublicMorningBrief | undefined>(undefined);
-  const assistantTurnRef = useRef<DayPlanAssistantTurn | undefined>(undefined);
-  const assistantSubmittingRef = useRef(false);
   const executionStateRef = useRef<DayPlanExecutionState | undefined>(undefined);
   const candidatesRef = useRef(candidates);
   const reconciliationBlockedRef = useRef(false);
@@ -243,6 +235,8 @@ export default function useDayRitual({
     if (readModel.currentPlan) acceptPlan(readModel.currentPlan, readModel.latestSnapshot);
     return readModel.currentPlan;
   }, [acceptPlan, applyMorningBrief]);
+
+  useDataChanged(['day_plan'], () => void refreshPlan().catch(() => undefined));
 
   // Keep the ref current for paths that update brief state functionally
   // (optimistic sales-action marks); acceptPlan reads it synchronously.
@@ -434,44 +428,6 @@ export default function useDayRitual({
     if (!enabled || !plan?.id) return;
     void refreshExecution(plan.id).catch(() => undefined);
   }, [enabled, plan?.id, plan?.version, refreshExecution]);
-
-  useEffect(() => {
-    const currentTurn = assistantTurn;
-    if (!currentTurn || !ACTIVE_ASSISTANT_STATES.has(currentTurn.state)) return;
-    const turnId = currentTurn.id;
-    let cancelled = false;
-    let timeout: number | undefined;
-
-    async function poll() {
-      try {
-        const next = await getDayPlanAssistantTurn(turnId);
-        if (cancelled) return;
-        assistantTurnRef.current = next;
-        setAssistantTurn(next);
-        setAssistantError(undefined);
-        if (next.state === 'applied') {
-          const refreshed = await refreshPlan();
-          if (refreshed) await refreshExecution(refreshed.id);
-          return;
-        }
-        if (ACTIVE_ASSISTANT_STATES.has(next.state)) {
-          timeout = window.setTimeout(() => void poll(), 1000);
-        }
-      } catch (nextError) {
-        if (cancelled) return;
-        setAssistantError(
-          nextError instanceof Error ? nextError.message : "Forge couldn't check Claude's response.",
-        );
-        timeout = window.setTimeout(() => void poll(), 1500);
-      }
-    }
-
-    timeout = window.setTimeout(() => void poll(), 800);
-    return () => {
-      cancelled = true;
-      if (timeout !== undefined) window.clearTimeout(timeout);
-    };
-  }, [assistantTurn, refreshExecution, refreshPlan]);
 
   useEffect(() => {
     if (!executionState?.runs.some((run) => ACTIVE_EXECUTION_STATES.has(run.status))) return;
@@ -760,38 +716,6 @@ export default function useDayRitual({
       announce: `${title} removed from today’s essentials. The task is still in All Work.`,
     });
   }, [enqueueMutation, markArrivalInteraction]);
-
-  const submitAssistantPrompt = useCallback(async (userText: string) => {
-    const current = planRef.current;
-    if (!current) throw new Error('The day plan is not ready.');
-    if (assistantSubmittingRef.current) throw new Error('Forge is sending the previous prompt.');
-    markArrivalInteraction();
-    assistantSubmittingRef.current = true;
-    setAssistantSubmitting(true);
-    setAssistantError(undefined);
-    try {
-      const result = await createDayPlanAssistantTurn({
-        planId: current.id,
-        expectedVersion: current.version,
-        mutationId: `assistant:${current.id}:${newDayPlanMutationId()}`,
-        userText,
-      });
-      assistantTurnRef.current = result.turn;
-      setAssistantTurn(result.turn);
-      setAnnouncement('Claude is queued to consider that change.');
-      return result.turn;
-    } catch (nextError) {
-      if (nextError instanceof DayPlanApiConflict) acceptPlan(nextError.currentPlan);
-      const message = nextError instanceof Error
-        ? nextError.message
-        : "Forge couldn't queue that request.";
-      setAssistantError(message);
-      throw nextError;
-    } finally {
-      assistantSubmittingRef.current = false;
-      setAssistantSubmitting(false);
-    }
-  }, [acceptPlan, markArrivalInteraction]);
 
   const configureExecution = useCallback(async (
     itemId: string,
@@ -1219,9 +1143,6 @@ export default function useDayRitual({
     error,
     announcement,
     transitionMessage,
-    assistantTurn,
-    assistantSubmitting,
-    assistantError,
     executionState,
     executionLoading,
     executionBusyItemIds,
@@ -1240,7 +1161,6 @@ export default function useDayRitual({
     setOwner,
     reorder,
     dismissItem,
-    submitAssistantPrompt,
     configureExecution,
     kickoffExecution,
     cancelExecution,

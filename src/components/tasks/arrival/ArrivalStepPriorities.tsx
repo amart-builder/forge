@@ -1,6 +1,5 @@
 'use client';
 
-import type { ReactNode } from 'react';
 import {
   DndContext,
   KeyboardSensor,
@@ -40,7 +39,6 @@ export default function ArrivalStepPriorities({
   onOwnerChipClose,
   onAddWhatChanged,
   onOpenAllWork,
-  refineContent,
 }: {
   visibleItems: MorningArrivalItem[];
   expandedItemId?: string | null;
@@ -60,7 +58,6 @@ export default function ArrivalStepPriorities({
   onOwnerChipClose: (itemId: string) => void;
   onAddWhatChanged?: MorningArrivalProps['onAddWhatChanged'];
   onOpenAllWork?: MorningArrivalProps['onOpenAllWork'];
-  refineContent: ReactNode;
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -150,8 +147,6 @@ export default function ArrivalStepPriorities({
         </section>
       )}
 
-      {refineContent}
     </section>
   );
 }
-

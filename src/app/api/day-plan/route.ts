@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { timingSafeEqual } from "node:crypto";
 import { getQuietCurrentCsrfToken } from "@/lib/quiet-current/store";
-import { isTrustedForgeRequest } from "@/lib/request-security";
+import {
+  currentDayPlanAccessMode,
+  hasDayPlanRouteAccess,
+  type DayPlanAccessMode,
+} from "@/lib/request-security";
 import {
   DayPlanInvalidTransition,
   DayPlanNotFound,
@@ -99,15 +102,6 @@ const RANK_REASONS = new Set([
 ]);
 const MUTATION_ID = /^[A-Za-z0-9:_-]+$/;
 const LOCAL_DATE = /^\d{4}-\d{2}-\d{2}$/;
-type DayPlanAccessMode = "loopback" | "session";
-const LOOPBACK_ACCESS_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
-
-// The configured day-plan access mode. Loopback means the request can only come from
-// this machine, which is what gates exposing a run's resumable claudeSessionId.
-export function currentDayPlanAccessMode(): DayPlanAccessMode | undefined {
-  return process.env.FORGE_DAY_PLAN_ACCESS_MODE as DayPlanAccessMode | undefined;
-}
-
 type ParsedPost =
   | { action: "ensure"; input: EnsureDayPlanInput }
   | { action: "reconciliation_applied"; reconciliationId: string }
@@ -121,29 +115,6 @@ type ParsedPost =
       editedText?: string;
     }
   | { action: DayPlanMutationAction; input: DayPlanMutationInput };
-
-export function hasDayPlanRouteAccess(
-  request: NextRequest,
-  options: {
-    accessMode?: DayPlanAccessMode;
-    sessionToken?: string;
-  } = {
-    accessMode: process.env.FORGE_DAY_PLAN_ACCESS_MODE as DayPlanAccessMode | undefined,
-    sessionToken: process.env.FORGE_DAY_PLAN_REMOTE_TOKEN,
-  },
-): boolean {
-  if (options.accessMode === "loopback") {
-    return isTrustedForgeRequest(request, LOOPBACK_ACCESS_HOSTS);
-  }
-  if (!isTrustedForgeRequest(request)) return false;
-  if (options.accessMode !== "session") return false;
-  const supplied = request.headers.get("x-forge-day-plan-session");
-  if (!options.sessionToken || !supplied) return false;
-  const expectedBytes = Buffer.from(options.sessionToken);
-  const suppliedBytes = Buffer.from(supplied);
-  return expectedBytes.length === suppliedBytes.length &&
-    timingSafeEqual(expectedBytes, suppliedBytes);
-}
 
 function recordValue(value: unknown, name: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

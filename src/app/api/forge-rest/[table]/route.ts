@@ -2,22 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRuntimeMode } from "@/lib/runtime/mode";
 import { handleLocalRest } from "@/lib/local/db";
 import { isTrustedForgeRequest } from "@/lib/request-security";
+import { FORGE_REST_TABLES } from "@/lib/data/forge-tables";
 
 type RouteContext = {
   params: Promise<{ table: string }>;
 };
 
-const ALLOWED_TABLES = new Set([
-  "companies",
-  "contact_activities",
-  "contacts",
-  "drafts",
-  "email_action_log",
-  "email_items",
-  "email_triage_runs",
-  "task_columns",
-  "tasks",
-]);
+const ALLOWED_TABLES = new Set<string>(FORGE_REST_TABLES);
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

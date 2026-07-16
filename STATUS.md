@@ -16,10 +16,10 @@
 
 <!-- BEGIN active-session -->
 ## Active Session
-- **system:** none
-- **device:** —
-- **since:** —
-- **task:** —
+- **system:** cowork
+- **device:** Alexanders-MacBook-Pro-2
+- **since:** 2026-07-15T20:50:25-0700
+- **task:** commit buddy feature
 <!-- END active-session -->
 
 ---

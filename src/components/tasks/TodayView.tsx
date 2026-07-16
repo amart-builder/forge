@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useDataChanged } from '@/lib/data/refresh-bus';
 import {
   createTask as createRestTask,
   deleteTask as deleteRestTask,
@@ -413,6 +414,7 @@ function RestTodayView({ onOpenAllWork }: TodayViewProps) {
     }
   }, [persistSnapshot]);
   reloadRef.current = reload;
+  useDataChanged(['tasks', 'task_columns'], () => void reload());
 
   const beginMutation = useCallback(() => {
     mutationRevisionRef.current += 1;
@@ -2190,9 +2192,6 @@ function TodayExperience({
                 expandedItemId={expandedArrivalItemId}
                 busy={dayRitual.busy}
                 error={dayRitual.error}
-                assistantTurn={dayRitual.assistantTurn}
-                assistantSubmitting={dayRitual.assistantSubmitting}
-                assistantError={dayRitual.assistantError}
                 executionState={dayRitual.executionState}
                 executionLoading={dayRitual.executionLoading}
                 executionBusyItemIds={dayRitual.executionBusyItemIds}
@@ -2213,7 +2212,6 @@ function TodayExperience({
                   if (position >= 0) await dayRitual.reorder(activeId, position, title);
                 }}
                 onDismiss={dayRitual.dismissItem}
-                onAssistantSubmit={dayRitual.submitAssistantPrompt}
                 onKickoffExecution={dayRitual.kickoffExecution}
                 onCancelExecution={dayRitual.cancelExecution}
                 onSalesAction={dayRitual.markBriefSalesAction}

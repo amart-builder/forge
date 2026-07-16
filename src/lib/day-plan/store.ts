@@ -5,6 +5,7 @@ import path from "node:path";
 import type {
   DayPlan,
   DayPlanAssistantProposal,
+  DayPlanAssistantOperation,
   DayPlanAssistantTurn,
   DayPlanAssistantTurnState,
   DayPlanEvent,
@@ -1257,6 +1258,96 @@ export function createDayPlanStore(options: {
     });
   }
 
+  function applyValidatedAssistantPatch(input: {
+    plan: DayPlan;
+    proposal: DayPlanAssistantProposal;
+    assistantTurnId: string;
+    baseVersion: number;
+    finishedAt: string;
+  }): { plan: DayPlan; createdItemIds: string[] } {
+    const { plan, proposal, assistantTurnId, baseVersion, finishedAt } = input;
+    const before = clonePlan(plan);
+    const createdItemIds: string[] = [];
+    applyAssistantProposal(plan, proposal, {
+      now: finishedAt,
+      idFactory: () => {
+        const id = randomUUID();
+        createdItemIds.push(id);
+        return id;
+      },
+    });
+    const beforeIds = new Set(before.items.map((item) => item.id));
+    const createdItems = plan.items.filter((item) => !beforeIds.has(item.id));
+    const descriptionFor = (item: DayPlanItem) => [
+      item.outcome,
+      item.definitionOfDone ? `Done means: ${item.definitionOfDone}` : undefined,
+    ].filter(Boolean).join("\n\n");
+    const taskMutations: Array<{
+      taskId: string;
+      action: DayPlanTaskMutation["action"];
+      payload: Record<string, unknown>;
+    }> = createdItems.map((item) => ({
+      taskId: item.taskId,
+      action: "create" as const,
+      payload: {
+        title: item.title,
+        description: descriptionFor(item),
+        priority: item.priority,
+        project: item.project,
+      },
+    }));
+    for (const operation of proposal.operations) {
+      if (operation.operation === "edit_item") {
+        const item = plan.items.find((candidate) => candidate.id === operation.itemId)!;
+        const payload: Record<string, unknown> = {};
+        if (operation.title !== undefined) payload.title = item.title;
+        if (operation.outcome !== undefined || operation.definitionOfDone !== undefined) {
+          payload.description = descriptionFor(item);
+        }
+        if (Object.keys(payload).length > 0) {
+          taskMutations.push({ taskId: item.taskId, action: "update", payload });
+        }
+      } else if (operation.operation === "complete_item") {
+        const item = plan.items.find((candidate) => candidate.id === operation.itemId)!;
+        taskMutations.push({ taskId: item.taskId, action: "complete", payload: {} });
+      }
+    }
+    const insertTaskMutation = db.prepare(
+      `INSERT INTO day_plan_task_mutations
+        (id, day_plan_id, assistant_turn_id, task_id, action, sequence, payload_json, state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+    );
+    for (const [sequence, mutation] of taskMutations.entries()) {
+      insertTaskMutation.run(
+        randomUUID(),
+        plan.id,
+        assistantTurnId,
+        mutation.taskId,
+        mutation.action,
+        sequence,
+        JSON.stringify(mutation.payload),
+        finishedAt,
+      );
+    }
+    for (const item of plan.items) invalidateQueuedRunsForItem(plan, item, finishedAt);
+    const eventId = `assistant:${assistantTurnId}`;
+    plan.version += 1;
+    plan.lastMutationId = eventId;
+    plan.updatedAt = finishedAt;
+    persistPlan(plan);
+    appendEvent({
+      id: eventId,
+      planId: plan.id,
+      eventType: "assistant_patch",
+      expectedVersion: baseVersion,
+      resultVersion: plan.version,
+      before,
+      after: { plan, assistantTurnId },
+      createdAt: finishedAt,
+    });
+    return { plan, createdItemIds };
+  }
+
   function completeAssistantTurn(
     turnId: string,
     proposalInput: DayPlanAssistantProposal,
@@ -1292,76 +1383,12 @@ export function createDayPlanStore(options: {
         return { turn: getAssistantTurn(row.id)!, plan };
       }
 
-      const before = clonePlan(plan);
-      applyAssistantProposal(plan, proposal, { now: finishedAt, idFactory: randomUUID });
-      const beforeIds = new Set(before.items.map((item) => item.id));
-      const createdItems = plan.items.filter((item) => !beforeIds.has(item.id));
-      const descriptionFor = (item: DayPlanItem) => [
-        item.outcome,
-        item.definitionOfDone ? `Done means: ${item.definitionOfDone}` : undefined,
-      ].filter(Boolean).join("\n\n");
-      const taskMutations: Array<{
-        taskId: string;
-        action: DayPlanTaskMutation["action"];
-        payload: Record<string, unknown>;
-      }> = createdItems.map((item) => ({
-        taskId: item.taskId,
-        action: "create" as const,
-        payload: {
-          title: item.title,
-          description: descriptionFor(item),
-          priority: item.priority,
-          project: item.project,
-        },
-      }));
-      for (const operation of proposal.operations) {
-        if (operation.operation === "edit_item") {
-          const item = plan.items.find((candidate) => candidate.id === operation.itemId)!;
-          const payload: Record<string, unknown> = {};
-          if (operation.title !== undefined) payload.title = item.title;
-          if (operation.outcome !== undefined || operation.definitionOfDone !== undefined) {
-            payload.description = descriptionFor(item);
-          }
-          if (Object.keys(payload).length > 0) {
-            taskMutations.push({ taskId: item.taskId, action: "update", payload });
-          }
-        } else if (operation.operation === "complete_item") {
-          const item = plan.items.find((candidate) => candidate.id === operation.itemId)!;
-          taskMutations.push({ taskId: item.taskId, action: "complete", payload: {} });
-        }
-      }
-      const insertTaskMutation = db.prepare(
-        `INSERT INTO day_plan_task_mutations
-          (id, day_plan_id, assistant_turn_id, task_id, action, sequence, payload_json, state, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
-      );
-      for (const [sequence, mutation] of taskMutations.entries()) {
-        insertTaskMutation.run(
-          randomUUID(),
-          plan.id,
-          row.id,
-          mutation.taskId,
-          mutation.action,
-          sequence,
-          JSON.stringify(mutation.payload),
-          finishedAt,
-        );
-      }
-      for (const item of plan.items) invalidateQueuedRunsForItem(plan, item, finishedAt);
-      const eventId = `assistant:${row.id}`;
-      plan.version += 1;
-      plan.lastMutationId = eventId;
-      plan.updatedAt = finishedAt;
-      persistPlan(plan);
-      appendEvent({
-        id: eventId,
-        planId: plan.id,
-        eventType: "assistant_patch",
-        expectedVersion: row.base_version,
-        resultVersion: plan.version,
-        before,
-        after: { plan, assistantTurnId: row.id },
-        createdAt: finishedAt,
+      applyValidatedAssistantPatch({
+        plan,
+        proposal,
+        assistantTurnId: row.id,
+        baseVersion: row.base_version,
+        finishedAt,
       });
       db.prepare(
         `UPDATE day_plan_assistant_turns
@@ -1370,6 +1397,48 @@ export function createDayPlanStore(options: {
          WHERE id = ?`,
       ).run(JSON.stringify(proposal), plan.version, finishedAt, finishedAt, row.id);
       return { turn: getAssistantTurn(row.id)!, plan };
+    });
+  }
+
+  function applyAssistantOperations(input: {
+    expectedVersion: number;
+    operations: DayPlanAssistantOperation[];
+  }): { turn: DayPlanAssistantTurn; plan: DayPlan; createdItemIds: string[] } {
+    return immediate(() => {
+      const plan = getReadModel().currentPlan;
+      if (!plan) throw new DayPlanNotFound();
+      if (plan.version !== input.expectedVersion) throw new DayPlanVersionConflict(plan);
+      requireArrivalEditing(plan);
+      if (!Array.isArray(input.operations) || input.operations.length === 0) {
+        throw new DayPlanInvalidTransition("Assistant apply requires at least one operation.");
+      }
+      const timestamp = now().toISOString();
+      const turnId = `buddy-${randomUUID()}`;
+      db.prepare(
+        `INSERT INTO day_plan_assistant_turns
+          (id, day_plan_id, base_version, user_text, state, created_at, started_at)
+         VALUES (?, ?, ?, ?, 'running', ?, ?)`,
+      ).run(turnId, plan.id, plan.version, "Buddy day-plan apply", timestamp, timestamp);
+      stampArrivalInteraction(plan.id, timestamp);
+      plan.arrivalInteractedAt ??= timestamp;
+      const proposal = validateAssistantProposal(plan, {
+        assistantText: "Buddy updated the day plan.",
+        needsClarification: false,
+        operations: input.operations,
+      });
+      const applied = applyValidatedAssistantPatch({
+        plan,
+        proposal,
+        assistantTurnId: turnId,
+        baseVersion: input.expectedVersion,
+        finishedAt: timestamp,
+      });
+      db.prepare(
+        `UPDATE day_plan_assistant_turns
+         SET state = 'applied', proposal_json = ?, result_version = ?, finished_at = ?, applied_at = ?
+         WHERE id = ?`,
+      ).run(JSON.stringify(proposal), plan.version, timestamp, timestamp, turnId);
+      return { turn: getAssistantTurn(turnId)!, plan, createdItemIds: applied.createdItemIds };
     });
   }
 
@@ -2964,6 +3033,7 @@ export function createDayPlanStore(options: {
     createAssistantTurn,
     claimNextAssistantTurn,
     completeAssistantTurn,
+    applyAssistantOperations,
     failAssistantTurn,
     interruptStaleAssistantTurns,
     getAssistantTurn,

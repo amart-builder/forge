@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { useState, type Dispatch, type SetStateAction } from 'react';
 import type { PublicMorningBrief } from '@/lib/day-plan/brief';
 import type { MorningArrivalProps } from '../MorningArrival';
 import OwnerChip, { type OwnerChipEscapeHandler } from './OwnerChip';
@@ -24,7 +24,6 @@ export default function ArrivalStepExtras({
   addedSuggestionIndexes,
   onOwnerChoiceOpen,
   onOwnerChoiceClose,
-  refineContent,
 }: {
   brief?: PublicMorningBrief;
   onSalesAction?: MorningArrivalProps['onSalesAction'];
@@ -37,7 +36,6 @@ export default function ArrivalStepExtras({
   addedSuggestionIndexes: ReadonlySet<number>;
   onOwnerChoiceOpen: (handler: OwnerChipEscapeHandler) => void;
   onOwnerChoiceClose: (itemId: string) => void;
-  refineContent: ReactNode;
 }) {
   const [addingIndex, setAddingIndex] = useState<number | null>(null);
 
@@ -186,7 +184,6 @@ export default function ArrivalStepExtras({
         </section>
       )}
 
-      {refineContent}
     </section>
   );
 }

@@ -9,9 +9,9 @@ import { createDayPlanStore } from '../src/lib/day-plan/store.ts';
 import {
   GET,
   POST,
-  hasDayPlanRouteAccess,
   parseDayPlanPostBody,
 } from '../src/app/api/day-plan/route.ts';
+import { hasDayPlanRouteAccess } from '../src/lib/request-security.ts';
 
 function candidate() {
   return buildDayPlanCandidates({

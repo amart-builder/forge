@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 import ConvexClientProvider from "./ConvexClientProvider";
 import TabNav from "@/components/layout/TabNav";
+import { BuddyProvider } from "@/components/buddy/BuddyProvider";
+import BuddyDock from "@/components/buddy/BuddyDock";
 
 export const metadata: Metadata = {
   title: "Forge",
@@ -20,10 +22,13 @@ export default function RootLayout({
           __html: `(function(){try{var t=localStorage.getItem('theme');if(t==='dark'||(!t&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark')}catch(e){}})()`,
         }} />
         <ConvexClientProvider>
-          <TabNav />
-          <main className="flex-1 overflow-hidden">
-            {children}
-          </main>
+          <BuddyProvider>
+            <TabNav />
+            <main className="flex-1 overflow-hidden">
+              {children}
+            </main>
+            <BuddyDock />
+          </BuddyProvider>
         </ConvexClientProvider>
       </body>
     </html>

@@ -17,6 +17,18 @@ for arg in "$@"; do
   esac
 done
 
+# The default web profile is the MacBook, which can open local Claude Code deep
+# links. The existing --mini profile defaults web-facing Buddy config to the
+# portable resume-command behavior documented in BUDDY-DEPLOY.md.
+if [ -n "${FORGE_BUDDY_DEEPLINKS:-}" ]; then
+  BUDDY_DEEPLINKS="$FORGE_BUDDY_DEEPLINKS"
+elif [ "$MINI" = "1" ]; then
+  BUDDY_DEEPLINKS=0
+else
+  BUDDY_DEEPLINKS=1
+fi
+BUDDY_APP_URL="${FORGE_BUDDY_APP_URL:-http://127.0.0.1:3200}"
+
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="$HOME/Library/Logs"
 LA_DIR="$HOME/Library/LaunchAgents"
@@ -222,6 +234,10 @@ cat > "$SERVER_PLIST" <<EOF
     <string>production</string>
     <key>FORGE_DAY_PLAN_ACCESS_MODE</key>
     <string>loopback</string>
+    <key>FORGE_BUDDY_DEEPLINKS</key>
+    <string>$BUDDY_DEEPLINKS</string>
+    <key>FORGE_BUDDY_APP_URL</key>
+    <string>$BUDDY_APP_URL</string>
     <key>FORGE_CLAUDE_WORKER_AVAILABLE</key>
     <string>1</string>
   </dict>

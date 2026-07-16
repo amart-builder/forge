@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   allSettlementDecisionsMade,
-  assistantTurnStatusLabel,
   claudeResumeUrl,
   combineSurfaceErrors,
   firstCarriedItem,
@@ -110,15 +109,7 @@ test('project pills suppress operational tags and overlong labels', () => {
   assert.equal(helpfulProjectLabel('x'.repeat(33)), undefined);
 });
 
-test('assistant and execution states use truthful non-completion labels', () => {
-  assert.equal(assistantTurnStatusLabel({ state: 'queued' }), 'Queued');
-  assert.equal(
-    assistantTurnStatusLabel({
-      state: 'proposed',
-      proposal: { needsClarification: true, assistantText: 'Which client?', operations: [] },
-    }),
-    'Clarification needed',
-  );
+test('execution states use truthful non-completion labels', () => {
   assert.equal(executionRunStatusLabel('running'), 'Claude is working');
   assert.equal(executionRunStatusLabel('plan_ready'), 'Plan ready');
   assert.equal(executionRunStatusLabel('awaiting_review'), 'Awaiting review');

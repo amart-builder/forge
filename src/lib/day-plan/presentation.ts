@@ -1,6 +1,5 @@
 import type {
   DayPlan,
-  DayPlanAssistantTurn,
   DayPlanExecutionConfig,
   DayPlanExecutionReadiness,
   DayPlanExecutionRun,
@@ -61,19 +60,6 @@ export function helpfulProjectLabel(value: string | undefined): string | undefin
     return undefined;
   }
   return cleaned;
-}
-
-export function assistantTurnStatusLabel(turn: DayPlanAssistantTurn): string {
-  if (turn.state === 'queued') return 'Queued';
-  if (turn.state === 'running') return 'Claude is working';
-  if (turn.state === 'applied') return 'Applied';
-  if (turn.state === 'proposed' && turn.proposal?.needsClarification) {
-    return 'Clarification needed';
-  }
-  if (turn.state === 'proposed') return 'Ready to review';
-  if (turn.state === 'conflict') return 'Plan changed before this could apply';
-  if (turn.state === 'cancelled') return 'Cancelled';
-  return 'Error';
 }
 
 export function executionRunStatusLabel(status: DayPlanExecutionRunStatus): string {

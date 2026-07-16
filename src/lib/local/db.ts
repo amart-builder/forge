@@ -13,21 +13,12 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { FORGE_REST_TABLES } from "../data/forge-tables";
 
 export type RestResult = { status: number; body?: unknown };
 
 /** Tables the app is allowed to read/write. Mirrors the Supabase proxy. */
-const ALLOWED_TABLES = new Set([
-  "companies",
-  "contact_activities",
-  "contacts",
-  "drafts",
-  "email_action_log",
-  "email_items",
-  "email_triage_runs",
-  "task_columns",
-  "tasks",
-]);
+const ALLOWED_TABLES = new Set<string>(FORGE_REST_TABLES);
 
 /** Columns stored as JSON text but exposed to the app as parsed values. */
 const JSON_COLUMNS: Record<string, string[]> = {

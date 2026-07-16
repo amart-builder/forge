@@ -71,7 +71,7 @@ type ChildResult = {
   terminatedBy?: "timeout" | "cancelled" | "shutdown";
 };
 
-function minimalChildEnvironment(): NodeJS.ProcessEnv {
+export function minimalChildEnvironment(): NodeJS.ProcessEnv {
   const allowed = [
     "HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "USER", "LOGNAME", "SHELL",
     "NODE_ENV", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY",
@@ -82,7 +82,7 @@ function minimalChildEnvironment(): NodeJS.ProcessEnv {
   ) as NodeJS.ProcessEnv;
 }
 
-function signalProcessGroup(
+export function signalProcessGroup(
   child: ChildProcessWithoutNullStreams,
   signal: NodeJS.Signals,
 ): void {
