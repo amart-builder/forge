@@ -34,10 +34,10 @@ export default function PendingDeleteCard({ turnId, pending }: { turnId: string;
       <p className="text-xs font-medium text-foreground">Delete: {pending.label}</p>
       <div className="mt-2 flex gap-2">
         <button type="button" disabled={working || busy}
-          className="press-scale rounded-lg bg-accent-red px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+          className="rounded-lg bg-accent-red px-2.5 py-1.5 text-xs font-semibold text-white transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transform-none disabled:opacity-50"
           onClick={() => void run('confirm')}>Confirm</button>
         <button type="button" disabled={working}
-          className="press-scale rounded-lg border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50"
+          className="rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transform-none disabled:opacity-50"
           onClick={() => void run('cancel')}>Cancel</button>
       </div>
       {error && <p className="mt-2 text-[11px] text-accent-red">{error}</p>}

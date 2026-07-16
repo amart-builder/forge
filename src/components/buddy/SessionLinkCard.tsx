@@ -115,7 +115,7 @@ export default function SessionLinkCard({ session }: { session: SpawnedSessionRe
             <code className="min-w-0 flex-1 break-all text-[10px] leading-relaxed">{command}</code>
             <button
               type="button"
-              className="press-scale shrink-0 rounded-md border bg-card px-2 py-1 text-[10px] font-semibold"
+              className="shrink-0 rounded-md border bg-card px-2 py-1 text-[10px] font-semibold transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transform-none"
               onClick={() => {
                 void navigator.clipboard.writeText(command).then(() => {
                   setCopied(true);

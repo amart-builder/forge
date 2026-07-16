@@ -72,7 +72,7 @@ export default function ArrivalStepPriorities({
   }
 
   return (
-    <section className="space-y-8 px-6 py-8 sm:px-10" aria-label="Your priorities">
+    <section className="mx-auto w-full max-w-[60rem] space-y-8 px-6 py-8 sm:px-10" aria-label="Your priorities">
       {visibleItems.length > 0 ? (
         <DndContext
           sensors={sensors}

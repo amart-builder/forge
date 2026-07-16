@@ -40,7 +40,7 @@ export default function ArrivalStepExtras({
   const [addingIndex, setAddingIndex] = useState<number | null>(null);
 
   return (
-    <section className="space-y-8 px-6 py-8 sm:px-10" aria-label="Anything else">
+    <section className="mx-auto w-full max-w-[60rem] space-y-8 px-6 py-8 sm:px-10" aria-label="Anything else">
       {brief && brief.salesActions.length > 0 && onSalesAction && (
         <section aria-labelledby="arrival-sales-heading">
           <h2 id="arrival-sales-heading" className="text-sm font-semibold text-foreground">

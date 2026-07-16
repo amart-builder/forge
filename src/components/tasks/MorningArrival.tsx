@@ -263,33 +263,37 @@ export default function MorningArrival({
 
   return (
     <div
-      className="my-auto overflow-hidden rounded-3xl border bg-background shadow-2xl"
+      className="mx-auto my-auto w-full max-w-[64rem] overflow-hidden rounded-3xl border bg-background shadow-2xl"
       data-day-plan-id={plan.id}
     >
       <div className="max-h-[calc(100dvh-7rem)] overflow-y-auto">
-        <header className="sticky top-0 z-20 border-b bg-background/95 px-6 py-5 backdrop-blur sm:px-10">
-          <div className="flex items-center justify-between gap-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              Morning arrival
-            </p>
-            <StepDots steps={availableSteps} activeStep={step} />
+        <header className="sticky top-0 z-20 border-b bg-background/95 py-5 backdrop-blur">
+          <div className="mx-auto w-full max-w-[60rem] px-6 sm:px-10">
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                Morning arrival
+              </p>
+              <StepDots steps={availableSteps} activeStep={step} />
+            </div>
+            <div className="mx-auto w-full max-w-[70ch]">
+              <h1
+                id={titleId}
+                tabIndex={-1}
+                className="mt-3 text-2xl font-semibold tracking-tight text-foreground outline-none sm:text-3xl"
+              >
+                {STEP_TITLES[step]}
+              </h1>
+              <p id={descriptionId} className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                {STEP_DESCRIPTIONS[step]}
+              </p>
+              {freshnessLabel && <p className="mt-2 text-xs text-muted-foreground">{freshnessLabel}</p>}
+            </div>
+            <p className="sr-only" aria-live="polite" aria-atomic="true">{stepAnnouncement}</p>
           </div>
-          <h1
-            id={titleId}
-            tabIndex={-1}
-            className="mt-3 text-2xl font-semibold tracking-tight text-foreground outline-none sm:text-3xl"
-          >
-            {STEP_TITLES[step]}
-          </h1>
-          <p id={descriptionId} className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-            {STEP_DESCRIPTIONS[step]}
-          </p>
-          {freshnessLabel && <p className="mt-2 text-xs text-muted-foreground">{freshnessLabel}</p>}
-          <p className="sr-only" aria-live="polite" aria-atomic="true">{stepAnnouncement}</p>
         </header>
 
         {(error || executionError) && (
-          <div className="space-y-2 px-6 pt-5 sm:px-10">
+          <div className="mx-auto w-full max-w-[60rem] space-y-2 px-6 pt-5 sm:px-10">
             {error && (
               <p role="alert" className="rounded-xl border border-accent-red/30 bg-accent-red/5 p-3 text-sm text-accent-red">
                 {error}
@@ -349,64 +353,66 @@ export default function MorningArrival({
           )}
         </div>
 
-        <footer className="sticky bottom-0 z-20 flex flex-col items-stretch gap-2 border-t bg-background/95 px-4 py-3 backdrop-blur sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3 sm:px-10 sm:py-4">
-          <div className="flex w-full flex-wrap items-center justify-center gap-x-3 sm:w-auto sm:justify-start sm:gap-x-4 sm:gap-y-1">
-            {currentStepIndex > 0 && (
+        <footer className="sticky bottom-0 z-20 border-t !bg-background">
+          <div className="mx-auto flex w-full max-w-[60rem] flex-col items-stretch gap-2 py-3 pl-4 pr-20 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3 sm:py-4 sm:pl-10 sm:pr-24 min-[1120px]:pr-10">
+            <div className="flex w-full flex-wrap items-center justify-center gap-x-3 sm:w-auto sm:justify-start sm:gap-x-4 sm:gap-y-1">
+              {currentStepIndex > 0 && (
+                <button
+                  type="button"
+                  className="press-scale min-h-8 whitespace-nowrap text-[11px] text-muted-foreground hover:underline hover:underline-offset-2 sm:min-h-9 sm:text-xs"
+                  onClick={() => changeStep(availableSteps[currentStepIndex - 1])}
+                >
+                  Back
+                </button>
+              )}
               <button
                 type="button"
-                className="press-scale min-h-8 whitespace-nowrap text-[11px] text-muted-foreground hover:underline hover:underline-offset-2 sm:min-h-9 sm:text-xs"
-                onClick={() => changeStep(availableSteps[currentStepIndex - 1])}
+                disabled={busy}
+                className="press-scale min-h-8 whitespace-nowrap text-[11px] text-muted-foreground hover:underline hover:underline-offset-2 disabled:opacity-50 sm:min-h-9 sm:text-xs"
+                onClick={() => void onSnooze()}
               >
-                Back
+                Snooze 15 minutes
               </button>
-            )}
+              <button
+                type="button"
+                disabled={busy}
+                className="press-scale min-h-8 whitespace-nowrap text-[11px] text-muted-foreground hover:underline hover:underline-offset-2 disabled:opacity-50 sm:min-h-9 sm:text-xs"
+                onClick={() => void onSkip()}
+              >
+                Skip today
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                className="press-scale min-h-8 whitespace-nowrap text-[11px] text-muted-foreground hover:underline hover:underline-offset-2 disabled:opacity-50 sm:min-h-9 sm:text-xs"
+                onClick={() => void onBypass()}
+              >
+                Enter Living Current
+              </button>
+            </div>
+
             <button
               type="button"
-              disabled={busy}
-              className="press-scale min-h-8 whitespace-nowrap text-[11px] text-muted-foreground hover:underline hover:underline-offset-2 disabled:opacity-50 sm:min-h-9 sm:text-xs"
-              onClick={() => void onSnooze()}
+              data-ritual-primary={isFinalStep ? '' : undefined}
+              disabled={isFinalStep && (
+                busy ||
+                buddyActive ||
+                anyExecutionBusy ||
+                visibleItems.length === 0
+              )}
+              className={`press-scale min-h-11 w-full rounded-xl px-5 text-sm font-semibold disabled:opacity-40 sm:ml-auto sm:w-auto ${
+                isFinalStep
+                  ? 'bg-foreground text-background hover:opacity-90'
+                  : 'border text-foreground hover:bg-muted'
+              }`}
+              onClick={() => {
+                if (isFinalStep) void onStartDay();
+                else changeStep(availableSteps[currentStepIndex + 1]);
+              }}
             >
-              Snooze 15 minutes
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              className="press-scale min-h-8 whitespace-nowrap text-[11px] text-muted-foreground hover:underline hover:underline-offset-2 disabled:opacity-50 sm:min-h-9 sm:text-xs"
-              onClick={() => void onSkip()}
-            >
-              Skip today
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              className="press-scale min-h-8 whitespace-nowrap text-[11px] text-muted-foreground hover:underline hover:underline-offset-2 disabled:opacity-50 sm:min-h-9 sm:text-xs"
-              onClick={() => void onBypass()}
-            >
-              Enter Living Current
+              {isFinalStep ? (busy ? 'Setting your day…' : 'Start my day') : 'Continue'}
             </button>
           </div>
-
-          <button
-            type="button"
-            data-ritual-primary={isFinalStep ? '' : undefined}
-            disabled={isFinalStep && (
-              busy ||
-              buddyActive ||
-              anyExecutionBusy ||
-              visibleItems.length === 0
-            )}
-            className={`press-scale min-h-11 w-full rounded-xl px-5 text-sm font-semibold disabled:opacity-40 sm:ml-auto sm:w-auto ${
-              isFinalStep
-                ? 'bg-foreground text-background hover:opacity-90'
-                : 'border text-foreground hover:bg-muted'
-            }`}
-            onClick={() => {
-              if (isFinalStep) void onStartDay();
-              else changeStep(availableSteps[currentStepIndex + 1]);
-            }}
-          >
-            {isFinalStep ? (busy ? 'Setting your day…' : 'Start my day') : 'Continue'}
-          </button>
         </footer>
       </div>
     </div>

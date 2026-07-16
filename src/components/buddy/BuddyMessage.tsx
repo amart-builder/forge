@@ -13,10 +13,10 @@ export default function BuddyMessage({ turn, thinking, onRetry }: {
   const isConfirmedDelete = /^CONFIRM_DELETE\b/.test(turn.user_text);
   return (
     <article className="space-y-2">
-      <div className="ml-auto w-fit max-w-[86%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-accent-blue px-3 py-2 text-sm leading-relaxed text-white">
+      <div className="ml-auto w-fit max-w-[86%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-accent-blue px-3.5 py-2.5 text-sm leading-relaxed text-white">
         {isConfirmedDelete ? 'Confirmed delete' : turn.user_text}
       </div>
-      <div className="mr-auto max-w-[92%] rounded-2xl rounded-bl-md bg-muted px-3 py-2 text-sm leading-relaxed text-foreground">
+      <div className="mr-auto max-w-[92%] rounded-2xl rounded-bl-md bg-muted px-3.5 py-2.5 text-sm leading-relaxed text-foreground">
         {turn.assistant_text ? (
           <p className="whitespace-pre-wrap">{turn.assistant_text}</p>
         ) : thinking ? (
@@ -29,7 +29,7 @@ export default function BuddyMessage({ turn, thinking, onRetry }: {
         {turn.state === 'failed' && (
           <button
             type="button"
-            className="press-scale mt-2 text-xs font-semibold text-accent-blue hover:underline hover:underline-offset-2"
+            className="mt-2 text-xs font-semibold text-accent-blue transition-transform duration-150 ease-out hover:underline hover:underline-offset-2 active:scale-[0.97] motion-reduce:transform-none"
             onClick={() => onRetry(turn.user_text)}
           >
             Retry

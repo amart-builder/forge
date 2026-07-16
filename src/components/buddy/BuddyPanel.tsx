@@ -23,6 +23,8 @@ export default function BuddyPanel() {
   const [draft, setDraft] = useState('');
   const [override, setOverride] = useState<OverrideChoice>('auto');
   const [error, setError] = useState<string>();
+  const [mounted, setMounted] = useState(open);
+  const [shown, setShown] = useState(open);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
@@ -35,7 +37,6 @@ export default function BuddyPanel() {
   const visibleTurns = streamingTurn
     ? [...historyWithoutStreaming, streamingTurn]
     : historyWithoutStreaming;
-  const lastRoute = streamingTurn ?? turns.at(-1);
   const boundaryIndex = sessionInfo?.createdAt
     ? visibleTurns.findIndex((turn) => turn.started_at >= sessionInfo.createdAt)
     : -1;
@@ -44,14 +45,34 @@ export default function BuddyPanel() {
   );
 
   useEffect(() => {
-    if (!open) return;
+    let enterFrame: number | undefined;
+    let exitTimer: number | undefined;
+    const stateFrame = window.requestAnimationFrame(() => {
+      if (open) {
+        setMounted(true);
+        enterFrame = window.requestAnimationFrame(() => setShown(true));
+        return;
+      }
+
+      setShown(false);
+      exitTimer = window.setTimeout(() => setMounted(false), 150);
+    });
+    return () => {
+      window.cancelAnimationFrame(stateFrame);
+      if (enterFrame) window.cancelAnimationFrame(enterFrame);
+      if (exitTimer) window.clearTimeout(exitTimer);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !mounted) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
     window.requestAnimationFrame(() => textareaRef.current?.focus());
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, setOpen]);
+  }, [mounted, open, setOpen]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
@@ -61,7 +82,7 @@ export default function BuddyPanel() {
       scroller.scrollTop = scroller.scrollHeight;
       nearBottomRef.current = true;
     }
-  }, [visibleTurns.length, streamingTurn?.assistant_text, thinking, open]);
+  }, [visibleTurns.length, streamingTurn?.assistant_text, thinking, mounted, open]);
 
   async function submitText(text: string) {
     if (!text.trim() || streamingTurn) return;
@@ -103,41 +124,50 @@ export default function BuddyPanel() {
     }
   }
 
-  const routeLabel = lastRoute
-    ? `${lastRoute.model === 'opus' ? 'Opus' : 'Sonnet'} · ${lastRoute.effort}`
-    : 'Auto route';
+  if (!mounted) return null;
 
   return (
     <section
       aria-label="Buddy chat"
       aria-hidden={!open}
-      className={`fixed bottom-24 right-4 z-[120] flex max-h-[70dvh] w-[min(24rem,calc(100vw-2rem))] origin-bottom-right flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl transition-[opacity,transform,visibility] duration-200 ease-[var(--ease-out-forge)] motion-reduce:transition-none ${
-        open ? 'visible scale-100 opacity-100' : 'invisible pointer-events-none scale-90 opacity-0'
+      inert={!open}
+      className={`fixed bottom-[5.5rem] right-4 z-[120] flex max-h-[calc(100dvh-7.5rem)] w-[26rem] max-w-[calc(100vw-2rem)] origin-bottom-right flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl transition-[opacity,transform] ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transform-none ${
+        shown
+          ? 'scale-100 translate-y-0 opacity-100 duration-200'
+          : 'pointer-events-none scale-[0.96] translate-y-2 opacity-0 duration-150'
       }`}
     >
       <header className="border-b bg-card/95 px-4 py-3 backdrop-blur-xl">
-        <div className="flex items-center gap-2.5">
-          <BuddyGlyph className="h-8 w-7" />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-baseline gap-2">
-              <h2 className="text-sm font-semibold">Buddy</h2>
-              <span className="truncate text-[10px] text-muted-foreground">{sessionInfo?.hostname}</span>
-              {sessionInfo && (
-                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                  ${sessionInfo.totalCostUsd.toFixed(2)} · {sessionInfo.turnCount} {sessionInfo.turnCount === 1 ? 'turn' : 'turns'}
-                </span>
-              )}
-            </div>
-            <span className="mt-0.5 inline-flex rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium capitalize text-muted-foreground">
-              {routeLabel}
-            </span>
+        <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <BuddyGlyph className="h-7 w-6 shrink-0" />
+            <h2 className="truncate text-sm font-semibold">Buddy</h2>
+          </div>
+          <div
+            className="flex shrink-0 rounded-lg bg-muted p-0.5"
+            role="group"
+            aria-label="Buddy response depth"
+          >
+            {(['auto', 'fast', 'deep'] as const).map((choice) => (
+              <button
+                key={choice}
+                type="button"
+                aria-pressed={override === choice}
+                className={`min-h-7 rounded-md px-2.5 text-[11px] font-medium capitalize transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transform-none ${
+                  override === choice ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                }`}
+                onClick={() => setOverride(choice)}
+              >
+                {choice}
+              </button>
+            ))}
           </div>
           <button
             type="button"
             aria-label="Start a new Buddy conversation"
             title="New conversation"
             disabled={Boolean(streamingTurn)}
-            className="press-scale grid size-9 place-items-center rounded-xl text-lg text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+            className="grid size-8 shrink-0 place-items-center rounded-lg text-lg text-muted-foreground transition-transform duration-150 ease-out hover:bg-muted hover:text-foreground active:scale-[0.97] motion-reduce:transform-none disabled:opacity-40"
             onClick={() => void reset()}
           >
             ↻
@@ -145,32 +175,17 @@ export default function BuddyPanel() {
           <button
             type="button"
             aria-label="Close Buddy chat"
-            className="press-scale grid size-9 place-items-center rounded-xl text-xl leading-none text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="grid size-8 shrink-0 place-items-center rounded-lg text-xl leading-none text-muted-foreground transition-transform duration-150 ease-out hover:bg-muted hover:text-foreground active:scale-[0.97] motion-reduce:transform-none"
             onClick={() => setOpen(false)}
           >
             ×
           </button>
         </div>
-        <div className="mt-2 flex w-fit rounded-lg bg-muted p-0.5" aria-label="Buddy response depth">
-          {(['auto', 'fast', 'deep'] as const).map((choice) => (
-            <button
-              key={choice}
-              type="button"
-              aria-pressed={override === choice}
-              className={`press-scale min-h-7 rounded-md px-2.5 text-[11px] font-medium capitalize ${
-                override === choice ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-              }`}
-              onClick={() => setOverride(choice)}
-            >
-              {choice}
-            </button>
-          ))}
-        </div>
       </header>
 
       <div
         ref={scrollerRef}
-        className="min-h-28 flex-1 space-y-4 overflow-y-auto px-4 py-4"
+        className="h-[min(65dvh,36rem)] min-h-28 flex-1 space-y-4 overflow-y-auto overscroll-contain scroll-smooth px-4 py-4 motion-reduce:scroll-auto"
         onScroll={(event) => {
           const target = event.currentTarget;
           nearBottomRef.current = target.scrollHeight - target.scrollTop - target.clientHeight <= 80;
@@ -216,20 +231,20 @@ export default function BuddyPanel() {
             maxLength={4000}
             rows={2}
             disabled={Boolean(streamingTurn)}
-            className="max-h-40 min-h-11 min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-accent-blue/40 disabled:opacity-60"
+            className="max-h-[7.5rem] min-h-11 min-w-0 flex-1 resize-none overflow-y-auto rounded-xl border bg-background px-3 py-2 text-sm leading-5 text-foreground outline-none focus:ring-2 focus:ring-accent-blue/40 disabled:opacity-60"
             placeholder={streamingTurn ? 'Buddy is working…' : 'Ask Buddy…'}
             onKeyDown={onComposerKeyDown}
             onChange={(event) => {
               setDraft(event.target.value);
               event.currentTarget.style.height = 'auto';
-              event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 160)}px`;
+              event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 120)}px`;
             }}
           />
           <button
             type="submit"
             aria-label="Send to Buddy"
             disabled={!draft.trim() || Boolean(streamingTurn)}
-            className="press-scale min-h-11 min-w-16 rounded-xl border px-3 text-sm font-semibold text-foreground transition-[color,background-color,transform] duration-150 ease-[var(--ease-out-forge)] hover:bg-muted motion-reduce:transform-none motion-reduce:transition-none disabled:text-muted-foreground disabled:opacity-50"
+            className="min-h-11 min-w-16 rounded-xl border px-3 text-sm font-semibold text-foreground transition-[color,background-color,transform] duration-150 ease-out hover:bg-muted active:scale-[0.97] motion-reduce:transform-none disabled:text-muted-foreground disabled:opacity-50"
           >
             Send
           </button>
