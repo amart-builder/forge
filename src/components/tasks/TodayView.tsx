@@ -104,16 +104,9 @@ type UndoAction = {
   run: () => Promise<void>;
 };
 
-function defaultPlanningModel(item: DayPlanItem): 'sonnet' | 'opus' {
-  return item.owner === 'together' ||
-    JSON.stringify({
-      title: item.title,
-      outcome: item.outcome,
-      definitionOfDone: item.definitionOfDone,
-      whyToday: item.whyToday,
-    }).length >= 900
-    ? 'opus'
-    : 'sonnet';
+function defaultPlanningModel(item: DayPlanItem): 'fable' {
+  void item;
+  return 'fable';
 }
 
 const TODAY_ALIASES = new Set(['Must happen today', 'Needs to happen today', 'Today']);
@@ -1952,11 +1945,22 @@ function TodayExperience({
                   focusedBoardExecution.item.owner === 'together') && (
                 <div className="current-hero-execution" aria-label={`Claude planning for ${focusedTask.title}`}>
                   {focusedBoardExecution.presentation.action === 'open' &&
+                    focusedBoardExecution.presentation.reviewable &&
                     focusedBoardExecution.run?.claudeSessionId ? (
                     <OpenInClaudeCode
                       sessionId={focusedBoardExecution.run.claudeSessionId}
                       title={focusedTask.title}
                     />
+                  ) : focusedBoardExecution.run &&
+                    ['queued', 'starting', 'running', 'cancelling']
+                      .includes(focusedBoardExecution.run.status) ? (
+                    <button
+                      type="button"
+                      disabled
+                      className="min-h-9 rounded-full border border-accent-blue/40 bg-white/55 px-4 text-xs font-semibold text-foreground opacity-60"
+                    >
+                      Working…
+                    </button>
                   ) : focusedBoardExecution.presentation.showKickoff ? (
                     <button
                       type="button"
@@ -1969,14 +1973,10 @@ function TodayExperience({
                         const retryMode = focusedBoardExecution.presentation.action === 'retry'
                           ? configured?.mode ?? focusedBoardExecution.run?.mode ?? 'plan_review'
                           : 'plan_review';
-                        const retryModel = focusedBoardExecution.presentation.action === 'retry'
-                          ? configured?.modelAlias ?? focusedBoardExecution.run?.modelAlias ??
-                            defaultPlanningModel(focusedBoardExecution.item)
-                          : defaultPlanningModel(focusedBoardExecution.item);
                         void dayRitual.kickoffExecution(
                           focusedBoardExecution.item.id,
                           retryMode,
-                          retryModel,
+                          defaultPlanningModel(focusedBoardExecution.item),
                           retryMode === 'autonomous'
                             ? configured?.workspaceId ?? focusedBoardExecution.run?.workspaceId
                             : undefined,
@@ -2084,6 +2084,15 @@ function TodayExperience({
                         label={execution.presentation.statusLabel}
                         className="current-execution-chip mt-1"
                       />
+                    ) : ['queued', 'starting', 'running', 'cancelling']
+                        .includes(execution.run.status) ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="current-execution-chip mt-1 opacity-60"
+                      >
+                        Working…
+                      </button>
                     ) : (
                       <RunStatusChip
                         status={execution.run.status}

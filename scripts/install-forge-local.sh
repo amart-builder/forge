@@ -170,6 +170,58 @@ EOF
   echo "Installed the Mini morning-brief agent (7:30 local): $MINI_BRIEF_PLIST"
   echo "Brief goals: $ATLAS_ROOT/brain/GOALS.md"
   echo "Logs: $LOG_DIR/forge-morning-brief.log"
+fi
+
+# --- Install the Forge SessionStart hook without replacing Claude settings ---
+HOOK_SRC="$REPO_DIR/scripts/hooks/forge-orchestrator.sh"
+HOOK_DIR="$HOME/.claude/hooks"
+HOOK_DEST="$HOOK_DIR/forge-orchestrator.sh"
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+mkdir -p "$HOOK_DIR" "$(dirname "$CLAUDE_SETTINGS")"
+cp "$HOOK_SRC" "$HOOK_DEST"
+chmod +x "$HOOK_DEST"
+"$NODE_REAL" - "$CLAUDE_SETTINGS" "$HOOK_DEST" <<'NODE'
+const fs = require('node:fs');
+const [settingsPath, hookPath] = process.argv.slice(2);
+let settings = {};
+if (fs.existsSync(settingsPath)) {
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  } catch {
+    console.error('~/.claude/settings.json is not valid JSON; fix it and re-run');
+    process.exit(1);
+  }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    throw new Error('Claude settings must contain a JSON object.');
+  }
+}
+settings.hooks ??= {};
+if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) {
+  throw new Error('Claude settings hooks must contain a JSON object.');
+}
+settings.hooks.SessionStart ??= [];
+if (!Array.isArray(settings.hooks.SessionStart)) {
+  throw new Error('Claude SessionStart hooks must contain an array.');
+}
+const installed = settings.hooks.SessionStart.some((entry) =>
+  entry && typeof entry === 'object' && entry.matcher === 'resume' &&
+  Array.isArray(entry.hooks) && entry.hooks.some((hook) =>
+    hook && typeof hook === 'object' && typeof hook.command === 'string' &&
+    (hook.command === hookPath || hook.command.endsWith('/forge-orchestrator.sh')))
+);
+if (!installed) {
+  settings.hooks.SessionStart.push({
+    matcher: 'resume',
+    hooks: [{ type: 'command', command: hookPath }],
+  });
+  const temporaryPath = `${settingsPath}.forge-${process.pid}.tmp`;
+  fs.writeFileSync(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(temporaryPath, settingsPath);
+}
+NODE
+echo "Installed the Forge orchestrator hook into $HOOK_DEST"
+
+if [ "$MINI" = "1" ]; then
   exit 0
 fi
 
@@ -282,6 +334,8 @@ cat > "$WORKER_PLIST" <<EOF
     <string>1</string>
     <key>FORGE_CLAUDE_BIN</key>
     <string>$CLAUDE_BIN</string>
+    <key>FORGE_BUDDY_DEEPLINKS</key>
+    <string>$BUDDY_DEEPLINKS</string>
     <key>FORGE_BRIEF_WEB_BASE</key>
     <string>http://127.0.0.1:3200</string>
   </dict>

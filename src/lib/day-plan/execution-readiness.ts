@@ -10,8 +10,8 @@ import type {
 } from "./types";
 
 export function selectExecutionModel(item: DayPlanItem): DayPlanExecutionConfig["modelAlias"] {
-  const contextSize = JSON.stringify(normalizedBrief(item)).length;
-  return item.owner === "together" || contextSize >= 900 ? "opus" : "sonnet";
+  void item;
+  return "fable";
 }
 
 export type ForgeExecutionWorkspace = {

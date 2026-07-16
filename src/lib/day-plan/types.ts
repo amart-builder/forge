@@ -26,7 +26,7 @@ export type SettlementState =
 
 export type DayPlanOwner = "me" | "claude" | "together";
 export type DayPlanExecutionMode = "plan_review" | "autonomous";
-export type DayPlanModelAlias = "sonnet" | "opus";
+export type DayPlanModelAlias = "sonnet" | "opus" | "fable";
 export type DayPlanCommitment = "ink" | "pencil";
 export type DayPlanItemDecision =
   | "pending"

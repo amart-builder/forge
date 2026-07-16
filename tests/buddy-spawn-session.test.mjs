@@ -53,6 +53,7 @@ test('spawn-session route gates requests and confines real directories to ~/Atla
   const baseDeps = {
     store,
     homeDir: home,
+    markSession: () => undefined,
     stat: () => ({ isDirectory: () => true }),
   };
 
@@ -71,14 +72,17 @@ test('spawn-session route gates requests and confines real directories to ~/Atla
     unref: () => child,
   });
   let spawnCall;
+  const marked = [];
   const validDir = `${home}/Atlas/Projects/demo`;
   const valid = await handleSpawnSessionPost(request(validDir), {
     ...baseDeps,
     realpath: (value) => value,
     randomId: () => 'session-1',
+    markSession: (sessionId) => marked.push(sessionId),
     seed: (input) => seedBuddySession({
       ...input,
       spawnImpl: (executable, args, options) => {
+        assert.deepEqual(marked, []);
         spawnCall = { executable, args, options };
         return child;
       },
@@ -87,19 +91,21 @@ test('spawn-session route gates requests and confines real directories to ~/Atla
   assert.equal(valid.status, 200);
   assert.deepEqual(await valid.json(), { sessionId: 'session-1', state: 'seeding' });
   assert.equal(store.getSpawnedSession('session-1').state, 'started');
+  assert.deepEqual(marked, ['session-1']);
   assert.equal(isBuddySpawnedSessionOpenable(store.getSpawnedSession('session-1').state), true);
   assert.equal(spawnCall.options.cwd, validDir);
   assert.equal(spawnCall.options.detached, true);
   assert.deepEqual(spawnCall.args.slice(0, 5), ['-p', '--session-id', 'session-1', '--permission-mode', 'plan']);
   assert.ok(spawnCall.args.includes('--disable-slash-commands'));
-  assert.deepEqual(spawnCall.args.slice(spawnCall.args.indexOf('--max-budget-usd'), -1), [
-    '--max-budget-usd', '0.15',
-  ]);
+  assert.equal(spawnCall.args[spawnCall.args.indexOf('--model') + 1], 'claude-fable-5');
+  assert.equal(spawnCall.args[spawnCall.args.indexOf('--effort') + 1], 'high');
+  assert.equal(spawnCall.args[spawnCall.args.indexOf('--max-budget-usd') + 1], '1.00');
   const seedPrompt = child.stdin.read()?.toString() ?? '';
   assert.match(seedPrompt, /Do not read files, use tools, edit anything, or begin the work/);
   assert.match(seedPrompt, /at most 2-3 short bullets/);
   assert.match(seedPrompt, /then STOP/);
   assert.match(seedPrompt, /USER_REQUEST:\nPlan the work/);
+  assert.match(seedPrompt, /Skill tool with skill: orchestrator/);
   child.stderr.write('budget reached');
   child.emit('close', 1);
   await new Promise((resolve) => setImmediate(resolve));
@@ -121,10 +127,12 @@ test('spawn-session route gates requests and confines real directories to ~/Atla
   ), { store });
   assert.equal((await defaultConfig.json()).deepLinksEnabled, true);
 
+  const failedMarks = [];
   const neverStarted = await handleSpawnSessionPost(request(validDir), {
     ...baseDeps,
     realpath: (value) => value,
     randomId: () => 'session-never-started',
+    markSession: (sessionId) => failedMarks.push(sessionId),
     seed: (input) => seedBuddySession({
       ...input,
       spawnImpl: () => { throw new Error('spawn ENOENT'); },
@@ -133,6 +141,7 @@ test('spawn-session route gates requests and confines real directories to ~/Atla
   assert.equal(neverStarted.status, 200);
   const neverStartedRow = store.getSpawnedSession('session-never-started');
   assert.equal(neverStartedRow.state, 'launch_failed');
+  assert.deepEqual(failedMarks, []);
   assert.equal(isBuddySpawnedSessionOpenable(neverStartedRow.state), false);
   assert.equal(isBuddySpawnedSessionOpenable('failed'), true);
 

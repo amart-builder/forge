@@ -18,13 +18,15 @@ export function buildBuddySeedCommand(input: {
       "-p",
       "--session-id", input.sessionId,
       "--permission-mode", "plan",
+      "--model", "claude-fable-5",
+      "--effort", "high",
       "--output-format", "json",
       "--name", input.title,
-      "--max-budget-usd", "0.15",
+      "--max-budget-usd", "1.00",
       "--disable-slash-commands",
     ],
     cwd: input.dir,
-    stdin: `This session was started from Forge. Do not read files, use tools, edit anything, or begin the work. Reply with at most 2-3 short bullets outlining how you would approach the request, then STOP. The request below is context for the future desktop session.\n\nUSER_REQUEST:\n${input.prompt}`,
+    stdin: `This session was started from Forge. Do not read files, use tools, edit anything, or begin the work. Reply with at most 2-3 short bullets outlining how you would approach the request, then STOP. The request below is context for the future desktop session.\n\nUSER_REQUEST:\n${input.prompt}\n\nIf a human resumes this session interactively, invoke the Skill tool with skill: orchestrator before continuing the task.`,
   };
 }
 

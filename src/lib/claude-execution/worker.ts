@@ -43,6 +43,7 @@ import {
   morningBriefModelConfig,
   parseMorningBriefOutput,
 } from "./brief-commands";
+import { markForgeOrchestratorSession } from "./orchestrator-session";
 
 type SpawnImpl = typeof spawn;
 
@@ -59,6 +60,8 @@ export type ClaudeWorkerOptions = {
   timeoutMs?: number;
   terminationGraceMs?: number;
   abortSignal?: AbortSignal;
+  markSession?: (sessionId: string) => void;
+  openSession?: (sessionId: string) => void;
 };
 
 type ChildResult = {
@@ -69,6 +72,26 @@ type ChildResult = {
   overflowed: boolean;
   terminatedBy?: "timeout" | "cancelled" | "shutdown";
 };
+
+export function openClaudeSessionInBackground(
+  sessionId: string,
+  spawnImpl: SpawnImpl = spawn,
+): void {
+  if (process.platform !== "darwin" || process.env.FORGE_BUDDY_DEEPLINKS === "0") return;
+  try {
+    const child = spawnImpl(
+      "/usr/bin/open",
+      ["-g", `claude://resume?session=${encodeURIComponent(sessionId)}`],
+      { detached: true, stdio: "ignore" },
+    );
+    child.once("error", (error) => {
+      console.error("Could not open Forge session in Claude Code.", error);
+    });
+    child.unref();
+  } catch (error) {
+    console.error("Could not open Forge session in Claude Code.", error);
+  }
+}
 
 export function minimalChildEnvironment(): NodeJS.ProcessEnv {
   const allowed = [
@@ -337,6 +360,11 @@ export async function runOneExecution(options: ClaudeWorkerOptions): Promise<boo
       onSpawn: (child) => {
         childPid = child.pid;
         if (!childPid) return;
+        try {
+          (options.markSession ?? markForgeOrchestratorSession)(run.claudeSessionId);
+        } catch (error) {
+          console.error("Could not mark Forge orchestrator session.", error);
+        }
         options.store.markExecutionRunRunning(run.id, childPid);
       },
       onPulse: () => childPid
@@ -355,7 +383,7 @@ export async function runOneExecution(options: ClaudeWorkerOptions): Promise<boo
       }
     }
     const interrupted = result.terminatedBy === "shutdown" || result.terminatedBy === "timeout";
-    options.store.finishExecutionRun({
+    const finished = options.store.finishExecutionRun({
       runId: run.id,
       exitCode: resultSummary ? result.exitCode : undefined,
       interrupted,
@@ -371,6 +399,16 @@ export async function runOneExecution(options: ClaudeWorkerOptions): Promise<boo
               ? undefined
               : resultError ?? (childPid ? "claude_failed" : "spawn_failed"),
     });
+    if (
+      resultSummary &&
+      ["plan_ready", "ready_to_join", "awaiting_review"].includes(finished.status)
+    ) {
+      try {
+        (options.openSession ?? openClaudeSessionInBackground)(finished.claudeSessionId);
+      } catch (error) {
+        console.error("Could not open Forge session in Claude Code.", error);
+      }
+    }
   } catch (error) {
     options.store.finishExecutionRun({
       runId: run.id,
@@ -505,7 +543,13 @@ export async function runOneMorningBrief(
   try {
     const collect =
       options.collectBriefSources ??
-      ((store: DayPlanStore) => collectMorningBriefSources({ store }));
+      ((store: DayPlanStore) =>
+        collectMorningBriefSources({
+          store,
+          targetLocalDate: claimed.targetLocalDate,
+          targetTimezone,
+          now: clock(),
+        }));
     const collected = await collect(options.store);
     const context = assembleMorningBriefContext(collected.sources, {
       now: clock(),

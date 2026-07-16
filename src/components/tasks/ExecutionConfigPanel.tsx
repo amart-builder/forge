@@ -20,7 +20,7 @@ const ACTIVE_RUN_STATUSES = ['queued', 'starting', 'running', 'cancelling'];
 export type ExecutionConfigPanelProps = {
   item: DayPlanItem;
   ariaTitle: string;
-  // Combined text used only to pick a default model by rough task complexity.
+  // Kept in the shared panel contract for its existing callers.
   complexityText: string;
   executionItem?: DayPlanExecutionState['items'][number];
   runs: DayPlanExecutionState['runs'];
@@ -84,10 +84,8 @@ export default function ExecutionConfigPanel({
   const selectedMode: DayPlanExecutionMode = item.owner === 'together'
     ? 'plan_review'
     : executionDraft.mode ?? configuredMode ?? 'plan_review';
-  const taskComplexity = complexityText.length;
-  const selectedModel: DayPlanModelAlias = item.owner === 'together' || taskComplexity >= 900
-    ? 'opus'
-    : 'sonnet';
+  void complexityText;
+  const selectedModel: DayPlanModelAlias = 'fable';
   const selectedWorkspaceId = executionDraft.workspaceId ?? (
     configuredMode === 'autonomous' ? executionItem?.config?.workspaceId : undefined
   ) ?? '';
@@ -140,8 +138,7 @@ export default function ExecutionConfigPanel({
     ? currentRun
     : undefined;
   const openableRun = actionRun &&
-    ['queued', 'starting', 'running', 'plan_ready', 'ready_to_join', 'awaiting_review']
-      .includes(actionRun.status) &&
+    ['plan_ready', 'ready_to_join', 'awaiting_review'].includes(actionRun.status) &&
     actionRun.claudeSessionId
     ? actionRun
     : undefined;
@@ -302,7 +299,17 @@ export default function ExecutionConfigPanel({
           {error}
         </p>
       )}
-      {openableRun && (
+      {activeRun ? (
+        <div className="panel-pop-in mt-2 flex justify-end">
+          <button
+            type="button"
+            disabled
+            className="min-h-9 shrink-0 rounded-lg border border-accent-blue/50 bg-accent-blue/10 px-3 text-xs font-semibold text-foreground opacity-60"
+          >
+            Working…
+          </button>
+        </div>
+      ) : openableRun && (
         <div className="panel-pop-in mt-2 flex justify-end">
           <OpenInClaudeCode sessionId={openableRun.claudeSessionId} title={ariaTitle} />
         </div>

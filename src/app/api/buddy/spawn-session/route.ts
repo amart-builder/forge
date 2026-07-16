@@ -7,6 +7,7 @@ import { getBuddyStore, type BuddyStore } from "@/lib/buddy/store";
 import { seedBuddySession } from "@/lib/buddy/spawn-session";
 import { getQuietCurrentCsrfToken } from "@/lib/quiet-current/store";
 import { hasDayPlanRouteAccess } from "@/lib/request-security";
+import { markForgeOrchestratorSession } from "@/lib/claude-execution/orchestrator-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,7 @@ type SpawnRouteDependencies = {
   realpath?: typeof realpathSync;
   stat?: typeof statSync;
   seed?: typeof seedBuddySession;
+  markSession?: typeof markForgeOrchestratorSession;
 };
 
 class SpawnRequestError extends Error {}
@@ -109,6 +111,10 @@ export async function handleSpawnSessionPost(
     const store = dependencies.store ?? getBuddyStore();
     store.createSpawnedSession({ sessionId, dir, title });
     (dependencies.seed ?? seedBuddySession)({ store, sessionId, dir, prompt, title });
+    const seededState = store.getSpawnedSession(sessionId)?.state;
+    if (seededState && ["started", "ready", "incomplete"].includes(seededState)) {
+      (dependencies.markSession ?? markForgeOrchestratorSession)(sessionId);
+    }
     return NextResponse.json({ sessionId, state: "seeding" });
   } catch (error) {
     if (!(error instanceof SpawnRequestError)) {

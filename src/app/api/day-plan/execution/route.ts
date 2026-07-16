@@ -27,7 +27,7 @@ export const dynamic = "force-dynamic";
 const MAX_BODY_BYTES = 8 * 1024;
 const MUTATION_ID = /^[A-Za-z0-9:_-]+$/;
 const MODES = new Set<DayPlanExecutionMode>(["plan_review", "autonomous"]);
-const MODELS = new Set<DayPlanModelAlias>(["sonnet", "opus"]);
+const MODELS = new Set<DayPlanModelAlias>(["sonnet", "opus", "fable"]);
 
 function text(value: unknown, name: string, maximum: number, required = true): string | undefined {
   if (value === undefined || value === null || value === "") {

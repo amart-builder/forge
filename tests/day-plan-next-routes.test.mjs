@@ -10,10 +10,11 @@ test('execution route accepts configure and kickoff enums without paths or CLI f
     expectedVersion: 3,
     mutationId: 'configure:item-a',
     mode: 'plan_review',
-    modelAlias: 'sonnet',
+    modelAlias: 'fable',
   });
   assert.equal(configured.action, 'configure');
   assert.equal(configured.input.workspaceId, undefined);
+  assert.equal(configured.input.modelAlias, 'fable');
 
   const kickoff = parseExecutionPostBody({
     action: 'kickoff',

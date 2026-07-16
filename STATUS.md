@@ -18,8 +18,8 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-07-16T15:30:37-0700
-- **task:** kickoff redesign build (Task 6)
+- **since:** 2026-07-16T16:19:20-0700
+- **task:** Forge kickoff relay: verification + ship
 <!-- END active-session -->
 
 ---
@@ -38,6 +38,14 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - Closed tasks require direct evidence before marking done.
 
 ## Current State
+
+### 2026-07-16 Forge kickoff relay upgraded to Fable 5 + orchestrator (working tree)
+
+- Every new day-plan and Buddy kickoff now seeds Claude with Fable 5, high effort, the raised mode-specific budget, and an orchestrator resume instruction. Legacy Sonnet and Opus aliases remain executable for already-stored runs.
+- Kickoff and Buddy session IDs are appended to the Forge orchestrator marker file. Successful kickoff runs background-open their resumable Claude session on macOS when deep links are enabled. Live UI states show a disabled `Working…` indicator until the session is ready to open.
+- Added the repo-owned SessionStart hook and an idempotent installer merge for Claude settings. Existing settings and hooks are preserved; the installer itself was not run.
+- Verification: TypeScript and scoped ESLint passed; affected worker, Buddy spawn, execution, presentation, and route tests passed; hook match/non-match and shell syntax checks passed. No build was run because the live service owns `.next`.
+- Not committed. Next action: review the working-tree diff, then run the normal operator-controlled install/restart flow when ready.
 
 ### 2026-07-15 Legacy assistant-turn queue retired (working tree)
 
