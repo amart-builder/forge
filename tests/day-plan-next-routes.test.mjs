@@ -1,33 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseAssistantTurnPostBody } from '../src/app/api/day-plan/assistant-turn/route.ts';
 import { parseExecutionPostBody } from '../src/app/api/day-plan/execution/route.ts';
-
-test('assistant route accepts only a bounded versioned prompt contract', () => {
-  assert.deepEqual(
-    parseAssistantTurnPostBody({
-      planId: 'plan-a',
-      expectedVersion: 3,
-      mutationId: 'assistant:plan-a:3',
-      userText: '  Move the proposal first.  ',
-    }),
-    {
-      id: 'assistant:plan-a:3',
-      planId: 'plan-a',
-      expectedVersion: 3,
-      userText: 'Move the proposal first.',
-    },
-  );
-  assert.throws(
-    () => parseAssistantTurnPostBody({
-      planId: 'plan-a',
-      expectedVersion: 0,
-      mutationId: 'bad id',
-      userText: '',
-    }),
-    /invalid format|positive integer|required/,
-  );
-});
 
 test('execution route accepts configure and kickoff enums without paths or CLI flags', () => {
   const configured = parseExecutionPostBody({

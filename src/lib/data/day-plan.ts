@@ -6,7 +6,6 @@ import type {
 } from "../day-plan/brief";
 import type {
   DayPlan,
-  DayPlanAssistantTurn,
   DayPlanExecutionConfig,
   DayPlanExecutionConfigResult,
   DayPlanExecutionReadiness,
@@ -169,31 +168,6 @@ export function markMorningBriefSalesAction(input: {
     action: "brief_action",
     ...input,
   });
-}
-
-export function createDayPlanAssistantTurn(input: {
-  planId: string;
-  expectedVersion: number;
-  mutationId: string;
-  userText: string;
-}): Promise<{ turn: DayPlanAssistantTurn; replayed: boolean }> {
-  return postProtected("/api/day-plan/assistant-turn", input);
-}
-
-export async function getDayPlanAssistantTurn(
-  id: string,
-): Promise<DayPlanAssistantTurn> {
-  const response = await fetch(
-    `/api/day-plan/assistant-turn?id=${encodeURIComponent(id)}`,
-    { cache: "no-store" },
-  );
-  const payload = await responsePayload(response);
-  if (!response.ok) {
-    throw new Error(
-      typeof payload.error === "string" ? payload.error : "Assistant turn failed.",
-    );
-  }
-  return payload.turn as DayPlanAssistantTurn;
 }
 
 export function configureDayPlanExecution(

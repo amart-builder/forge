@@ -18,8 +18,8 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-07-15T20:50:25-0700
-- **task:** commit buddy feature
+- **since:** 2026-07-15T21:17:04-0700
+- **task:** commit assistant-lane retirement
 <!-- END active-session -->
 
 ---
@@ -38,6 +38,12 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - Closed tasks require direct evidence before marking done.
 
 ## Current State
+
+### 2026-07-15 Legacy assistant-turn queue retired (working tree)
+
+- Removed the dead Morning Arrival assistant-turn route, async worker lane, planner command, client helpers, queue-only store methods, and lane-only tests. The live assistant-apply path, shared proposal patching, assistant-turn table, execution lane, and morning-brief lane remain intact.
+- Verification: `npx tsc --noEmit` passed and `node --test --import tsx tests/*.test.mjs` passed 240 of 240 tests. No build was run because the live server owns the build output.
+- Not committed. Next action: the president runs the build, then decides whether to commit the retirement.
 
 ### 2026-07-15 Morning Arrival rebuilt as a guided 3-step briefing (president mode, evening session)
 

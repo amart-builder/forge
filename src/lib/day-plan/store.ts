@@ -708,14 +708,6 @@ export function createDayPlanStore(options: {
   const selectPendingTaskMutations = db.prepare(
     "SELECT * FROM day_plan_task_mutations WHERE state = 'pending' ORDER BY created_at, sequence, id",
   );
-  const selectNextAssistantTurn = db.prepare(
-    `SELECT * FROM day_plan_assistant_turns
-     WHERE state = 'queued'
-       AND NOT EXISTS (
-         SELECT 1 FROM day_plan_assistant_turns active WHERE active.state = 'running'
-       )
-     ORDER BY created_at, id LIMIT 1`,
-  );
   const selectExecutionConfig = db.prepare(
     "SELECT * FROM day_plan_execution_configs WHERE day_plan_id = ? AND item_id = ?",
   );
@@ -1202,62 +1194,6 @@ export function createDayPlanStore(options: {
     });
   }
 
-  function createAssistantTurn(input: {
-    id: string;
-    planId: string;
-    expectedVersion: number;
-    userText: string;
-  }): { turn: DayPlanAssistantTurn; replayed: boolean } {
-    return immediate(() => {
-      const existing = getAssistantTurn(input.id);
-      if (existing) {
-        if (
-          existing.dayPlanId !== input.planId ||
-          existing.baseVersion !== input.expectedVersion ||
-          existing.userText !== input.userText.trim()
-        ) {
-          throw new DayPlanInvalidTransition("Assistant turn ID was already used.");
-        }
-        return { turn: existing, replayed: true };
-      }
-      const plan = getPlan(input.planId);
-      if (!plan) throw new DayPlanNotFound();
-      if (plan.version !== input.expectedVersion) throw new DayPlanVersionConflict(plan);
-      requireArrivalEditing(plan);
-      const userText = input.userText.trim();
-      if (!userText) throw new DayPlanInvalidTransition("Assistant prompt cannot be empty.");
-      if (userText.length > 4000) {
-        throw new DayPlanInvalidTransition("Assistant prompt is too long.");
-      }
-      const createdAt = now().toISOString();
-      db.prepare(
-        `INSERT INTO day_plan_assistant_turns
-          (id, day_plan_id, base_version, user_text, state, created_at)
-         VALUES (?, ?, ?, ?, 'queued', ?)`,
-      ).run(input.id, plan.id, plan.version, userText, createdAt);
-      // Submitting a refine-box turn is a real interaction; freeze the arrival.
-      stampArrivalInteraction(plan.id, createdAt);
-      return { turn: getAssistantTurn(input.id)!, replayed: false };
-    });
-  }
-
-  function claimNextAssistantTurn(): DayPlanAssistantTurn | undefined {
-    return immediate(() => {
-      const row = selectNextAssistantTurn.get() as AssistantTurnRow | undefined;
-      if (!row) return undefined;
-      const plan = getPlan(row.day_plan_id);
-      if (!plan) throw new DayPlanNotFound();
-      const startedAt = now().toISOString();
-      const changed = db.prepare(
-        `UPDATE day_plan_assistant_turns
-         SET state = 'running', base_version = ?, started_at = ?
-         WHERE id = ? AND state = 'queued'`,
-      ).run(plan.version, startedAt, row.id);
-      if (changed.changes !== 1) return undefined;
-      return getAssistantTurn(row.id);
-    });
-  }
-
   function applyValidatedAssistantPatch(input: {
     plan: DayPlan;
     proposal: DayPlanAssistantProposal;
@@ -1348,58 +1284,6 @@ export function createDayPlanStore(options: {
     return { plan, createdItemIds };
   }
 
-  function completeAssistantTurn(
-    turnId: string,
-    proposalInput: DayPlanAssistantProposal,
-  ): { turn: DayPlanAssistantTurn; plan?: DayPlan } {
-    return immediate(() => {
-      const row = selectAssistantTurn.get(turnId) as AssistantTurnRow | undefined;
-      if (!row) throw new DayPlanInvalidTransition("Assistant turn not found.");
-      if (row.state === "applied" || row.state === "proposed" || row.state === "conflict") {
-        return { turn: assistantTurnFromRow(row), plan: getPlan(row.day_plan_id) };
-      }
-      if (row.state !== "running") {
-        throw new DayPlanInvalidTransition("Assistant turn is not running.");
-      }
-      const plan = getPlan(row.day_plan_id);
-      if (!plan) throw new DayPlanNotFound();
-      const finishedAt = now().toISOString();
-      if (plan.version !== row.base_version) {
-        db.prepare(
-          `UPDATE day_plan_assistant_turns
-           SET state = 'conflict', error_code = 'version_conflict', finished_at = ?
-           WHERE id = ?`,
-        ).run(finishedAt, row.id);
-        return { turn: getAssistantTurn(row.id)!, plan };
-      }
-      requireArrivalEditing(plan);
-      const proposal = validateAssistantProposal(plan, proposalInput);
-      if (proposal.operations.length === 0) {
-        db.prepare(
-          `UPDATE day_plan_assistant_turns
-           SET state = 'proposed', proposal_json = ?, finished_at = ?
-           WHERE id = ?`,
-        ).run(JSON.stringify(proposal), finishedAt, row.id);
-        return { turn: getAssistantTurn(row.id)!, plan };
-      }
-
-      applyValidatedAssistantPatch({
-        plan,
-        proposal,
-        assistantTurnId: row.id,
-        baseVersion: row.base_version,
-        finishedAt,
-      });
-      db.prepare(
-        `UPDATE day_plan_assistant_turns
-         SET state = 'applied', proposal_json = ?, result_version = ?,
-             finished_at = ?, applied_at = ?
-         WHERE id = ?`,
-      ).run(JSON.stringify(proposal), plan.version, finishedAt, finishedAt, row.id);
-      return { turn: getAssistantTurn(row.id)!, plan };
-    });
-  }
-
   function applyAssistantOperations(input: {
     expectedVersion: number;
     operations: DayPlanAssistantOperation[];
@@ -1440,30 +1324,6 @@ export function createDayPlanStore(options: {
       ).run(JSON.stringify(proposal), plan.version, timestamp, timestamp, turnId);
       return { turn: getAssistantTurn(turnId)!, plan, createdItemIds: applied.createdItemIds };
     });
-  }
-
-  function failAssistantTurn(turnId: string, errorCode: string): DayPlanAssistantTurn {
-    return immediate(() => {
-      const row = selectAssistantTurn.get(turnId) as AssistantTurnRow | undefined;
-      if (!row) throw new DayPlanInvalidTransition("Assistant turn not found.");
-      if (["applied", "proposed", "conflict", "cancelled"].includes(row.state)) {
-        return assistantTurnFromRow(row);
-      }
-      db.prepare(
-        `UPDATE day_plan_assistant_turns
-         SET state = 'failed', error_code = ?, finished_at = ? WHERE id = ?`,
-      ).run(errorCode.slice(0, 120), now().toISOString(), turnId);
-      return getAssistantTurn(turnId)!;
-    });
-  }
-
-  function interruptStaleAssistantTurns(staleBefore: string): number {
-    const finishedAt = now().toISOString();
-    return db.prepare(
-      `UPDATE day_plan_assistant_turns
-       SET state = 'failed', error_code = 'worker_interrupted', finished_at = ?
-       WHERE state = 'running' AND started_at < ?`,
-    ).run(finishedAt, staleBefore).changes;
   }
 
   function claimNextExecutionRun(workerPid?: number): DayPlanExecutionRun | undefined {
@@ -3030,12 +2890,7 @@ export function createDayPlanStore(options: {
     ensureDayPlan,
     markArrivalInteraction,
     mutateDayPlan,
-    createAssistantTurn,
-    claimNextAssistantTurn,
-    completeAssistantTurn,
     applyAssistantOperations,
-    failAssistantTurn,
-    interruptStaleAssistantTurns,
     getAssistantTurn,
     configureExecution,
     kickoffItem,

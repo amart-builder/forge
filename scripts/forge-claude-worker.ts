@@ -5,7 +5,6 @@ import { createDayPlanStore } from "../src/lib/day-plan/store";
 import {
   drainClaudeQueues,
   enqueueDueMorningBrief,
-  runOneAssistantTurn,
   runOneExecution,
   runOneMorningBrief,
   watchClaudeQueues,
@@ -15,7 +14,7 @@ import {
 async function main(): Promise<number> {
   const laneIndex = process.argv.indexOf("--lane");
   const lane = laneIndex >= 0 ? process.argv[laneIndex + 1] : undefined;
-  if (!["assistant", "execution", "all", "watch", "brief"].includes(lane ?? "")) return 2;
+  if (!["execution", "all", "watch", "brief"].includes(lane ?? "")) return 2;
   if (process.env.FORGE_CLAUDE_WORKER_ENABLED !== "1") return 3;
   const repoDir = process.cwd();
   const claudePath = process.env.FORGE_CLAUDE_BIN ?? path.join(homedir(), ".local", "bin", "claude");
@@ -57,8 +56,7 @@ async function main(): Promise<number> {
       writeHeartbeat();
       heartbeat = setInterval(writeHeartbeat, 2000);
     }
-    if (lane === "assistant") await runOneAssistantTurn(options);
-    else if (lane === "execution") await runOneExecution(options);
+    if (lane === "execution") await runOneExecution(options);
     else if (lane === "all") await drainClaudeQueues(options);
     else if (lane === "brief") {
       // Scheduled one-shot (the ~7:30 local run): enqueue today's brief when
@@ -74,7 +72,7 @@ async function main(): Promise<number> {
         if (shutdown.signal.aborted) break;
       }
     } else {
-      // Watch mode runs the serial assistant/execution loop and the dedicated
+      // Watch mode runs the execution loop and the dedicated
       // brief loop side by side, so briefs never queue behind execution runs.
       await Promise.all([
         watchClaudeQueues(options),

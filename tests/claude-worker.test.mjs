@@ -6,14 +6,9 @@ import path from 'node:path';
 import test from 'node:test';
 import { buildDayPlanCandidates } from '../src/lib/day-plan/candidates.ts';
 import { createDayPlanStore } from '../src/lib/day-plan/store.ts';
-import {
-  ASSISTANT_PROPOSAL_JSON_SCHEMA,
-  buildAssistantPlannerCommand,
-  buildExecutionCommand,
-} from '../src/lib/claude-execution/commands.ts';
+import { buildExecutionCommand } from '../src/lib/claude-execution/commands.ts';
 import {
   isExpectedClaudeProcess,
-  runOneAssistantTurn,
   runOneExecution,
 } from '../src/lib/claude-execution/worker.ts';
 import {
@@ -95,52 +90,6 @@ function workerOptions(dir, store, claudePath) {
     timeoutMs: 5_000,
   };
 }
-
-test('planner command is the exact bounded no-tools JSON invocation', (t) => {
-  const { store, plan } = fixture(t);
-  const turn = store.createAssistantTurn({
-    id: 'assistant-command',
-    planId: plan.id,
-    expectedVersion: plan.version,
-    userText: 'Make the outcome clearer.',
-  }).turn;
-  const command = buildAssistantPlannerCommand({ claudePath: '/fake/claude', plan, turn });
-  assert.equal(command.executable, '/fake/claude');
-  assert.deepEqual(command.args, [
-    '-p', '--no-session-persistence', '--permission-mode', 'plan',
-    '--tools', '', '--model', 'sonnet', '--effort', 'medium', '--output-format',
-    'json', '--json-schema', ASSISTANT_PROPOSAL_JSON_SCHEMA, '--max-budget-usd', '0.25',
-  ]);
-  assert.match(command.stdin, /untrusted data/);
-  assert.match(command.stdin, /^\/forge-refine-today/);
-  assert.doesNotMatch(command.stdin, /change external systems/i);
-});
-
-test('assistant worker claims once, validates the proposal, and applies the bounded patch', async (t) => {
-  const { dir, store, plan } = fixture(t);
-  const turn = store.createAssistantTurn({
-    id: 'assistant-worker',
-    planId: plan.id,
-    expectedVersion: plan.version,
-    userText: 'Assign this to Claude.',
-  }).turn;
-  const proposal = JSON.stringify({
-    assistantText: 'Assigned to Claude.',
-    needsClarification: false,
-    operations: [{ operation: 'set_owner', itemId: plan.items[0].id, owner: 'claude' }],
-  });
-  const fake = fakeClaude(dir, proposal);
-  assert.equal(await runOneAssistantTurn(workerOptions(dir, store, fake.executable)), true);
-  assert.equal(store.getAssistantTurn(turn.id).state, 'applied');
-  assert.equal(store.getPlan(plan.id).items[0].owner, 'claude');
-  assert.equal(await runOneAssistantTurn(workerOptions(dir, store, fake.executable)), false);
-  const captured = JSON.parse(readFileSync(fake.capture, 'utf8'));
-  assert.deepEqual(captured.args.slice(0, 6), [
-    '-p', '--no-session-persistence', '--permission-mode', 'plan', '--tools', '',
-  ]);
-  assert.match(captured.input, /^\/forge-refine-today/);
-  assert.equal(captured.cwd, realpathSync(dir));
-});
 
 test('plan-review worker uses a resumable safe session and stops at plan_ready', async (t) => {
   const { dir, store, plan: original } = fixture(t);
@@ -350,16 +299,10 @@ test('orphan identity requires both the exact Claude command and resumable sessi
   assert.equal(isExpectedClaudeProcess('/usr/bin/node other-worker', '/Users/test/.local/bin/claude', 'session-123'), false);
 });
 
-test('queue acknowledgement never claims a detached subprocess started', (t) => {
-  const { store, plan } = fixture(t);
-  const turn = store.createAssistantTurn({
-    id: 'assistant-trigger', planId: plan.id, expectedVersion: plan.version,
-    userText: 'Clarify this.',
-  }).turn;
-  const result = triggerOneShotWorker('assistant');
-  assert.deepEqual(result, { queued: true, workerAvailable: false, lane: 'assistant' });
+test('queue acknowledgement never claims a detached subprocess started', () => {
+  const result = triggerOneShotWorker('execution');
+  assert.deepEqual(result, { queued: true, workerAvailable: false, lane: 'execution' });
   assert.equal('triggered' in result, false);
-  assert.equal(store.getAssistantTurn(turn.id).state, 'queued');
 });
 
 test('worker availability requires a fresh supervised heartbeat', (t) => {
@@ -391,8 +334,8 @@ test('installer provisions a supervised watch worker without enabling autonomy',
 
 test('standalone worker script compiles before launchd supervision', () => {
   const result = spawnSync(
-    path.join(process.cwd(), 'node_modules', '.bin', 'tsx'),
-    [path.join(process.cwd(), 'scripts', 'forge-claude-worker.ts'), '--lane', 'invalid'],
+    process.execPath,
+    ['--import', 'tsx', path.join(process.cwd(), 'scripts', 'forge-claude-worker.ts'), '--lane', 'invalid'],
     { cwd: process.cwd(), encoding: 'utf8' },
   );
   assert.equal(result.status, 2);

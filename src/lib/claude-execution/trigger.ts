@@ -1,4 +1,4 @@
-export type WorkerLane = "assistant" | "execution";
+export type WorkerLane = "execution";
 
 export type WorkerQueueAcknowledgement = {
   queued: true;

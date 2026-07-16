@@ -33,9 +33,7 @@ import {
   writeSourceCheckpoint,
 } from "../day-plan/brief-relay";
 import {
-  buildAssistantPlannerCommand,
   buildExecutionCommand,
-  parseAssistantPlannerOutput,
   parseExecutionResultSummary,
   type ClaudeCommand,
 } from "./commands";
@@ -277,52 +275,6 @@ export async function recoverStaleOrphanGroups(
     await terminateVerifiedOrphan(run.pid, options.terminationGraceMs ?? 2000);
   }
   return stale.length;
-}
-
-export async function runOneAssistantTurn(options: ClaudeWorkerOptions): Promise<boolean> {
-  const clock = options.now ?? (() => new Date());
-  options.store.interruptStaleAssistantTurns(cutoff(clock(), 10 * 60 * 1000));
-  const turn = options.store.claimNextAssistantTurn();
-  if (!turn) return false;
-  const plan = options.store.getPlan(turn.dayPlanId);
-  if (!plan) {
-    options.store.failAssistantTurn(turn.id, "plan_missing");
-    return true;
-  }
-  const command = buildAssistantPlannerCommand({
-    claudePath: options.claudePath,
-    plan,
-    turn,
-    cwd: options.fallbackCwd,
-  });
-  const result = await spawnCommand(command, {
-    spawnImpl: options.spawnImpl ?? spawn,
-    timeoutMs: options.timeoutMs ?? 90_000,
-    maxStdoutBytes: 1024 * 1024,
-    maxStderrBytes: 64 * 1024,
-    terminationGraceMs: options.terminationGraceMs ?? 2000,
-    abortSignal: options.abortSignal,
-  });
-  if (result.signal || result.terminatedBy) {
-    options.store.failAssistantTurn(turn.id, "worker_interrupted");
-    return true;
-  }
-  if (result.exitCode !== 0 || result.overflowed) {
-    options.store.failAssistantTurn(
-      turn.id,
-      result.overflowed ? "assistant_output_too_large" : "claude_failed",
-    );
-    return true;
-  }
-  try {
-    options.store.completeAssistantTurn(turn.id, parseAssistantPlannerOutput(result.stdout));
-  } catch (error) {
-    options.store.failAssistantTurn(
-      turn.id,
-      error instanceof Error ? error.message : "assistant_output_invalid",
-    );
-  }
-  return true;
 }
 
 function createBoundedLog(logDir: string, runId: string, maximumBytes: number) {
@@ -744,12 +696,9 @@ export async function watchMorningBriefQueue(
 export async function drainClaudeQueues(options: ClaudeWorkerOptions): Promise<number> {
   let processed = 0;
   while (!options.abortSignal?.aborted) {
-    const assistant = await runOneAssistantTurn(options);
-    if (assistant) processed += 1;
-    if (options.abortSignal?.aborted) break;
     const execution = await runOneExecution(options);
     if (execution) processed += 1;
-    if (!assistant && !execution) break;
+    if (!execution) break;
   }
   return processed;
 }
