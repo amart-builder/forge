@@ -108,7 +108,7 @@ function assertAutonomousSetup(
 ) {
   if (mode !== 'autonomous') return;
   if (!state?.workspaces.length) {
-    throw new Error('Autonomous needs a connected project.');
+    throw new Error('Tell Buddy which project should be connected to this item.');
   }
   const workspace = state.workspaces.find((candidate) => candidate.id === workspaceId);
   if (!workspace) throw new Error('Choose a connected project.');

@@ -97,11 +97,7 @@ export default function DayStarted({
                             {row.item.title}
                           </h2>
                         </div>
-                        {row.needsSetup ? (
-                          <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[0.6875rem] font-medium leading-none text-foreground">
-                            Needs setup
-                          </span>
-                        ) : row.currentRun ? (
+                        {row.currentRun ? (
                           <RunStatusChip status={row.currentRun.status} />
                         ) : null}
                       </div>

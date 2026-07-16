@@ -142,7 +142,7 @@ export default function ExecutionConfigPanel({
     : undefined;
   const reviewHeadingId = `${titleId}-claude-review`;
   const executionStatusMessage = selectedMode === 'autonomous' && workspaces.length === 0
-    ? 'Autonomous needs a connected project.'
+    ? 'Tell Buddy which project should be connected to this item.'
     : selectedMode === 'autonomous' && !selectedWorkspaceId
       ? 'Choose a connected project.'
       : selectedMode === 'autonomous' && !selectedBudgetText
