@@ -204,6 +204,7 @@ export type DayPlanMutationAction =
   | "item_edit"
   | "item_later"
   | "item_dismiss"
+  | "item_add"
   | "item_owner"
   | "item_reorder"
   | "start_day"
@@ -234,6 +235,7 @@ export type DayPlanMutationInput = {
   title?: string;
   outcome?: string;
   definitionOfDone?: string;
+  why?: string;
   owner?: DayPlanOwner;
   position?: number;
   snoozedUntil?: string;

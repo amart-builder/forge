@@ -6,6 +6,10 @@ import test from 'node:test';
 import Database from 'better-sqlite3';
 import { buildDayPlanCandidates } from '../src/lib/day-plan/candidates.ts';
 import {
+  arrivalAdditionOutcomeKey,
+  matchesArrivalAddition,
+} from '../src/lib/day-plan/arrival-addition.ts';
+import {
   DayPlanInvalidTransition,
   DayPlanVersionConflict,
   createDayPlanStore,
@@ -142,6 +146,103 @@ test('expected versions prevent stale overwrites and duplicate action IDs replay
       error.currentPlan.version === changed.plan.version,
   );
   assert.equal(store.getPlan(plan.id).items[0].owner, 'together');
+});
+
+test('item_add appends a preselected owned item and bumps the plan version', (t) => {
+  const { store } = isolatedStore(t);
+  let plan = ensure(store).plan;
+  plan = mutate(store, plan, 'arrival_open').plan;
+  const previousVersion = plan.version;
+  const previousLength = plan.items.length;
+
+  const changed = mutate(store, plan, 'item_add', {
+    title: 'Prepare the client follow-up',
+    outcome: 'A send-ready follow-up is drafted.',
+    why: 'The client is waiting on the next step.',
+    owner: 'together',
+  }).plan;
+
+  assert.equal(changed.version, previousVersion + 1);
+  assert.equal(changed.items.length, previousLength + 1);
+  const added = changed.items.at(-1);
+  assert.equal(added.title, 'Prepare the client follow-up');
+  assert.equal(added.outcome, 'A send-ready follow-up is drafted.');
+  assert.equal(added.definitionOfDone, 'A send-ready follow-up is drafted.');
+  assert.equal(added.whyToday, 'The client is waiting on the next step.');
+  assert.equal(added.owner, 'together');
+  assert.equal(added.position, previousLength);
+  assert.equal(added.decision, 'preselected');
+});
+
+test('item_add rejects an eleventh plan item without bumping the version', (t) => {
+  const { store } = isolatedStore(t);
+  let plan = ensure(store).plan;
+  plan = mutate(store, plan, 'arrival_open').plan;
+  for (let index = plan.items.length; index < 10; index += 1) {
+    plan = mutate(store, plan, 'item_add', {
+      title: `Additional item ${index}`,
+      outcome: `Outcome ${index}`,
+      why: `Reason ${index}`,
+      owner: 'me',
+    }).plan;
+  }
+  const fullVersion = plan.version;
+
+  assert.throws(
+    () => mutate(store, plan, 'item_add', {
+      title: 'Eleventh item',
+      outcome: 'This should not be added.',
+      why: 'The plan is already full.',
+      owner: 'me',
+    }),
+    (error) =>
+      error instanceof DayPlanInvalidTransition &&
+      error.message === "Today's plan is full.",
+  );
+  const unchanged = store.getPlan(plan.id);
+  assert.equal(unchanged.version, fullVersion);
+  assert.equal(unchanged.items.length, 10);
+});
+
+test('an arrival addition remains exactly identifiable after the plan is reopened', (t) => {
+  const { file, store } = isolatedStore(t);
+  let plan = ensure(store).plan;
+  plan = mutate(store, plan, 'arrival_open').plan;
+  const addition = {
+    title: 'Prepare the client follow-up',
+    outcome: 'A send-ready follow-up is drafted.',
+    why: 'The client is waiting on the next step.',
+    suggestedOwner: 'together',
+  };
+  plan = mutate(store, plan, 'item_add', {
+    ...addition,
+    owner: addition.suggestedOwner,
+  }).plan;
+
+  const reopenedStore = createDayPlanStore({ dbPath: file });
+  t.after(() => reopenedStore.close());
+  const reopenedPlan = reopenedStore.getPlan(plan.id);
+  const matchingItems = reopenedPlan.items.filter((item) =>
+    matchesArrivalAddition(item, addition),
+  );
+
+  assert.equal(matchingItems.length, 1);
+  assert.equal(matchingItems[0].outcomeKey, arrivalAdditionOutcomeKey(addition));
+});
+
+test('an unsupported mutation throws without bumping the plan version', (t) => {
+  const { store } = isolatedStore(t);
+  let plan = ensure(store).plan;
+  plan = mutate(store, plan, 'arrival_open').plan;
+  const previousVersion = plan.version;
+
+  assert.throws(
+    () => mutate(store, plan, 'unsupported_action'),
+    (error) =>
+      error instanceof DayPlanInvalidTransition &&
+      error.message === 'Unsupported day-plan action: unsupported_action',
+  );
+  assert.equal(store.getPlan(plan.id).version, previousVersion);
 });
 
 test('Start My Day is strict, durable, and idempotent', (t) => {

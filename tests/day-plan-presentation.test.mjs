@@ -42,6 +42,30 @@ test('arrival shows no more than three real plan items without padding', () => {
   );
 });
 
+test('arrival keeps an explicit addition visible beyond the generated three-item cap', () => {
+  const addition = {
+    ...item('added', 'together', 3),
+    sourceRefs: [{ sourceType: 'decision' }],
+    rankReasons: ['accepted_today'],
+  };
+  assert.deepEqual(
+    selectEssentialItems([item('a'), item('b'), item('c'), addition]).map((entry) => entry.id),
+    ['a', 'b', 'c', 'added'],
+  );
+});
+
+test('arrival keeps three generated priorities when an explicit addition is reordered into the cap', () => {
+  const addition = {
+    ...item('added', 'together', 0),
+    sourceRefs: [{ sourceType: 'decision' }],
+    rankReasons: ['accepted_today'],
+  };
+  assert.deepEqual(
+    selectEssentialItems([addition, item('a'), item('b'), item('c')]).map((entry) => entry.id),
+    ['added', 'a', 'b', 'c'],
+  );
+});
+
 test('drag reorder produces the same ordered plan without mutating input', () => {
   const original = [item('a', 'me', 0), item('b', 'me', 1), item('c', 'me', 2)];
   const reordered = reorderDayPlanItems(original, 'c', 'a');

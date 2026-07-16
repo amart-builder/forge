@@ -16,15 +16,15 @@
 
 <!-- BEGIN active-session -->
 ## Active Session
-- **system:** none
-- **device:** —
-- **since:** —
-- **task:** —
+- **system:** cowork
+- **device:** Alexanders-MacBook-Pro-2
+- **since:** 2026-07-15T14:18:58-0700
+- **task:** Morning arrival guided-flow redesign (president mode)
 <!-- END active-session -->
 
 ---
 
-**Last updated:** 2026-07-10 (Morning Arrival multi-change replanning live locally)
+**Last updated:** 2026-07-15 (safe-clear handoff: Mini-hosted brief relay shipped + rehearsal passed)
 **State:** The MacBook's loopback-only `com.forge.web` now serves the wide Morning Arrival with Claude-powered task creation, completion, editing, ownership, and reprioritization, plus explicit execution modes, durable background runs, and reviewable results. `com.forge.claude-worker` is installed and healthy. Autonomous execution remains disabled until an allowlisted project is deliberately configured. The 8 a.m. trigger is still not installed. Email triage remains a separate Mini service and was not changed.
 
 ## North Star Goal
@@ -39,6 +39,15 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 
 ## Current State
 
+### 2026-07-15 Morning Arrival rebuilt as a guided 3-step briefing (president mode, evening session)
+
+- Alex's verdict on the old arrival: information overload, "stresses me out." Interviewed him to the real target: a calm start, the feeling of the world's best chief of staff walking you through an easy process to choose your day. His locked picks: guided steps, whole-card drag (no handle button), tap-to-change owner chip.
+- Shipped on branch `feature/arrival-guided-flow` (based on `codex/morning-command-center`, NOT main): 3-act flow (brief narrative → priorities → anything else) with persistent header/StepDots/sticky footer, single filled "Start my day," calm de-boxed styling per the apple-design/emil-design-eng doctrine. New `src/components/tasks/arrival/` components; MorningArrival.tsx is now the orchestrator; props contract unchanged except one added optional `onAddSuggestion`.
+- Second feature same session: "Claude suggests adding" rows now have "Add to today ▾" with an owner chooser (Me/Claude/Together) → new `item_add` day-plan mutation (route validation, 10-item cap, default-throw switch arm so unknown actions can't silently commit, stable identity key in `src/lib/day-plan/arrival-addition.ts`); "Added" state is derived from the persisted plan so it survives remounts and blocks duplicates. `selectEssentialItems` keeps explicit additions visible past the 3-cap.
+- Verified: 37/37 day-plan tests, tsc + eslint clean, full live browser acceptance (steps, drag persistence, owner chip incl. Escape ordering chip>card>never-ritual, refine polling, Start my day flipping plan state in SQLite, add-suggestion end to end incl. reload survival), two fresh Opus reviews (both SHIP; all findings fixed), Sol self-review clean.
+- Gotcha that cost time twice: Next dev serving a stale compiled store bundle makes correct source look broken (silent no-op mutations). Fix: `rm -rf .next` + restart before trusting live behavior.
+- NEXT: Alex to decide merge-to-main + Mini deploy (his real board runs the Mini build on port 3200; this branch isn't on it). Product tradeoff worth a look: a late-arriving brief doesn't add the extras step mid-ritual (frozen at mount, by design) so sales cadence can sit unseen until reopen.
+
 ### 2026-07-15 Morning brief moved to the Mac Mini (cross-machine relay) + in-flight arrival UI
 
 - The MacBook-asleep failure hit on cue (7:33 dark-wake froze the 7:30 generation; backfill recovered but the arrival showed the deterministic fallback with no explanation, and the late brief never attached to the already-created plan). Alex decided: the 24/7 Mini generates the brief; the arrival must show when a brief is being written.
@@ -46,7 +55,10 @@ Make Forge the source of truth for Alex's day-to-day execution: tasks, email act
 - **The Syncthing/SQLite hazard is closed**: both machines' forge.db (+ claude-runs, heartbeat, backups) are now stignored — applied BY HAND on both machines (Syncthing never syncs .stignore; its old header claimed otherwise and was corrected). `install-forge-local.sh --mini` refuses to install until the operator confirms the block is on both machines.
 - Ops state: Mini runs `com.forge.morning-brief` at 7:30 (logs at ~/Library/Logs/forge-morning-brief.log on the Mini); MBP's 7:30 one-shot is decommissioned; MBP worker publishes checkpoint + settlement relay. Mini claude auth verified in the gui launchd domain (SSH says "Not logged in" — expected, Keychain is locked over SSH).
 - Process: Sol spec review (FIX-SPEC-FIRST, 12 findings — all implemented), one scoped cross-model code review per Alex's trim decision (FIX-FIRST, 9 findings — all fixed), 136 targeted tests green, live acceptance end-to-end including the real 2026-07-15 brief late-attaching into Alex's open plan (verified on screen).
-- Watch tomorrow (2026-07-16 ~7:30): first fully autonomous Mini generation. Check `day_plan_briefs` on the Mini + relay file + MBP import; the MBP backfill covers any failure.
+- **Live dress rehearsal PASSED (2026-07-15 afternoon):** a one-off run on the Mini (temporary LaunchAgent, `FORGE_BRIEF_TIMEZONE=Pacific/Auckland` to target 2026-07-16) generated tomorrow's brief for real in the gui launchd context (~3 min), wrote queued/running status files (synced to MBP in ~90s), and the artifact relay file `2026-07-16-claw-test-mini.local-ec24f09f….json` synced to MBP. MBP correctly did NOT import it yet — the scan window is deliberately today+yesterday, so it imports after midnight. Tomorrow's real 7:30 run generates a fresher 7-16 artifact that wins newest-eligible selection over the rehearsal one; no cleanup needed (rehearsal plist/log already removed from the Mini). Alex saw the attached 2026-07-15 brief live and called it "absolutely fantastic."
+- Watch tomorrow (2026-07-16 ~7:30): first fully autonomous Mini generation. Check `day_plan_briefs` on the Mini + relay file + MBP import (should happen even before 7:30 for the rehearsal artifact); the MBP backfill covers any failure.
+- **Branch `codex/morning-command-center` is NOT pushed** (4 commits ahead of any remote: c4dcfd9, ffee3ee, e93e9b3+docs, 83ec3f2+chores). Alex has not approved a push; use `~/Atlas/bin/git-safe-push.sh` when he does.
+- Same day, GOALS.md got its second revision after a structured interview (tandem north star: $30k/month cash flow AND a Main Street AI MVP beta-testing with a real operator by Aug 11, 2026; MVP sized by pain and market, never build speed; daily Jarvis-Pro-vs-MSAI collisions judged fresh by the brief; Friday MVP countdown added to never-drop with a Jul 24 no-leading-candidate tripwire). The brief regenerates automatically on the goals change.
 
 ### 2026-07-14 Design-craft pass shipped; Morning Brief engine in build
 

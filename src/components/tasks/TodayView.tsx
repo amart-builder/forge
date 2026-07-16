@@ -2217,6 +2217,7 @@ function TodayExperience({
                 onKickoffExecution={dayRitual.kickoffExecution}
                 onCancelExecution={dayRitual.cancelExecution}
                 onSalesAction={dayRitual.markBriefSalesAction}
+                onAddSuggestion={dayRitual.addItem}
                 onSnooze={() => dayRitual.snooze().catch(() => undefined)}
                 onSkip={() => dayRitual.skip().catch(() => undefined)}
                 onBypass={() => dayRitual.bypass().catch(() => undefined)}

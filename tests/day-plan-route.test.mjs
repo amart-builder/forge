@@ -149,6 +149,32 @@ test('requires positive expected versions and allowlisted actions', () => {
   assert.equal(reconciliation.action, 'reconciliation_applied');
 });
 
+test('parses a complete item_add mutation and requires its bounded payload', () => {
+  const parsed = parseDayPlanPostBody({
+    action: 'item_add',
+    planId: 'plan-a',
+    mutationId: 'add:1',
+    expectedVersion: 2,
+    title: 'Prepare the client follow-up',
+    outcome: 'A send-ready follow-up is drafted.',
+    why: 'The client is waiting on the next step.',
+    owner: 'claude',
+  });
+  assert.equal(parsed.action, 'item_add');
+  assert.equal(parsed.input.owner, 'claude');
+  assert.equal(parsed.input.why, 'The client is waiting on the next step.');
+  assert.throws(
+    () => parseDayPlanPostBody({
+      action: 'item_add',
+      planId: 'plan-a',
+      mutationId: 'add:2',
+      expectedVersion: 2,
+      title: 'Missing fields',
+    }),
+    /required/,
+  );
+});
+
 test('POST rejects untrusted hosts and missing CSRF before touching state', async () => {
   const untrusted = await POST(
     new NextRequest('http://evil.example/api/day-plan', {

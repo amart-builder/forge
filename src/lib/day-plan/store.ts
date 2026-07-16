@@ -18,6 +18,7 @@ import type {
   DayPlanItem,
   DayPlanMutationInput,
   DayPlanMutationResult,
+  DayPlanOwner,
   DayPlanReconciliation,
   DayPlanReconciliationResult,
   DayPlanTaskMutation,
@@ -41,6 +42,7 @@ import {
   type ForgeExecutionEnvironment,
 } from "./execution-readiness";
 import { applyAssistantProposal, validateAssistantProposal } from "./assistant-patch";
+import { arrivalAdditionOutcomeKey } from "./arrival-addition";
 import {
   morningBriefFromArtifact,
   overlayBriefOnCandidates,
@@ -69,9 +71,11 @@ const CONTENT_MUTATION_ACTIONS = new Set<string>([
   "item_edit",
   "item_later",
   "item_dismiss",
+  "item_add",
   "item_owner",
   "item_reorder",
 ]);
+const OWNER_VALUES = new Set<DayPlanOwner>(["me", "claude", "together"]);
 
 type DayPlanRow = {
   id: string;
@@ -2487,6 +2491,51 @@ export function createDayPlanStore(options: {
           });
           break;
         }
+        case "item_add": {
+          requireArrivalEditing(plan);
+          if (plan.items.length >= 10) {
+            throw new DayPlanInvalidTransition("Today's plan is full.");
+          }
+          const title = cleanOptional(input.title);
+          const outcome = cleanOptional(input.outcome);
+          const why = cleanOptional(input.why);
+          if (!title) throw new DayPlanInvalidTransition("Item title is required.");
+          if (!outcome) throw new DayPlanInvalidTransition("Item outcome is required.");
+          if (!why) throw new DayPlanInvalidTransition("Item rationale is required.");
+          if (!input.owner || !OWNER_VALUES.has(input.owner)) {
+            throw new DayPlanInvalidTransition("Item owner is invalid.");
+          }
+          const id = randomUUID();
+          plan.items.push({
+            id,
+            candidateId: id,
+            // Arrival additions are plan-only and deliberately have no backing task record.
+            taskId: id,
+            outcomeKey: arrivalAdditionOutcomeKey({ title, outcome, why }),
+            title,
+            outcome,
+            definitionOfDone: outcome,
+            owner: input.owner,
+            commitment: "ink",
+            whyToday: why,
+            priority: "high",
+            sourceRefs: [{
+              sourceType: "decision",
+              recordId: id,
+              sourceUpdatedAt: changedAt,
+              refreshedAt: changedAt,
+              freshness: "current",
+              supports: ["commitment", "priority"],
+            }],
+            newestSourceRefreshAt: changedAt,
+            conflicts: [],
+            humanDecisionEventIds: [input.mutationId],
+            rankReasons: ["accepted_today", "priority_high"],
+            position: plan.items.length,
+            decision: "preselected",
+          });
+          break;
+        }
         case "item_owner": {
           requireArrivalEditing(plan);
           const item = requireItem(plan, input.itemId);
@@ -2792,6 +2841,10 @@ export function createDayPlanStore(options: {
           plan.settledAt = changedAt;
           break;
         }
+        default:
+          throw new DayPlanInvalidTransition(
+            `Unsupported day-plan action: ${input.action}`,
+          );
       }
 
       if (input.action.startsWith("item_") && input.itemId) {

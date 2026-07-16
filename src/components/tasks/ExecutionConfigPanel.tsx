@@ -28,6 +28,7 @@ export type ExecutionConfigPanelProps = {
   busy: boolean;
   executionBusy: boolean;
   executionLoading: boolean;
+  quietPrimaryAction?: boolean;
   onKickoffExecution: (
     itemId: string,
     mode: DayPlanExecutionMode,
@@ -51,6 +52,7 @@ export default function ExecutionConfigPanel({
   busy,
   executionBusy,
   executionLoading,
+  quietPrimaryAction = false,
   onKickoffExecution,
   onCancelExecution,
 }: ExecutionConfigPanelProps) {
@@ -245,7 +247,11 @@ export default function ExecutionConfigPanel({
             Boolean(blockingRun) ||
             !readinessAllowsAttempt
           }
-          className="press-scale min-h-9 shrink-0 rounded-lg bg-foreground px-3 text-xs font-semibold text-background disabled:opacity-40"
+          className={`press-scale min-h-9 shrink-0 rounded-lg px-3 text-xs font-semibold disabled:opacity-40 ${
+            quietPrimaryAction
+              ? 'border text-foreground hover:bg-muted'
+              : 'bg-foreground text-background'
+          }`}
           onClick={() => {
             if (!selectedMode) return;
             void Promise.resolve(

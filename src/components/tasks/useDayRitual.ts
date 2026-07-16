@@ -23,9 +23,11 @@ import {
 import type {
   MorningBriefGeneration,
   MorningBriefSalesActionState,
+  MorningBriefSuggestedAddition,
   PublicMorningBrief,
 } from '@/lib/day-plan/brief';
 import { morningBriefSyncDecision } from '@/lib/day-plan/brief-view';
+import { matchesArrivalAddition } from '@/lib/day-plan/arrival-addition';
 import type {
   DayPlan,
   DayPlanAssistantTurn,
@@ -715,6 +717,34 @@ export default function useDayRitual({
     });
   }, [enqueueMutation, markArrivalInteraction]);
 
+  const addItem = useCallback(async (
+    addition: MorningBriefSuggestedAddition,
+    owner: DayPlanOwner,
+  ): Promise<DayPlanMutationResult> => {
+    const existingItemIds = new Set(planRef.current?.items.map((item) => item.id) ?? []);
+    markArrivalInteraction();
+    const result = await enqueueMutation('item_add', {
+      title: addition.title,
+      outcome: addition.outcome,
+      why: addition.why,
+      owner,
+    });
+    const added = result.plan.items.some(
+      (item) =>
+        !existingItemIds.has(item.id) &&
+        matchesArrivalAddition(item, addition) &&
+        item.sourceRefs.some((source) => source.sourceType === 'decision') &&
+        item.rankReasons.includes('accepted_today'),
+    );
+    if (!added) {
+      const message = "Forge couldn't confirm that the addition reached today's plan.";
+      setError(message);
+      throw new Error(message);
+    }
+    setAnnouncement(`${addition.title} added to today.`);
+    return result;
+  }, [enqueueMutation, markArrivalInteraction]);
+
   const reorder = useCallback(async (itemId: string, position: number, title: string) => {
     markArrivalInteraction();
     await enqueueMutation('item_reorder', { itemId, position }, {
@@ -1206,6 +1236,7 @@ export default function useDayRitual({
     snooze,
     skip,
     bypass,
+    addItem,
     setOwner,
     reorder,
     dismissItem,

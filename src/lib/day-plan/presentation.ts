@@ -149,7 +149,19 @@ export function selectEssentialItems<T extends DayPlanItem>(
   items: readonly T[],
   maximum = 3,
 ): T[] {
-  return items.slice(0, Math.max(0, maximum));
+  const limit = Math.max(0, maximum);
+  const isExplicitArrivalAddition = (item: T) =>
+    item.sourceRefs?.some((source) => source.sourceType === 'decision') &&
+    item.rankReasons?.includes('accepted_today');
+  const essentialIds = new Set(
+    items
+      .filter((item) => !isExplicitArrivalAddition(item))
+      .slice(0, limit)
+      .map((item) => item.id),
+  );
+  return items.filter(
+    (item) => essentialIds.has(item.id) || isExplicitArrivalAddition(item),
+  );
 }
 
 export function reorderDayPlanItems<T extends DayPlanItem>(
