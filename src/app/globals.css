@@ -836,17 +836,7 @@ input, textarea, select {
   transition: background 160ms ease, color 160ms ease;
 }
 
-.current-capture-toggle span {
-  display: grid;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--quiet-water) 28%, var(--border));
-  border-radius: 50%;
-}
-
-.current-capture-toggle:hover,
-.current-capture-toggle[aria-expanded='true'] {
+.current-capture-toggle:hover {
   background: color-mix(in srgb, white 38%, transparent);
   color: var(--foreground);
 }

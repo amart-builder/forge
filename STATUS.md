@@ -18,8 +18,8 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-07-16T13:42:16-0700
-- **task:** ship QA hardening package
+- **since:** 2026-07-16T14:03:48-0700
+- **task:** arrival reopen + remove what-changed
 <!-- END active-session -->
 
 ---

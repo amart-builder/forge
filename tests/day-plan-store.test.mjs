@@ -284,6 +284,82 @@ test('Start My Day is strict, durable, and idempotent', (t) => {
   reopened.close();
 });
 
+test('Morning Arrival reopens an active day and Start My Day activates it again', (t) => {
+  const { store } = isolatedStore(t);
+  let plan = ensure(store).plan;
+  plan = mutate(store, plan, 'arrival_open').plan;
+  plan = mutate(store, plan, 'start_day').plan;
+  const versionBeforeReopen = plan.version;
+
+  const reopened = mutate(store, plan, 'arrival_reopen');
+  plan = reopened.plan;
+  assert.equal(plan.state, 'proposed');
+  assert.equal(plan.arrivalState, 'opened');
+  assert.equal(plan.settlementState, 'not_due');
+  assert.equal(plan.version, versionBeforeReopen + 1);
+  assert.equal(plan.recommendedFirstItemId, undefined);
+  assert.equal(plan.recommendedFirstTaskId, undefined);
+  assert.equal(plan.confirmedAt, undefined);
+  const reopenEvent = store.listEvents(plan.id).find(
+    (event) => event.id === plan.lastMutationId,
+  );
+  assert.equal(reopenEvent.eventType, 'arrival_reopen');
+  assert.equal(reopenEvent.resultVersion, plan.version);
+
+  plan = mutate(store, plan, 'start_day').plan;
+  assert.equal(plan.state, 'active');
+  assert.equal(plan.arrivalState, 'confirmed');
+  assert.equal(plan.recommendedFirstTaskId, 'task-a');
+});
+
+test('Morning Arrival cancels an in-progress settlement but never reopens a settled day', (t) => {
+  const { store } = isolatedStore(t);
+  let plan = ensure(store).plan;
+  plan = mutate(store, plan, 'arrival_open').plan;
+  plan = mutate(store, plan, 'start_day').plan;
+  plan = mutate(store, plan, 'settlement_start').plan;
+  plan = mutate(store, plan, 'settlement_decide', {
+    itemId: plan.items[1].id,
+    disposition: 'carry',
+  }).plan;
+
+  plan = mutate(store, plan, 'arrival_reopen').plan;
+  assert.equal(plan.state, 'proposed');
+  assert.equal(plan.arrivalState, 'opened');
+  assert.equal(plan.settlementState, 'not_due');
+  assert.equal(plan.items.every((item) => item.settlementDecision === undefined), true);
+
+  plan = mutate(store, plan, 'start_day').plan;
+  plan = mutate(store, plan, 'settlement_start').plan;
+  plan = mutate(store, plan, 'settlement_commit', {
+    completedHumanTaskIds: plan.items.map((item) => item.taskId),
+  }).plan;
+  const settledVersion = plan.version;
+  assert.throws(
+    () => mutate(store, plan, 'arrival_reopen'),
+    (error) => error instanceof DayPlanInvalidTransition && /already settled/.test(error.message),
+  );
+  assert.equal(store.getPlan(plan.id).version, settledVersion);
+});
+
+test('Morning Arrival never reopens an abandoned day', (t) => {
+  const { file, store } = isolatedStore(t);
+  const plan = ensure(store).plan;
+  const db = new Database(file);
+  db.prepare(
+    "UPDATE day_plans SET plan_state = 'abandoned', open_slot = NULL WHERE id = ?",
+  ).run(plan.id);
+  db.close();
+  const abandoned = store.getPlan(plan.id);
+
+  assert.equal(abandoned.state, 'abandoned');
+  assert.throws(
+    () => mutate(store, abandoned, 'arrival_reopen'),
+    (error) => error instanceof DayPlanInvalidTransition && /already abandoned/.test(error.message),
+  );
+  assert.equal(store.getPlan(plan.id).version, abandoned.version);
+});
+
 test('Not today removes a preselected outcome without changing the underlying task', (t) => {
   const { store } = isolatedStore(t);
   let plan = ensure(store).plan;

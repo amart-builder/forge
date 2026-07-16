@@ -164,6 +164,17 @@ function savedCurrentDescription(savedAt?: string): string {
   return `the current saved ${label}`;
 }
 
+function localDateInTimezone(date: Date, timezone: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 function proposalCommitError(error: unknown): string {
   const message = error instanceof Error ? error.message : '';
   if (
@@ -690,16 +701,7 @@ function TodayExperience({
   const dayPlanCandidates = useMemo(() => {
     const refreshedAt = candidateEvidence?.refreshedAt ?? new Date(0).toISOString();
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    const localDateParts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: timezone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).formatToParts(new Date());
-    const dateValues = Object.fromEntries(
-      localDateParts.map((part) => [part.type, part.value]),
-    );
-    const localDate = `${dateValues.year}-${dateValues.month}-${dateValues.day}`;
+    const localDate = localDateInTimezone(new Date(), timezone);
     // A pool of up to ten deterministic candidates: the Morning Brief overlay
     // ranks within this pool server-side, and the plan still keeps three.
     return buildDayPlanCandidates({
@@ -1553,6 +1555,15 @@ function TodayExperience({
   const dayPoint = cubicPoint(progress);
   const greeting = getGreeting(now.getHours());
   const waterTone = now.getHours() < 11 ? 'morning' : now.getHours() < 17 ? 'day' : 'evening';
+  const morningArrivalUnavailableReason = !dayRitual.plan
+    ? "Morning Arrival is available when today's plan is ready."
+    : dayRitual.plan.localDate !== localDateInTimezone(now, dayRitual.plan.timezone)
+      ? 'Morning Arrival is available only for today.'
+      : dayRitual.plan.state === 'settled'
+        ? 'Morning Arrival is unavailable because today is closed.'
+        : dayRitual.busy
+          ? 'Forge is updating today\'s plan.'
+          : undefined;
   const searchResults = openTasks
     .filter((task) => {
       const query = searchQuery.trim().toLowerCase();
@@ -1761,28 +1772,15 @@ function TodayExperience({
               <button
                 type="button"
                 className="current-capture-toggle"
-                aria-expanded={captureOpen}
-                onClick={() => setCaptureOpen((current) => !current)}
-              >
-                <span aria-hidden="true">＋</span>
-                What changed?
-              </button>
-              <button
-                type="button"
-                className="current-capture-toggle"
-                disabled={
-                  !dayRitual.plan ||
-                  dayRitual.busy ||
-                  dayRitual.plan.state !== 'proposed'
-                }
-                title="Available when a new day is proposed."
+                disabled={Boolean(morningArrivalUnavailableReason)}
+                title={morningArrivalUnavailableReason}
                 aria-describedby="morning-arrival-availability"
                 onClick={() => void openMorningArrival()}
               >
                 Morning Arrival
               </button>
               <span id="morning-arrival-availability" className="sr-only">
-                Available when a new day is proposed.
+                {morningArrivalUnavailableReason ?? 'Open or revisit Morning Arrival.'}
               </span>
               <button
                 type="button"

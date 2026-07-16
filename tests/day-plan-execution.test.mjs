@@ -321,6 +321,75 @@ test('Start My Day routes the latest agent cards and reports autonomous setup ga
   assert.equal(store.listExecutionRuns(plan.id).length, 1);
 });
 
+test('reopening arrival quiesces queued and running agent work before a fresh restart', (t) => {
+  const { store, plan: original } = setup(t);
+  let plan = original;
+  for (const item of plan.items) {
+    plan = mutate(store, plan, 'item_owner', { itemId: item.id, owner: 'together' });
+  }
+  const started = store.mutateDayPlan({
+    planId: plan.id,
+    expectedVersion: plan.version,
+    mutationId: 'start-day:before-reopen',
+    action: 'start_day',
+  });
+  plan = started.plan;
+  assert.equal(started.executionRuns.length, 2);
+
+  const claimed = store.claimNextExecutionRun(111);
+  const running = store.markExecutionRunRunning(claimed.id, 222);
+  const queued = started.executionRuns.find((run) => run.id !== running.id);
+  assert.equal(running.status, 'running');
+  assert.equal(queued.status, 'queued');
+
+  plan = mutate(store, plan, 'arrival_reopen');
+  assert.equal(plan.state, 'proposed');
+  assert.equal(store.getExecutionRun(queued.id).status, 'cancelled');
+  assert.equal(store.getExecutionRun(queued.id).errorCode, 'user_cancelled');
+  assert.equal(store.getExecutionRun(running.id).status, 'cancelling');
+  assert.equal(store.heartbeatExecutionRun(running.id, 222), false);
+  const replacementWhileCancelling = store.kickoffItem({
+    planId: plan.id,
+    itemId: running.itemId,
+    expectedVersion: plan.version,
+    mutationId: 'kickoff:while-reopen-cancels',
+  });
+  plan = replacementWhileCancelling.plan;
+  assert.equal(replacementWhileCancelling.run.id, running.id);
+  assert.equal(
+    store.listExecutionRuns(plan.id).filter((run) =>
+      run.itemId === running.itemId &&
+      ['queued', 'starting', 'running', 'cancelling'].includes(run.status)
+    ).length,
+    1,
+  );
+  assert.equal(store.finishExecutionRun({ runId: running.id }).status, 'cancelled');
+
+  const restarted = store.mutateDayPlan({
+    planId: plan.id,
+    expectedVersion: plan.version,
+    mutationId: 'start-day:after-reopen',
+    action: 'start_day',
+  });
+  assert.equal(restarted.plan.state, 'active');
+  assert.equal(restarted.executionRuns.length, 2);
+  assert.equal(restarted.executionRuns.every((run) => run.status === 'queued'), true);
+  assert.equal(restarted.executionRuns.every((run) => run.attempt === 2), true);
+  assert.equal(
+    restarted.executionRuns.every((run) => run.id !== queued.id && run.id !== running.id),
+    true,
+  );
+
+  const liveStatuses = new Set(['queued', 'starting', 'running', 'cancelling']);
+  const allRuns = store.listExecutionRuns(plan.id);
+  for (const item of plan.items) {
+    assert.equal(
+      allRuns.filter((run) => run.itemId === item.id && liveStatuses.has(run.status)).length,
+      1,
+    );
+  }
+});
+
 test('autonomous readiness requires enablement, allowlisted clean Git, DoD, opt-in, and budget', (t) => {
   const repo = path.join(os.tmpdir(), `forge-ready-repo-${process.pid}-${Date.now()}`);
   mkdirSync(repo);

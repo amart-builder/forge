@@ -636,14 +636,15 @@ export default function useDayRitual({
   const openArrival = useCallback(async () => {
     const current = planRef.current;
     if (!current) throw new Error('There is no day plan to open.');
-    if (current.state !== 'proposed') throw new Error('Today is already underway.');
-    if (current.arrivalState === 'opened') {
+    if (current.state === 'settled') throw new Error('Today is already closed.');
+    if (current.state === 'proposed' && current.arrivalState === 'opened') {
       setView('arrival');
       return;
     }
-    const action = current.arrivalState === 'skipped' || current.arrivalState === 'bypassed'
-      ? 'arrival_reopen'
-      : 'arrival_open';
+    const action = current.state === 'active' || current.state === 'settling' ||
+      current.arrivalState === 'skipped' || current.arrivalState === 'bypassed'
+        ? 'arrival_reopen'
+        : 'arrival_open';
     await enqueueMutation(action, {}, { announce: 'Morning Arrival opened.' });
   }, [enqueueMutation]);
 
@@ -895,7 +896,7 @@ export default function useDayRitual({
     const current = planRef.current;
     if (!current) throw new Error('The day plan is not ready.');
     const result = await enqueueMutation('start_day', {}, {
-      mutationId: onceOnlyDayPlanMutationId('start-day', current.id),
+      mutationId: stableMutationId('start-day', current),
       announce: 'Your day is set.',
     });
     const firstItem = result.plan.items.find(

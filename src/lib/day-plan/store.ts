@@ -983,6 +983,40 @@ export function createDayPlanStore(options: {
     );
   }
 
+  function requestExecutionRunCancellation(
+    runId: string,
+    changedAt: string,
+  ): DayPlanExecutionRun {
+    const row = selectExecutionRun.get(runId) as ExecutionRunRow | undefined;
+    if (!row) throw new DayPlanInvalidTransition("Execution run not found.");
+    if (row.status === "queued") {
+      db.prepare(
+        `UPDATE day_plan_execution_runs
+         SET status = 'cancelled', error_code = 'user_cancelled',
+             finished_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'`,
+      ).run(changedAt, changedAt, runId);
+    } else if (row.status === "starting" || row.status === "running") {
+      db.prepare(
+        `UPDATE day_plan_execution_runs
+         SET status = 'cancelling', error_code = 'user_cancelled', updated_at = ?
+         WHERE id = ? AND status IN ('starting','running')`,
+      ).run(changedAt, runId);
+    }
+    return executionRunFromRow(selectExecutionRun.get(runId) as ExecutionRunRow);
+  }
+
+  function quiesceExecutionRunsForPlanItems(plan: DayPlan, changedAt: string): void {
+    const selectLiveItemRuns = db.prepare(
+      `SELECT id FROM day_plan_execution_runs
+       WHERE day_plan_id = ? AND item_id = ?
+         AND status IN ('queued','starting','running')`,
+    );
+    for (const item of plan.items) {
+      const rows = selectLiveItemRuns.all(plan.id, item.id) as Array<{ id: string }>;
+      for (const row of rows) requestExecutionRunCancellation(row.id, changedAt);
+    }
+  }
+
   function configureExecution(
     input: ConfigureDayPlanExecutionInput,
   ): DayPlanExecutionConfigResult {
@@ -1488,25 +1522,7 @@ export function createDayPlanStore(options: {
   }
 
   function cancelExecutionRun(runId: string): DayPlanExecutionRun {
-    return immediate(() => {
-      const row = selectExecutionRun.get(runId) as ExecutionRunRow | undefined;
-      if (!row) throw new DayPlanInvalidTransition("Execution run not found.");
-      const changedAt = now().toISOString();
-      if (row.status === "queued") {
-        db.prepare(
-          `UPDATE day_plan_execution_runs
-           SET status = 'cancelled', error_code = 'user_cancelled',
-               finished_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'`,
-        ).run(changedAt, changedAt, runId);
-      } else if (row.status === "starting" || row.status === "running") {
-        db.prepare(
-          `UPDATE day_plan_execution_runs
-           SET status = 'cancelling', error_code = 'user_cancelled', updated_at = ?
-           WHERE id = ? AND status IN ('starting','running')`,
-        ).run(changedAt, runId);
-      }
-      return executionRunFromRow(selectExecutionRun.get(runId) as ExecutionRunRow);
-    });
+    return immediate(() => requestExecutionRunCancellation(runId, now().toISOString()));
   }
 
   function recoverStaleExecutionRuns(staleBefore: string): DayPlanExecutionRun[] {
@@ -2342,11 +2358,31 @@ export function createDayPlanStore(options: {
           plan.snoozedUntil = undefined;
           break;
         case "arrival_reopen":
-          requireState(
-            plan.arrivalState,
-            ["skipped", "bypassed", "failed"],
-            "Arrival cannot be reopened from its current state.",
-          );
+          if (plan.state === "proposed") {
+            requireState(
+              plan.arrivalState,
+              ["skipped", "bypassed", "failed"],
+              "Arrival cannot be reopened from its current state.",
+            );
+          } else {
+            requireState(
+              plan.state,
+              ["active", "settling"],
+              "Arrival cannot be reopened from its current state.",
+            );
+            if (plan.state === "settling" && plan.settlementState !== "in_progress") {
+              throw new DayPlanInvalidTransition(
+                "Arrival cannot reopen from an invalid settlement state.",
+              );
+            }
+            quiesceExecutionRunsForPlanItems(plan, changedAt);
+            plan.state = "proposed";
+            plan.settlementState = "not_due";
+            plan.recommendedFirstItemId = undefined;
+            plan.recommendedFirstTaskId = undefined;
+            plan.confirmedAt = undefined;
+            for (const item of plan.items) item.settlementDecision = undefined;
+          }
           plan.arrivalState = "opened";
           plan.snoozedUntil = undefined;
           break;
@@ -2584,7 +2620,7 @@ export function createDayPlanStore(options: {
               item,
               config,
               readiness,
-              idempotencyKey: `start-day:${plan.id}:${item.id}:${config.briefHash}`,
+              idempotencyKey: `${input.mutationId}:kickoff:${item.id}`,
               createdAt: changedAt,
             }));
           }
