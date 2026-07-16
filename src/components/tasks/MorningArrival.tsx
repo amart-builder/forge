@@ -263,12 +263,12 @@ export default function MorningArrival({
 
   return (
     <div
-      className="mx-auto my-auto w-full max-w-[64rem] overflow-hidden rounded-3xl border bg-background shadow-2xl"
+      className="mx-auto my-auto w-full max-w-[64rem] overflow-hidden rounded-3xl border bg-background shadow-2xl min-[1500px]:max-w-[80rem]"
       data-day-plan-id={plan.id}
     >
       <div className="max-h-[calc(100dvh-7rem)] overflow-y-auto">
         <header className="sticky top-0 z-20 border-b bg-background/95 py-5 backdrop-blur">
-          <div className="mx-auto w-full max-w-[60rem] px-6 sm:px-10">
+          <div className="mx-auto w-full max-w-[60rem] px-6 sm:px-10 min-[1500px]:max-w-[76rem]">
             <div className="flex items-center justify-between gap-4">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                 Morning arrival
@@ -293,7 +293,7 @@ export default function MorningArrival({
         </header>
 
         {(error || executionError) && (
-          <div className="mx-auto w-full max-w-[60rem] space-y-2 px-6 pt-5 sm:px-10">
+          <div className="mx-auto w-full max-w-[60rem] space-y-2 px-6 pt-5 sm:px-10 min-[1500px]:max-w-[76rem]">
             {error && (
               <p role="alert" className="rounded-xl border border-accent-red/30 bg-accent-red/5 p-3 text-sm text-accent-red">
                 {error}
@@ -307,7 +307,10 @@ export default function MorningArrival({
           </div>
         )}
 
-        <div key={step} className="day-ritual-swap-in pb-24 sm:pb-0">
+        <div
+          key={step}
+          className="day-ritual-swap-in pb-24 sm:pb-0 min-[1500px]:[&>section]:max-w-[76rem]"
+        >
           {step === 'brief' ? (
             <ArrivalStepBrief
               recap={recap}
@@ -354,7 +357,7 @@ export default function MorningArrival({
         </div>
 
         <footer className="sticky bottom-0 z-20 border-t !bg-background">
-          <div className="mx-auto flex w-full max-w-[60rem] flex-col items-stretch gap-2 py-3 pl-4 pr-20 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3 sm:py-4 sm:pl-10 sm:pr-24 min-[1120px]:pr-10">
+          <div className="mx-auto flex w-full max-w-[60rem] flex-col items-stretch gap-2 py-3 pl-4 pr-20 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3 sm:py-4 sm:pl-10 sm:pr-24 min-[1120px]:pr-10 min-[1500px]:max-w-[76rem]">
             <div className="flex w-full flex-wrap items-center justify-center gap-x-3 sm:w-auto sm:justify-start sm:gap-x-4 sm:gap-y-1">
               {currentStepIndex > 0 && (
                 <button
