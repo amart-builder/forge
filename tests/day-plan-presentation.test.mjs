@@ -10,6 +10,7 @@ import {
   hasAgentOwnedAcceptedWork,
   helpfulProjectLabel,
   isRetryableRunStatus,
+  morningArrivalGreeting,
   ownerDescription,
   reorderDayPlanItems,
   resolveArrivalEscape,
@@ -23,6 +24,13 @@ import {
   shouldPollBriefGeneration,
   staleSettlementNotice,
 } from '../src/lib/day-plan/presentation.ts';
+
+test('morning arrival greeting follows the plan timezone', () => {
+  const timezone = 'America/Los_Angeles';
+  assert.equal(morningArrivalGreeting(new Date('2026-07-16T17:00:00.000Z'), timezone), 'Good morning.');
+  assert.equal(morningArrivalGreeting(new Date('2026-07-16T21:00:00.000Z'), timezone), 'Good afternoon.');
+  assert.equal(morningArrivalGreeting(new Date('2026-07-17T02:00:00.000Z'), timezone), 'Good evening.');
+});
 import {
   planTaskReconciliation,
   reconciliationStateMatches,

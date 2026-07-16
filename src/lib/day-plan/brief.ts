@@ -8,9 +8,9 @@ import type {
 
 // Version stamps participate in the composite input hash so a prompt or contract
 // change regenerates the brief even when the underlying sources are unchanged.
-// v2: source manifest in the prompt, evidence-grounded watch/sales items, and
-// the generation-envelope input hash.
-export const MORNING_BRIEF_PROMPT_VERSION = 2;
+// v3: target timezone + canonical weekday/date assertion in the prompt, with a
+// deterministic narrative-date correction before storage.
+export const MORNING_BRIEF_PROMPT_VERSION = 3;
 export const MORNING_BRIEF_SCHEMA_VERSION = 2;
 
 export type MorningBriefStatus = "queued" | "running" | "succeeded" | "failed";
@@ -147,11 +147,12 @@ export const MORNING_BRIEF_TOTAL_MAX_CHARS = 48_000;
 
 // Everything that shapes the generated brief participates in the input hash:
 // the exact bounded sections as sent to Claude (not the untrimmed source
-// bytes), the target date, both contract versions, the model configuration,
-// and each source's freshness state. Two runs with the same hash would produce
-// an equivalent artifact, so the second is skipped as a duplicate.
+// bytes), the target date and timezone, both contract versions, the model
+// configuration, and each source's freshness state. Two runs with the same hash
+// would produce an equivalent artifact, so the second is skipped as a duplicate.
 export type MorningBriefGenerationEnvelope = {
   targetLocalDate: string;
+  targetTimezone: string;
   sections: ReadonlyArray<{ id: string; label: string; text: string }>;
   sourceFreshness: ReadonlyArray<{ id: string; freshness: BriefSourceFreshness }>;
   promptVersion: number;
@@ -166,7 +167,7 @@ export function morningBriefInputHash(
 ): string {
   const canonical = JSON.stringify({
     versions: [envelope.promptVersion, envelope.schemaVersion],
-    target: envelope.targetLocalDate,
+    target: [envelope.targetLocalDate, envelope.targetTimezone],
     model: [envelope.modelAlias, envelope.effort, envelope.budgetUsd],
     freshness: [...envelope.sourceFreshness]
       .sort((left, right) => left.id.localeCompare(right.id))
@@ -176,6 +177,48 @@ export function morningBriefInputHash(
       .map((entry) => ({ id: entry.id, text: entry.text })),
   });
   return sha256(canonical);
+}
+
+export function morningBriefTargetDateLabel(
+  targetLocalDate: string,
+  targetTimezone: string,
+): string {
+  // targetLocalDate is already the calendar date in targetTimezone. Format the
+  // calendar value in UTC so converting it to an instant cannot shift the day.
+  new Intl.DateTimeFormat("en-US", { timeZone: targetTimezone }).format(new Date(0));
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(targetLocalDate);
+  if (!match) throw new Error("brief_target_date_invalid");
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  if (date.toISOString().slice(0, 10) !== targetLocalDate) {
+    throw new Error("brief_target_date_invalid");
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+export function normalizeMorningBriefNarrativeDate(
+  narrative: string,
+  targetLocalDate: string,
+  targetTimezone: string,
+): { narrative: string; contradicted: boolean } {
+  const expectedOpening = `Today is ${morningBriefTargetDateLabel(targetLocalDate, targetTimezone)}.`;
+  const trimmed = narrative.trim();
+  if (trimmed.toLocaleLowerCase().startsWith(expectedOpening.toLocaleLowerCase())) {
+    return { narrative: trimmed, contradicted: false };
+  }
+  const assertedOpening = /^Today is\b[^.!?]*(?:[.!?]|$)\s*/i.exec(trimmed);
+  const remainder = assertedOpening ? trimmed.slice(assertedOpening[0].length).trimStart() : trimmed;
+  const remainderBudget = Math.max(0, 1600 - expectedOpening.length - 1);
+  const boundedRemainder = remainder.slice(0, remainderBudget).trimEnd();
+  return {
+    narrative: `${expectedOpening}${boundedRemainder ? ` ${boundedRemainder}` : ""}`,
+    contradicted: Boolean(assertedOpening),
+  };
 }
 
 function sourceFreshnessState(

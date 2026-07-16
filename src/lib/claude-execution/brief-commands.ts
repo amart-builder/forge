@@ -1,4 +1,7 @@
-import type { MorningBriefSourceManifest } from "../day-plan/brief";
+import {
+  morningBriefTargetDateLabel,
+  type MorningBriefSourceManifest,
+} from "../day-plan/brief";
 import type { ClaudeCommand } from "./commands";
 import { parseStructuredClaudeOutput } from "./commands";
 
@@ -142,6 +145,7 @@ function promptManifest(manifest: MorningBriefSourceManifest): string {
 
 export function buildMorningBriefPrompt(input: {
   targetLocalDate: string;
+  targetTimezone: string;
   sections: ReadonlyArray<{ id: string; label: string; text: string }>;
   manifest: MorningBriefSourceManifest;
 }): string {
@@ -158,7 +162,11 @@ export function buildMorningBriefPrompt(input: {
     "watch_items are the never-drop checks: stale leads over 3 days, promised follow-ups, invoices, call prep, the Friday scoreboard. Cite the evidence, the last seen state, and evidence_refs.",
     "sales_actions run the day's sales cadence with approval_required always true. You have NO calendar and NO CRM last-touch data today, so without last-touch evidence use draft_kind beats_only or blocked, never a confident full draft. Messages to close friends are always beats_only by standing rule.",
     "Do not invent facts, deadlines, contacts, or commitments. Do not use em dashes anywhere.",
-    `TARGET_DATE=${input.targetLocalDate}`,
+    `Start lens_narrative with exactly: Today is ${morningBriefTargetDateLabel(input.targetLocalDate, input.targetTimezone)}.`,
+    "The target date below overrides any stale or prior-day date language inside CONTEXT.",
+    `TARGET_LOCAL_DATE=${input.targetLocalDate}`,
+    `TARGET_TIMEZONE=${input.targetTimezone}`,
+    `TARGET_DAY_LABEL=${morningBriefTargetDateLabel(input.targetLocalDate, input.targetTimezone)}`,
     `CONTEXT SOURCE_MANIFEST=${promptManifest(input.manifest)}`,
     // JSON.stringify makes each section a single unescapable literal; raw
     // fences could be broken out of by fence text inside a source document.
@@ -173,6 +181,7 @@ export function buildMorningBriefCommand(input: {
   emptyMcpConfigPath: string;
   cwd?: string;
   targetLocalDate: string;
+  targetTimezone: string;
   sections: ReadonlyArray<{ id: string; label: string; text: string }>;
   manifest: MorningBriefSourceManifest;
   modelAlias: string;
@@ -205,6 +214,7 @@ export function buildMorningBriefCommand(input: {
     ],
     stdin: buildMorningBriefPrompt({
       targetLocalDate: input.targetLocalDate,
+      targetTimezone: input.targetTimezone,
       sections: input.sections,
       manifest: input.manifest,
     }),

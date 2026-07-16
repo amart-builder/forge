@@ -24,6 +24,7 @@ import type {
 import { isClaudeWorkerAvailable } from "@/lib/claude-execution/trigger";
 import {
   morningBriefFromArtifact,
+  normalizeMorningBriefNarrativeDate,
   publicMorningBrief,
   selectMorningBriefGeneration,
   type MorningBriefSalesActionState,
@@ -481,7 +482,7 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
 // consumed, so an arrival can never hot-swap to a different brief mid-day.
 function readModelMorningBrief(
   store: DayPlanStore,
-  plan: { briefId?: string } | undefined,
+  plan: { briefId?: string; localDate: string; timezone: string } | undefined,
 ) {
   try {
     const accessMode = currentDayPlanAccessMode();
@@ -491,9 +492,14 @@ function readModelMorningBrief(
     if (!artifact) return undefined;
     const brief = morningBriefFromArtifact(artifact);
     if (!brief) return undefined;
+    const datedNarrative = normalizeMorningBriefNarrativeDate(
+      brief.lensNarrative,
+      plan.localDate,
+      plan.timezone,
+    );
     return publicMorningBrief(
       artifact,
-      brief,
+      { ...brief, lensNarrative: datedNarrative.narrative },
       store.listMorningBriefSalesActionStates(artifact.id),
       accessMode,
     );

@@ -11,6 +11,76 @@ import {
   BUDDY_COMMAND_TERMINATION_GRACE_MS,
   BUDDY_COMMAND_TIMEOUT_MS,
 } from "./timing";
+import type { BuddyStore } from "./store";
+
+type ActiveBuddyTurn = {
+  store: Pick<BuddyStore, "finishTurn">;
+  turnId: string;
+  child?: ChildProcessWithoutNullStreams;
+};
+
+type BuddyProcessGlobal = {
+  __forgeActiveBuddyTurn?: ActiveBuddyTurn;
+  __forgeBuddyShutdownHandlersRegistered?: boolean;
+};
+
+function buddyProcessGlobal(): BuddyProcessGlobal {
+  return globalThis as unknown as BuddyProcessGlobal;
+}
+
+function stopActiveBuddyTurn(): void {
+  const active = buddyProcessGlobal().__forgeActiveBuddyTurn;
+  if (!active) return;
+  if (active.child) signalProcessGroup(active.child, "SIGTERM");
+  try {
+    active.store.finishTurn(active.turnId, {
+      state: "failed",
+      assistant_text: "",
+      error_code: "server_restart",
+    });
+  } catch {
+    // Process shutdown is best-effort; never prevent the server from exiting.
+  }
+  buddyProcessGlobal().__forgeActiveBuddyTurn = undefined;
+}
+
+function ensureBuddyShutdownHandlers(): void {
+  const global = buddyProcessGlobal();
+  if (global.__forgeBuddyShutdownHandlersRegistered) return;
+  global.__forgeBuddyShutdownHandlersRegistered = true;
+  process.once("SIGTERM", () => {
+    stopActiveBuddyTurn();
+    process.exit(143);
+  });
+  process.once("SIGINT", () => {
+    stopActiveBuddyTurn();
+    process.exit(130);
+  });
+  process.once("exit", stopActiveBuddyTurn);
+}
+
+export function registerActiveBuddyTurn(
+  store: Pick<BuddyStore, "finishTurn">,
+  turnId: string,
+): () => void {
+  ensureBuddyShutdownHandlers();
+  const active = { store, turnId };
+  buddyProcessGlobal().__forgeActiveBuddyTurn = active;
+  return () => {
+    if (buddyProcessGlobal().__forgeActiveBuddyTurn === active) {
+      buddyProcessGlobal().__forgeActiveBuddyTurn = undefined;
+    }
+  };
+}
+
+function registerActiveBuddyChild(child: ChildProcessWithoutNullStreams): () => void {
+  const active = buddyProcessGlobal().__forgeActiveBuddyTurn;
+  if (!active) return () => {};
+  active.child = child;
+  return () => {
+    if (active.child === child) active.child = undefined;
+  };
+}
 
 export type BuddyStreamEvent =
   | { kind: "started"; sessionId: string }
@@ -172,6 +242,7 @@ export async function runBuddyCommand(
       reject(error);
       return;
     }
+    const clearActiveChild = registerActiveBuddyChild(child);
     let buffer = "";
     const stdoutDecoder = new StringDecoder("utf8");
     let stderr = "";
@@ -205,11 +276,13 @@ export async function runBuddyCommand(
     child.once("error", (error) => {
       clearTimeout(timeout);
       if (killTimer) clearTimeout(killTimer);
+      clearActiveChild();
       reject(error);
     });
     child.once("close", (code) => {
       clearTimeout(timeout);
       if (killTimer) clearTimeout(killTimer);
+      clearActiveChild();
       buffer += stdoutDecoder.end();
       consume(buffer);
       if (done) resolve(done);

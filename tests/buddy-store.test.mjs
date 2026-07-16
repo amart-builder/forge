@@ -98,6 +98,118 @@ test('pending delete tokens are exact, expiring, and single-use', (t) => {
   });
 });
 
+test('store initialization immediately fails running turns from an earlier process', (t) => {
+  const file = path.join(os.tmpdir(), `forge-buddy-restart-${process.pid}-${Date.now()}-${Math.random()}.db`);
+  const firstNow = new Date('2026-07-15T20:00:00.000Z');
+  const first = createBuddyStore({
+    dbPath: file,
+    now: () => firstNow,
+    processStartedAt: new Date('2026-07-15T19:59:00.000Z'),
+  });
+  const turn = first.claimTurn({
+    userText: 'Still running', pageContext: null, model: 'sonnet', effort: 'medium',
+    routerReason: 'Restart test',
+  });
+  first.close();
+
+  const second = createBuddyStore({
+    dbPath: file,
+    now: () => new Date('2026-07-15T20:01:00.000Z'),
+    processStartedAt: new Date('2026-07-15T20:00:30.000Z'),
+  });
+  assert.equal(second.getTurn(turn.id).state, 'failed');
+  assert.equal(second.getTurn(turn.id).error_code, 'orphaned_on_restart');
+  assert.equal(second.getBuddyState().turnCount, 1);
+  second.close();
+  t.after(() => {
+    for (const suffix of ['', '-wal', '-shm']) rmSync(`${file}${suffix}`, { force: true });
+  });
+});
+
+test('store initialization preserves a running turn started after this process', (t) => {
+  const file = path.join(os.tmpdir(), `forge-buddy-hmr-${process.pid}-${Date.now()}-${Math.random()}.db`);
+  const first = createBuddyStore({
+    dbPath: file,
+    now: () => new Date('2026-07-15T20:01:00.000Z'),
+    processStartedAt: new Date('2026-07-15T19:59:00.000Z'),
+  });
+  const turn = first.claimTurn({
+    userText: 'Still active', pageContext: null, model: 'sonnet', effort: 'medium',
+    routerReason: 'HMR guard test',
+  });
+  first.close();
+
+  const reopened = createBuddyStore({
+    dbPath: file,
+    now: () => new Date('2026-07-15T20:02:00.000Z'),
+    processStartedAt: new Date('2026-07-15T20:00:30.000Z'),
+  });
+  assert.equal(reopened.getTurn(turn.id).state, 'running');
+  assert.equal(reopened.getTurn(turn.id).error_code, null);
+  assert.equal(reopened.getBuddyState().turnCount, 0);
+  reopened.close();
+  t.after(() => {
+    for (const suffix of ['', '-wal', '-shm']) rmSync(`${file}${suffix}`, { force: true });
+  });
+});
+
+test('store initialization retains the newest 500 turns and removes old auxiliary rows', (t) => {
+  const file = path.join(os.tmpdir(), `forge-buddy-retention-${process.pid}-${Date.now()}-${Math.random()}.db`);
+  const initial = createBuddyStore({
+    dbPath: file,
+    now: () => new Date('2026-07-15T20:00:00.000Z'),
+    processStartedAt: new Date('2026-07-15T19:59:00.000Z'),
+  });
+  initial.close();
+
+  const seed = new Database(file);
+  const insertTurn = seed.prepare(`INSERT INTO buddy_turns
+    (id, user_text, page_context, model, effort, router_reason, state, assistant_text,
+      cost_usd, started_at, finished_at)
+    VALUES (?, 'old', 'null', 'sonnet', 'low', 'retention', 'failed', '', 0, ?, ?)`);
+  const insertTurns = seed.transaction(() => {
+    for (let index = 0; index < 505; index += 1) {
+      const startedAt = new Date(Date.UTC(2026, 4, 1, 0, 0, index)).toISOString();
+      insertTurn.run(`old-${String(index).padStart(3, '0')}`, startedAt, startedAt);
+    }
+    insertTurn.run('recent', '2026-07-15T19:00:00.000Z', '2026-07-15T19:00:01.000Z');
+  });
+  insertTurns();
+  seed.prepare(`INSERT INTO buddy_pending_deletes
+    (token, table_name, row_id, label, consumed_at, expires_at) VALUES (?, 'tasks', ?, 'row', NULL, ?)`)
+    .run('old-token', 'old', '2026-05-01T00:10:00.000Z');
+  seed.prepare(`INSERT INTO buddy_pending_deletes
+    (token, table_name, row_id, label, consumed_at, expires_at) VALUES (?, 'tasks', ?, 'row', NULL, ?)`)
+    .run('recent-token', 'recent', '2026-07-15T20:10:00.000Z');
+  seed.prepare(`INSERT INTO buddy_spawned_sessions
+    (id, session_id, dir, title, state, error, created_at) VALUES (?, ?, '/tmp', 'session', 'ready', NULL, ?)`)
+    .run('old-session-row', 'old-session', '2026-05-01T00:00:00.000Z');
+  seed.prepare(`INSERT INTO buddy_spawned_sessions
+    (id, session_id, dir, title, state, error, created_at) VALUES (?, ?, '/tmp', 'session', 'ready', NULL, ?)`)
+    .run('recent-session-row', 'recent-session', '2026-07-15T19:00:00.000Z');
+  seed.close();
+
+  const swept = createBuddyStore({
+    dbPath: file,
+    now: () => new Date('2026-07-15T20:00:00.000Z'),
+    processStartedAt: new Date('2026-07-15T19:59:00.000Z'),
+  });
+  swept.close();
+  const inspect = new Database(file, { readonly: true });
+  assert.equal(inspect.prepare('SELECT COUNT(*) AS count FROM buddy_turns').get().count, 500);
+  assert.ok(inspect.prepare("SELECT 1 FROM buddy_turns WHERE id = 'recent'").get());
+  assert.deepEqual(inspect.prepare('SELECT token FROM buddy_pending_deletes ORDER BY token').all(), [
+    { token: 'recent-token' },
+  ]);
+  assert.deepEqual(inspect.prepare('SELECT session_id FROM buddy_spawned_sessions ORDER BY session_id').all(), [
+    { session_id: 'recent-session' },
+  ]);
+  inspect.close();
+  t.after(() => {
+    for (const suffix of ['', '-wal', '-shm']) rmSync(`${file}${suffix}`, { force: true });
+  });
+});
+
 test('Buddy store migrates legacy tables that are missing current columns', (t) => {
   const file = path.join(os.tmpdir(), `forge-buddy-legacy-${process.pid}-${Date.now()}-${Math.random()}.db`);
   const legacy = new Database(file);

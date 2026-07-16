@@ -10,6 +10,7 @@ import {
   assembleMorningBriefContext,
   localDateInTimezone,
   morningBriefInputHash,
+  normalizeMorningBriefNarrativeDate,
   validateMorningBrief,
   MORNING_BRIEF_PROMPT_VERSION,
   MORNING_BRIEF_SCHEMA_VERSION,
@@ -458,6 +459,7 @@ export async function runOneMorningBrief(
   options.store.interruptStaleMorningBriefs(cutoff(clock(), staleAfterMs));
   const claimed = options.store.claimNextMorningBrief();
   if (!claimed) return false;
+  const targetTimezone = resolveBriefTimezone(options.store);
   const relay = options.relay;
   const relayHost = relay?.host ?? originHost();
   // Fail a brief and, when relaying, publish a failed status so the peer machine
@@ -513,11 +515,12 @@ export async function runOneMorningBrief(
       return true;
     }
     // The hash covers the full generation envelope: the bounded sections
-    // exactly as sent, target date, contract versions, model configuration,
+    // exactly as sent, target date and timezone, contract versions, model configuration,
     // and per-source freshness states.
     const inputs = options.store.recordMorningBriefInputs(claimed.id, {
       inputHash: morningBriefInputHash({
         targetLocalDate: claimed.targetLocalDate,
+        targetTimezone,
         sections: context.sections,
         sourceFreshness: context.manifest.sources.map((source) => ({
           id: source.id,
@@ -540,6 +543,7 @@ export async function runOneMorningBrief(
       emptyMcpConfigPath: options.emptyMcpConfigPath,
       cwd: options.fallbackCwd,
       targetLocalDate: claimed.targetLocalDate,
+      targetTimezone,
       sections: context.sections,
       manifest: context.manifest,
       modelAlias: claimed.modelAlias,
@@ -573,9 +577,21 @@ export async function runOneMorningBrief(
           .map((source) => source.id),
       ),
     });
+    const datedNarrative = normalizeMorningBriefNarrativeDate(
+      validated.brief.lensNarrative,
+      claimed.targetLocalDate,
+      targetTimezone,
+    );
+    if (datedNarrative.contradicted) {
+      console.warn("Morning brief narrative date contradicted target; corrected before storage.", {
+        briefId: claimed.id,
+        targetLocalDate: claimed.targetLocalDate,
+        targetTimezone,
+      });
+    }
     const completed = options.store.completeMorningBrief(
       claimed.id,
-      JSON.stringify(validated.brief),
+      JSON.stringify({ ...validated.brief, lensNarrative: datedNarrative.narrative }),
     );
     // Publish the immutable artifact to the relay so the other machine imports
     // it. The authoritative machine (the MBP) also refreshes the settlement

@@ -7,6 +7,7 @@ export type TrustedOriginInput = {
   forwardedProto?: string | null;
   requestProtocol?: string | null;
   allowedHosts?: string[];
+  trustProxy?: boolean;
 };
 
 type RequestLike = {
@@ -22,6 +23,7 @@ type ForgeHostEnvironment = {
   FORGE_PUBLIC_URL?: string;
   FORGE_TAILSCALE_TRUSTED_HOSTS?: string;
   FORGE_ALLOWED_HOSTS?: string;
+  FORGE_TRUST_PROXY?: string;
 };
 
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
@@ -92,7 +94,8 @@ export function getForgeAllowedHosts(
  * work through loopback aliases and trusted reverse proxies.
  */
 export function isTrustedRequestOrigin(input: TrustedOriginInput): boolean {
-  const publicHost = firstHeaderValue(input.forwardedHost) ?? firstHeaderValue(input.host);
+  const publicHost = (input.trustProxy ? firstHeaderValue(input.forwardedHost) : undefined)
+    ?? firstHeaderValue(input.host);
   if (!publicHost || !isAllowedHost(publicHost, input.allowedHosts ?? LOOPBACK_HOSTS)) {
     return false;
   }
@@ -106,7 +109,9 @@ export function isTrustedRequestOrigin(input: TrustedOriginInput): boolean {
   }
 
   if (origin.host.toLowerCase() !== publicHost.toLowerCase()) return false;
-  const publicProtocol = normalizedProtocol(input.forwardedProto ?? input.requestProtocol);
+  const publicProtocol = normalizedProtocol(
+    (input.trustProxy ? input.forwardedProto : undefined) ?? input.requestProtocol,
+  );
   return !publicProtocol || origin.protocol === publicProtocol;
 }
 
@@ -114,13 +119,15 @@ export function isTrustedForgeRequest(
   request: RequestLike,
   allowedHosts = getForgeAllowedHosts(),
 ): boolean {
+  const trustProxy = process.env.FORGE_TRUST_PROXY === '1';
   return isTrustedRequestOrigin({
     origin: request.headers.get('origin'),
     host: request.headers.get('host') ?? request.nextUrl.host,
-    forwardedHost: request.headers.get('x-forwarded-host'),
-    forwardedProto: request.headers.get('x-forwarded-proto'),
+    forwardedHost: trustProxy ? request.headers.get('x-forwarded-host') : undefined,
+    forwardedProto: trustProxy ? request.headers.get('x-forwarded-proto') : undefined,
     requestProtocol: request.nextUrl.protocol,
     allowedHosts,
+    trustProxy,
   });
 }
 
@@ -129,7 +136,9 @@ export function isLoopbackForgeRequest(request: RequestLike): boolean {
 }
 
 export function currentDayPlanAccessMode(): DayPlanAccessMode | undefined {
-  return process.env.FORGE_DAY_PLAN_ACCESS_MODE as DayPlanAccessMode | undefined;
+  const configured = process.env.FORGE_DAY_PLAN_ACCESS_MODE?.trim();
+  if (!configured) return 'loopback';
+  return configured === 'loopback' || configured === 'session' ? configured : undefined;
 }
 
 export function hasDayPlanRouteAccess(
@@ -138,15 +147,16 @@ export function hasDayPlanRouteAccess(
     accessMode?: DayPlanAccessMode;
     sessionToken?: string;
   } = {
-    accessMode: process.env.FORGE_DAY_PLAN_ACCESS_MODE as DayPlanAccessMode | undefined,
+    accessMode: currentDayPlanAccessMode(),
     sessionToken: process.env.FORGE_DAY_PLAN_REMOTE_TOKEN,
   },
 ): boolean {
-  if (options.accessMode === 'loopback') {
+  const accessMode = options.accessMode ?? currentDayPlanAccessMode();
+  if (accessMode === 'loopback') {
     return isTrustedForgeRequest(request, LOOPBACK_ACCESS_HOSTS);
   }
   if (!isTrustedForgeRequest(request)) return false;
-  if (options.accessMode !== 'session') return false;
+  if (accessMode !== 'session') return false;
   const supplied = request.headers.get('x-forge-day-plan-session');
   if (!options.sessionToken || !supplied) return false;
   const expectedBytes = Buffer.from(options.sessionToken);

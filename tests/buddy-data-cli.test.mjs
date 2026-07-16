@@ -142,15 +142,19 @@ test('buddy data CLI emits one machine-readable receipt after a mocked mutation'
   const calls = [];
   const fetchMock = async (url, init) => {
     calls.push({ url: String(url), init });
-    return new Response(JSON.stringify([{ id: 't1', title: 'Gym' }]), { status: 200 });
+    return calls.length === 1
+      ? new Response('{"csrfToken":"token"}', { status: 200 })
+      : new Response(JSON.stringify([{ id: 't1', title: 'Gym' }]), { status: 200 });
   };
   const code = await runBuddyDataCommand(
     parseBuddyDataArgs(['update', 'tasks', '--id', 't1', '--json', '{"position":5}']),
     { fetch: fetchMock, appUrl: 'http://127.0.0.1:3200', write: (line) => lines.push(line) },
   );
   assert.equal(code, 0);
-  assert.equal(calls.length, 1);
-  assert.match(calls[0].url, /\/api\/forge-rest\/tasks\?id=eq\.t1$/);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].url, /\/api\/day-plan$/);
+  assert.match(calls[1].url, /\/api\/forge-rest\/tasks\?id=eq\.t1$/);
+  assert.equal(calls[1].init.headers['X-Forge-CSRF'], 'token');
   assert.equal(lines.length, 1);
   assert.deepEqual(JSON.parse(lines[0].slice('RECEIPT '.length)), {
     table: 'tasks', action: 'update', id: 't1', summary: "Updated 'Gym'",
@@ -159,11 +163,12 @@ test('buddy data CLI emits one machine-readable receipt after a mocked mutation'
 
 test('confirmed delete consumes the exact token before deleting', async () => {
   const calls = [];
-  const fetchMock = async (url) => {
-    calls.push(String(url));
-    if (calls.length === 1) return new Response('[{"id":"c1","name":"Jane"}]', { status: 200 });
-    if (calls.length === 2) return new Response('{"consumed":true}', { status: 200 });
-    if (calls.length === 3) return new Response(null, { status: 204 });
+  const fetchMock = async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (calls.length === 1) return new Response('{"csrfToken":"token"}', { status: 200 });
+    if (calls.length === 2) return new Response('[{"id":"c1","name":"Jane"}]', { status: 200 });
+    if (calls.length === 3) return new Response('{"consumed":true}', { status: 200 });
+    if (calls.length === 4) return new Response(null, { status: 204 });
     return new Response('[]', { status: 200 });
   };
   const lines = [];
@@ -171,16 +176,44 @@ test('confirmed delete consumes the exact token before deleting', async () => {
     parseBuddyDataArgs(['delete', 'contacts', '--id', 'c1', '--confirm-token', 'token-1']),
     { fetch: fetchMock, appUrl: 'http://127.0.0.1:3200', write: (line) => lines.push(line) },
   );
-  assert.match(calls[0], /forge-rest\/contacts\?id=eq\.c1&limit=1$/);
-  assert.match(calls[1], /confirm-delete\/consume$/);
-  assert.match(calls[2], /forge-rest\/contacts\?id=eq\.c1$/);
-  assert.match(calls[3], /forge-rest\/contacts\?id=eq\.c1&limit=1$/);
+  assert.match(calls[0].url, /\/api\/day-plan$/);
+  assert.match(calls[1].url, /forge-rest\/contacts\?id=eq\.c1&limit=1$/);
+  assert.match(calls[2].url, /confirm-delete\/consume$/);
+  assert.match(calls[3].url, /forge-rest\/contacts\?id=eq\.c1$/);
+  assert.equal(calls[3].init.headers['X-Forge-CSRF'], 'token');
+  assert.match(calls[4].url, /forge-rest\/contacts\?id=eq\.c1&limit=1$/);
   assert.match(lines[0], /^RECEIPT /);
 });
 
+test('confirmed delete keeps its receipt when post-delete verification throws', async () => {
+  const lines = [];
+  let call = 0;
+  const code = await runBuddyDataCommand(
+    parseBuddyDataArgs(['delete', 'contacts', '--id', 'c1', '--confirm-token', 'token-1']),
+    {
+      fetch: async () => {
+        call += 1;
+        if (call === 1) return new Response('{"csrfToken":"token"}', { status: 200 });
+        if (call === 2) return new Response('[{"id":"c1","name":"Jane"}]', { status: 200 });
+        if (call === 3) return new Response('{"consumed":true}', { status: 200 });
+        if (call === 4) return new Response(null, { status: 204 });
+        assert.match(lines[0], /^RECEIPT /, 'receipt must be emitted before verification starts');
+        throw new Error('verification unavailable');
+      },
+      write: (line) => lines.push(line),
+    },
+  );
+  assert.equal(code, 0);
+  assert.match(lines[0], /^RECEIPT /);
+  assert.equal(lines[1], 'WARN: post-delete verification read failed');
+});
+
 test('buddy data CLI does not claim a zero-row update succeeded', async () => {
+  let call = 0;
   await assert.rejects(runBuddyDataCommand(
     parseBuddyDataArgs(['update', 'tasks', '--id', 'missing', '--json', '{"title":"Nope"}']),
-    { fetch: async () => new Response('[]', { status: 200 }) },
+    { fetch: async () => ++call === 1
+      ? new Response('{"csrfToken":"token"}', { status: 200 })
+      : new Response('[]', { status: 200 }) },
   ), /did not change a row/);
 });

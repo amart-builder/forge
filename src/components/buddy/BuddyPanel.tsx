@@ -23,8 +23,6 @@ export default function BuddyPanel() {
   const [draft, setDraft] = useState('');
   const [override, setOverride] = useState<OverrideChoice>('auto');
   const [error, setError] = useState<string>();
-  const [mounted, setMounted] = useState(open);
-  const [shown, setShown] = useState(open);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
@@ -45,34 +43,14 @@ export default function BuddyPanel() {
   );
 
   useEffect(() => {
-    let enterFrame: number | undefined;
-    let exitTimer: number | undefined;
-    const stateFrame = window.requestAnimationFrame(() => {
-      if (open) {
-        setMounted(true);
-        enterFrame = window.requestAnimationFrame(() => setShown(true));
-        return;
-      }
-
-      setShown(false);
-      exitTimer = window.setTimeout(() => setMounted(false), 150);
-    });
-    return () => {
-      window.cancelAnimationFrame(stateFrame);
-      if (enterFrame) window.cancelAnimationFrame(enterFrame);
-      if (exitTimer) window.clearTimeout(exitTimer);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || !mounted) return;
+    if (!open) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
     window.requestAnimationFrame(() => textareaRef.current?.focus());
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [mounted, open, setOpen]);
+  }, [open, setOpen]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
@@ -82,7 +60,7 @@ export default function BuddyPanel() {
       scroller.scrollTop = scroller.scrollHeight;
       nearBottomRef.current = true;
     }
-  }, [visibleTurns.length, streamingTurn?.assistant_text, thinking, mounted, open]);
+  }, [visibleTurns.length, streamingTurn?.assistant_text, thinking, open]);
 
   async function submitText(text: string) {
     if (!text.trim() || streamingTurn) return;
@@ -124,15 +102,13 @@ export default function BuddyPanel() {
     }
   }
 
-  if (!mounted) return null;
-
   return (
     <section
       aria-label="Buddy chat"
       aria-hidden={!open}
       inert={!open}
       className={`fixed bottom-[5.5rem] right-4 z-[120] flex max-h-[calc(100dvh-7.5rem)] w-[26rem] max-w-[calc(100vw-2rem)] origin-bottom-right flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl transition-[opacity,transform] ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transform-none ${
-        shown
+        open
           ? 'scale-100 translate-y-0 opacity-100 duration-200'
           : 'pointer-events-none scale-[0.96] translate-y-2 opacity-0 duration-150'
       }`}

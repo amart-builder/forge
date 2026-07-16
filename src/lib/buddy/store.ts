@@ -135,8 +135,11 @@ function migrateRequiredColumns(db: Database.Database): void {
 }
 
 type Clock = () => Date;
+const PROCESS_STARTED_AT = new Date(Date.now() - process.uptime() * 1_000);
+const BUDDY_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const BUDDY_MIN_RETAINED_TURNS = 500;
 
-export function createBuddyStore(options: { dbPath: string; now?: Clock }) {
+export function createBuddyStore(options: { dbPath: string; now?: Clock; processStartedAt?: Date }) {
   mkdirSync(path.dirname(options.dbPath), { recursive: true });
   const db = new Database(options.dbPath);
   const now = options.now ?? (() => new Date());
@@ -148,6 +151,41 @@ export function createBuddyStore(options: { dbPath: string; now?: Clock }) {
   db.prepare(`INSERT OR IGNORE INTO buddy_state
     (id, head_session_id, created_at, turn_count, total_cost_usd)
     VALUES (1, NULL, ?, 0, 0)`).run(now().toISOString());
+
+  const failRunningTurnsBefore = db.transaction((cutoff: string, errorCode: string) => {
+    const result = db.prepare(`UPDATE buddy_turns SET state = 'failed', error_code = ?,
+      finished_at = ? WHERE state = 'running' AND started_at < ?`)
+      .run(errorCode, now().toISOString(), cutoff);
+    if (result.changes) {
+      db.prepare("UPDATE buddy_state SET turn_count = turn_count + ? WHERE id = 1")
+        .run(result.changes);
+    }
+    return result.changes;
+  });
+
+  function recoverOrphanedTurns(): number {
+    return failRunningTurnsBefore(
+      (options.processStartedAt ?? PROCESS_STARTED_AT).toISOString(),
+      "orphaned_on_restart",
+    );
+  }
+
+  function sweepRetention(): { turns: number; pendingDeletes: number; spawnedSessions: number } {
+    const cutoff = new Date(now().getTime() - BUDDY_RETENTION_MS).toISOString();
+    return db.transaction(() => ({
+      turns: db.prepare(`DELETE FROM buddy_turns
+        WHERE started_at < ? AND id NOT IN (
+          SELECT id FROM buddy_turns ORDER BY started_at DESC, id DESC LIMIT ?
+        )`).run(cutoff, BUDDY_MIN_RETAINED_TURNS).changes,
+      pendingDeletes: db.prepare("DELETE FROM buddy_pending_deletes WHERE expires_at < ?")
+        .run(cutoff).changes,
+      spawnedSessions: db.prepare("DELETE FROM buddy_spawned_sessions WHERE created_at < ?")
+        .run(cutoff).changes,
+    }))();
+  }
+
+  recoverOrphanedTurns();
+  sweepRetention();
 
   const claimTransaction = db.transaction((input: {
     userText: string;
@@ -252,16 +290,7 @@ export function createBuddyStore(options: { dbPath: string; now?: Clock }) {
 
   function sweepStaleTurns(olderThanMs: number): number {
     const cutoff = new Date(now().getTime() - olderThanMs).toISOString();
-    return db.transaction(() => {
-      const result = db.prepare(`UPDATE buddy_turns SET state = 'failed', error_code = 'interrupted',
-        finished_at = ? WHERE state = 'running' AND started_at < ?`)
-        .run(now().toISOString(), cutoff);
-      if (result.changes) {
-        db.prepare("UPDATE buddy_state SET turn_count = turn_count + ? WHERE id = 1")
-          .run(result.changes);
-      }
-      return result.changes;
-    })();
+    return failRunningTurnsBefore(cutoff, "interrupted");
   }
 
   function mintPendingDelete(input: { table: string; rowId: string; label: string; ttlMs?: number }) {
@@ -348,6 +377,8 @@ export function createBuddyStore(options: { dbPath: string; now?: Clock }) {
       "SELECT * FROM buddy_turns ORDER BY started_at DESC, id DESC LIMIT ?",
     ).all(Math.max(1, Math.min(100, limit))) as BuddyTurn[],
     sweepStaleTurns,
+    recoverOrphanedTurns,
+    sweepRetention,
     mintPendingDelete,
     consumePendingDelete,
     setTurnReceipts,
@@ -361,7 +392,7 @@ export function createBuddyStore(options: { dbPath: string; now?: Clock }) {
 }
 
 export type BuddyStore = ReturnType<typeof createBuddyStore>;
-export const BUDDY_STORE_API_VERSION = 6;
+export const BUDDY_STORE_API_VERSION = 7;
 type BuddyGlobal = {
   __forgeBuddyStore?: BuddyStore;
   __forgeBuddyStoreVersion?: number;

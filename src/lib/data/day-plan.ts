@@ -50,6 +50,11 @@ export class DayPlanApiConflict extends Error {
 
 let csrfToken: string | undefined;
 
+export async function getDayPlanCsrfToken(): Promise<string> {
+  if (!csrfToken) await getDayPlanState();
+  return csrfToken!;
+}
+
 async function responsePayload(response: Response): Promise<Record<string, unknown>> {
   return (await response.json().catch(() => ({}))) as Record<string, unknown>;
 }

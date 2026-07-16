@@ -8,8 +8,10 @@ import { createDayPlanStore } from '../src/lib/day-plan/store.ts';
 import {
   assembleMorningBriefContext,
   localDateInTimezone,
+  morningBriefTargetDateLabel,
   morningBriefFromArtifact,
   morningBriefInputHash,
+  normalizeMorningBriefNarrativeDate,
   nextBriefTargetLocalDate,
   overlayBriefOnCandidates,
   selectEligibleMorningBrief,
@@ -337,6 +339,7 @@ test('the collector marks candidate_ok only on the arrival-eligible tasks', asyn
 test('the generation-envelope hash is stable, order-independent, and sensitive to every component', () => {
   const envelope = {
     targetLocalDate: '2026-07-14',
+    targetTimezone: 'America/Los_Angeles',
     sections: [
       { id: 'goals', label: 'GOALS', text: 'North star.' },
       { id: 'sprint_memo', label: 'SPRINT_MEMO', text: 'Four setups.' },
@@ -365,6 +368,7 @@ test('the generation-envelope hash is stable, order-independent, and sensitive t
   const variants = [
     { sections: [{ id: 'goals', label: 'GOALS', text: 'Different.' }, envelope.sections[1]] },
     { targetLocalDate: '2026-07-15' },
+    { targetTimezone: 'America/New_York' },
     { promptVersion: VERSIONS.promptVersion + 1 },
     { schemaVersion: VERSIONS.schemaVersion + 1 },
     { modelAlias: 'sonnet' },
@@ -375,6 +379,47 @@ test('the generation-envelope hash is stable, order-independent, and sensitive t
   for (const variant of variants) {
     assert.notEqual(morningBriefInputHash({ ...envelope, ...variant }), hash, JSON.stringify(variant));
   }
+});
+
+test('brief narrative date normalization replaces a contradictory opening', () => {
+  assert.equal(
+    morningBriefTargetDateLabel('2026-07-16', 'America/Los_Angeles'),
+    'Thursday, July 16, 2026',
+  );
+  assert.deepEqual(
+    normalizeMorningBriefNarrativeDate(
+      'Today is Wednesday, Jul 15. Protect client delivery first.',
+      '2026-07-16',
+      'America/Los_Angeles',
+    ),
+    {
+      narrative: 'Today is Thursday, July 16, 2026. Protect client delivery first.',
+      contradicted: true,
+    },
+  );
+  assert.deepEqual(
+    normalizeMorningBriefNarrativeDate(
+      'Protect client delivery first.',
+      '2026-07-16',
+      'America/Los_Angeles',
+    ),
+    {
+      narrative: 'Today is Thursday, July 16, 2026. Protect client delivery first.',
+      contradicted: false,
+    },
+  );
+  const fullLengthNarrative = `${'x'.repeat(1596)}TAIL`;
+  const bounded = normalizeMorningBriefNarrativeDate(
+    fullLengthNarrative,
+    '2026-07-16',
+    'America/Los_Angeles',
+  ).narrative;
+  const expectedOpening = 'Today is Thursday, July 16, 2026.';
+  assert.equal(
+    bounded,
+    `${expectedOpening} ${fullLengthNarrative.slice(0, 1600 - expectedOpening.length - 1)}`,
+  );
+  assert.equal(bounded.length, 1600);
 });
 
 // ---------------------------------------------------------------------------
@@ -899,6 +944,7 @@ test('the brief command is the exact bounded toolless invocation', () => {
     claudePath: '/fake/claude',
     emptyMcpConfigPath: '/fake/empty.json',
     targetLocalDate: '2026-07-14',
+    targetTimezone: 'America/Los_Angeles',
     sections: [{ id: 'goals', label: 'GOALS', text: 'North star.' }],
     manifest: {
       sources: [
@@ -924,6 +970,10 @@ test('the brief command is the exact bounded toolless invocation', () => {
   // of its fence and masquerade as prompt instructions.
   assert.match(command.stdin, /CONTEXT GOALS="North star\."/);
   assert.match(command.stdin, /candidate_ok/);
+  assert.match(command.stdin, /TARGET_LOCAL_DATE=2026-07-14/);
+  assert.match(command.stdin, /TARGET_TIMEZONE=America\/Los_Angeles/);
+  assert.match(command.stdin, /TARGET_DAY_LABEL=Tuesday, July 14, 2026/);
+  assert.match(command.stdin, /Start lens_narrative with exactly: Today is Tuesday, July 14, 2026\./);
   // The model sees the sanitized manifest (freshness and coverage, no hashes,
   // no file paths) and is told to caveat stale or missing coverage.
   assert.match(command.stdin, /CONTEXT SOURCE_MANIFEST=/);
@@ -937,11 +987,16 @@ test('the brief worker validates, filters unknown tasks, and stores the artifact
   const { dir, store } = briefFixture(t);
   const wire = {
     ...WIRE_BRIEF,
+    lens_narrative: 'Today is Sunday, July 13, 2026. Protect client delivery first.',
     existing_task_candidates: [
       ...WIRE_BRIEF.existing_task_candidates,
       { task_id: 'task-invented', why_today: 'Made up.', suggested_owner: 'claude', what_claude_can_start: 'x' },
     ],
   };
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...values) => warnings.push(values);
+  t.after(() => { console.warn = originalWarn; });
   const fake = fakeClaude(dir, JSON.stringify(wire));
   store.enqueueMorningBrief('2026-07-14', { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 });
   assert.equal(
@@ -951,6 +1006,9 @@ test('the brief worker validates, filters unknown tasks, and stores the artifact
   const artifact = store.latestEligibleMorningBrief('2026-07-14');
   assert.equal(artifact.status, 'succeeded');
   const brief = morningBriefFromArtifact(artifact);
+  assert.match(brief.lensNarrative, /^Today is Tuesday, July 14, 2026\./);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0][0], /date contradicted target/);
   assert.deepEqual(brief.existingTaskCandidates.map((candidate) => candidate.taskId), ['task-c', 'task-a']);
   assert.equal(typeof artifact.inputHash, 'string');
   assert.equal(artifact.sourceManifest.coverage.calendar, 'missing');

@@ -193,6 +193,7 @@ function getDb(): Database.Database {
   mkdirSync(path.dirname(file), { recursive: true });
   const conn = new Database(file);
   conn.pragma("journal_mode = WAL");
+  conn.pragma("busy_timeout = 5000");
   conn.exec(SCHEMA);
   migrate(conn);
   seedDefaults(conn);

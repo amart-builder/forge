@@ -16,6 +16,7 @@ import {
 } from "@/lib/buddy/store";
 import {
   isBuddyContextOverflow,
+  registerActiveBuddyTurn,
   runBuddyCommand,
   type BuddyStreamEvent,
 } from "@/lib/buddy/stream";
@@ -55,6 +56,7 @@ export function attachBuddyRun(input: {
   send: (event: BuddyStreamEvent | Record<string, unknown>) => void;
   close: () => void;
 }): Promise<void> {
+  const clearActiveTurn = registerActiveBuddyTurn(input.store, input.turn.id);
   let streamedText = "";
   const authoritativeChanges: ReceiptChange[] = [];
   const authoritativeSessions: SpawnedSessionReceipt[] = [];
@@ -159,7 +161,10 @@ export function attachBuddyRun(input: {
         }
       },
       failExecution,
-    ).finally(input.close);
+    ).finally(() => {
+      clearActiveTurn();
+      input.close();
+    });
   } catch {
     input.store.finishTurn(input.turn.id, {
       state: "failed",
@@ -167,6 +172,7 @@ export function attachBuddyRun(input: {
       error_code: "spawn_failed",
     });
     input.send({ kind: "failed", errorCode: "spawn_failed" });
+    clearActiveTurn();
     input.close();
     return Promise.resolve();
   }
@@ -188,8 +194,10 @@ export function prepareBuddyRecentTurns(store: BuddyStore, limit: number) {
 }
 
 function buddyAppUrl(request: NextRequest): string {
-  const candidateHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim()
-    ?? request.headers.get("host")
+  const forwardedHost = process.env.FORGE_TRUST_PROXY === "1"
+    ? request.headers.get("x-forwarded-host")?.split(",")[0]?.trim()
+    : undefined;
+  const candidateHost = forwardedHost ?? request.headers.get("host")
     ?? request.nextUrl.host;
   try {
     const port = new URL(`http://${candidateHost}`).port;

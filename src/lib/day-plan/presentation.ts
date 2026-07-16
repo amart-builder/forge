@@ -39,6 +39,18 @@ const NON_PROJECT_TAGS = new Set([
   'urgent',
 ]);
 
+export function morningArrivalGreeting(date: Date, timezone: string): string {
+  const hourPart = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    hourCycle: 'h23',
+    timeZone: timezone,
+  }).formatToParts(date).find((part) => part.type === 'hour')?.value;
+  const hour = Number(hourPart);
+  if (hour < 12) return 'Good morning.';
+  if (hour < 17) return 'Good afternoon.';
+  return 'Good evening.';
+}
+
 export function shortArrivalSummary(value: string | undefined, title?: string): string | undefined {
   const cleaned = value?.replace(/\s+/g, ' ').trim();
   if (!cleaned || cleaned.toLocaleLowerCase() === title?.trim().toLocaleLowerCase()) {

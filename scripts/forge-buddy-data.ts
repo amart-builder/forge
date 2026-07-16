@@ -214,6 +214,12 @@ export async function runBuddyDataCommand(
   if (tableCommand.action === "delete" && !tableCommand.confirmToken) {
     fail("Permanent delete requires a confirm token. Emit a pendingDeletes forge-receipts entry and wait for the user to confirm.");
   }
+  const state = await responseJson(await request(`${appUrl}/api/day-plan`, { cache: "no-store" }));
+  if (!state || typeof state !== "object" || Array.isArray(state) ||
+    typeof (state as Record<string, unknown>).csrfToken !== "string") {
+    fail("Forge request token is unavailable");
+  }
+  const csrfToken = (state as Record<string, unknown>).csrfToken as string;
   let existingRow: unknown;
   if (tableCommand.action === "delete") {
     const lookup = await responseJson(await request(`${base}?id=${encodeURIComponent(`eq.${tableCommand.id}`)}&limit=1`));
@@ -229,7 +235,11 @@ export async function runBuddyDataCommand(
   if (tableCommand.id) params.set("id", `eq.${tableCommand.id}`);
   const response = await request(`${base}${params.size ? `?${params}` : ""}`, {
     method: tableCommand.action === "insert" ? "POST" : tableCommand.action === "update" ? "PATCH" : "DELETE",
-    headers: { "Content-Type": "application/json", Prefer: "return=representation" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Forge-CSRF": csrfToken,
+      Prefer: "return=representation",
+    },
     ...(tableCommand.json ? { body: JSON.stringify(tableCommand.json) } : {}),
   });
   const data = await responseJson(response);
@@ -237,15 +247,23 @@ export async function runBuddyDataCommand(
     (!Array.isArray(data) || data.length === 0)) {
     fail(`${tableCommand.table} mutation did not change a row`);
   }
-  if (tableCommand.action === "delete") {
-    const remaining = await responseJson(await request(`${base}?id=${encodeURIComponent(`eq.${tableCommand.id}`)}&limit=1`));
-    if (!Array.isArray(remaining) || remaining.length > 0) fail(`${tableCommand.table} row ${tableCommand.id} was not deleted`);
-  }
   const row = tableCommand.action === "delete" ? existingRow : Array.isArray(data) ? data[0] : data;
   const id = tableCommand.id ?? (row && typeof row === "object" ? String((row as Record<string, unknown>).id ?? "") : "");
   const verb = tableCommand.action === "insert" ? "Inserted" : tableCommand.action === "update" ? "Updated" : "Deleted";
   const summary = `${verb} ${labelFor(row, `${tableCommand.table} row ${id}`)}`;
   write(`RECEIPT ${JSON.stringify({ table: tableCommand.table, action: tableCommand.action, id, summary })}`);
+  if (tableCommand.action === "delete") {
+    try {
+      const remaining = await responseJson(await request(
+        `${base}?id=${encodeURIComponent(`eq.${tableCommand.id}`)}&limit=1`,
+      ));
+      if (!Array.isArray(remaining) || remaining.length > 0) {
+        write("WARN: post-delete verification found the row still present");
+      }
+    } catch {
+      write("WARN: post-delete verification read failed");
+    }
+  }
   return 0;
 }
 

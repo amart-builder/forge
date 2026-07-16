@@ -273,8 +273,14 @@ test('GET exposes briefGeneration on loopback and strips it for a remote session
 });
 
 test('non-loopback day-plan access requires the separate remote session secret', () => {
-  const previous = process.env.FORGE_ALLOWED_HOSTS;
+  const previous = {
+    allowedHosts: process.env.FORGE_ALLOWED_HOSTS,
+    accessMode: process.env.FORGE_DAY_PLAN_ACCESS_MODE,
+    trustProxy: process.env.FORGE_TRUST_PROXY,
+  };
   process.env.FORGE_ALLOWED_HOSTS = 'forge.example.test';
+  delete process.env.FORGE_DAY_PLAN_ACCESS_MODE;
+  delete process.env.FORGE_TRUST_PROXY;
   try {
     const request = (session) => new NextRequest('https://forge.example.test/api/day-plan', {
       headers: {
@@ -310,7 +316,7 @@ test('non-loopback day-plan access requires the separate remote session secret',
         'x-forwarded-for': '127.0.0.1',
       },
     });
-    assert.equal(hasDayPlanRouteAccess(localRequest), false);
+    assert.equal(hasDayPlanRouteAccess(localRequest), true);
     assert.equal(
       hasDayPlanRouteAccess(localRequest, { accessMode: 'loopback' }),
       true,
@@ -325,10 +331,37 @@ test('non-loopback day-plan access requires the separate remote session secret',
     });
     assert.equal(
       hasDayPlanRouteAccess(proxiedToLoopback, { accessMode: 'loopback' }),
+      true,
+    );
+    process.env.FORGE_TRUST_PROXY = '1';
+    assert.equal(
+      hasDayPlanRouteAccess(proxiedToLoopback, { accessMode: 'loopback' }),
       false,
     );
   } finally {
-    if (previous === undefined) delete process.env.FORGE_ALLOWED_HOSTS;
-    else process.env.FORGE_ALLOWED_HOSTS = previous;
+    for (const [key, value] of [
+      ['FORGE_ALLOWED_HOSTS', previous.allowedHosts],
+      ['FORGE_DAY_PLAN_ACCESS_MODE', previous.accessMode],
+      ['FORGE_TRUST_PROXY', previous.trustProxy],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('unset and empty day-plan access mode default to loopback', () => {
+  const previous = process.env.FORGE_DAY_PLAN_ACCESS_MODE;
+  const localRequest = new NextRequest('http://localhost:3200/api/day-plan', {
+    headers: { host: 'localhost:3200', origin: 'http://localhost:3200' },
+  });
+  try {
+    delete process.env.FORGE_DAY_PLAN_ACCESS_MODE;
+    assert.equal(hasDayPlanRouteAccess(localRequest), true);
+    process.env.FORGE_DAY_PLAN_ACCESS_MODE = '   ';
+    assert.equal(hasDayPlanRouteAccess(localRequest), true);
+  } finally {
+    if (previous === undefined) delete process.env.FORGE_DAY_PLAN_ACCESS_MODE;
+    else process.env.FORGE_DAY_PLAN_ACCESS_MODE = previous;
   }
 });

@@ -24,6 +24,7 @@ import type {
   DayPlanOwner as DayOwner,
 } from '@/lib/day-plan/types';
 import {
+  morningArrivalGreeting,
   resolveArrivalEscape,
   selectEssentialItems,
 } from '@/lib/day-plan/presentation';
@@ -92,8 +93,7 @@ interface MorningArrivalProps {
   onOpenAllWork?: () => void;
 }
 
-const STEP_TITLES: Record<ArrivalStep, string> = {
-  brief: 'Good morning.',
+const STEP_TITLES: Record<Exclude<ArrivalStep, 'brief'>, string> = {
   priorities: 'Choose where your attention goes.',
   extras: 'Anything else?',
 };
@@ -281,7 +281,9 @@ export default function MorningArrival({
                 tabIndex={-1}
                 className="mt-3 text-2xl font-semibold tracking-tight text-foreground outline-none sm:text-3xl"
               >
-                {STEP_TITLES[step]}
+                {step === 'brief'
+                  ? morningArrivalGreeting(new Date(), plan.timezone)
+                  : STEP_TITLES[step]}
               </h1>
               <p id={descriptionId} className="mt-2 text-sm leading-relaxed text-muted-foreground">
                 {STEP_DESCRIPTIONS[step]}

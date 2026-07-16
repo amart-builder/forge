@@ -9,7 +9,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from 'react';
 import type { BuddyReceipts, PendingDelete } from '@/lib/buddy/receipts';
 import { emitDataChanged } from '@/lib/data/refresh-bus';
@@ -38,7 +40,7 @@ type SessionInfo = {
 
 type BuddyContextValue = {
   open: boolean;
-  setOpen: (open: boolean) => void;
+  setOpen: Dispatch<SetStateAction<boolean>>;
   pageContext: Record<string, unknown>;
   setPageContext: (value: Record<string, unknown>) => void;
   turns: BuddyTurnView[];

@@ -55,10 +55,10 @@ export default function BuddyLauncher() {
     <>
       <button
         type="button"
-        aria-label="Open Buddy chat"
+        aria-label={open ? 'Close Buddy chat' : 'Open Buddy chat'}
         aria-expanded={open}
         className={`press-scale fixed bottom-4 right-4 z-[120] grid size-14 place-items-center rounded-full drop-shadow-[0_10px_18px_rgba(37,112,176,.28)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent-blue ${stateClass} ${open ? 'buddy-open' : ''}`}
-        onClick={() => setOpen(!open)}
+        onClick={() => setOpen((current) => !current)}
       >
         <BuddyGlyph className="h-[62px] w-14 overflow-visible" mood={drooping ? 'frown' : 'smile'} />
       </button>

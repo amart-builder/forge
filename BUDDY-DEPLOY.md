@@ -4,7 +4,7 @@ Buddy is Forge's water-drop chat companion for reading Forge data, making confir
 
 ## Required environment
 
-Every Forge web LaunchAgent must contain this value:
+Buddy now defaults to loopback access when `FORGE_DAY_PLAN_ACCESS_MODE` is unset or empty. Keeping this explicit value in every Forge web LaunchAgent is belt-and-braces configuration:
 
 ```xml
 <key>FORGE_DAY_PLAN_ACCESS_MODE</key>
