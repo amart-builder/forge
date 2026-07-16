@@ -374,7 +374,7 @@ test('Not today removes a preselected outcome without changing the underlying ta
   assert.equal(plan.items.find((item) => item.id === dismissedId).decision, 'dismissed');
 });
 
-test('an all-Claude plan selects handoff preparation without starting execution', (t) => {
+test('an all-Claude plan selects handoff preparation and starts its plan batch', (t) => {
   const { store } = isolatedStore(t);
   let plan = ensure(store).plan;
   plan = mutate(store, plan, 'arrival_open').plan;
@@ -387,6 +387,9 @@ test('an all-Claude plan selects handoff preparation without starting execution'
   plan = mutate(store, plan, 'start_day').plan;
   assert.equal(plan.recommendedFirstTaskId, 'task-a');
   assert.equal(plan.items.every((item) => item.owner === 'claude'), true);
+  assert.equal(store.listExecutionRuns(plan.id).length, plan.items.length);
+  assert.equal(store.listExecutionRuns(plan.id).every((run) => run.mode === 'plan_review'), true);
+  // Run creation is part of the single start_day event, not a second plan mutation.
   assert.equal(store.listEvents(plan.id).some((event) => event.eventType.includes('run')), false);
 });
 

@@ -16,6 +16,7 @@ import type {
   DayPlanExecutionResultSummary,
   DayPlanExecutionRun,
   DayPlanExecutionWorkspaceMetadata,
+  DayPlanKickoffSkip,
   DayPlanItem,
   DayPlanMutationInput,
   DayPlanMutationResult,
@@ -881,6 +882,16 @@ export function createDayPlanStore(options: {
     return row ? executionRunFromRow(row) : undefined;
   }
 
+  function findLiveItemRun(planId: string, itemId: string): DayPlanExecutionRun | undefined {
+    const row = db.prepare(
+      `SELECT * FROM day_plan_execution_runs
+       WHERE day_plan_id = ? AND item_id = ?
+         AND status IN ('queued','starting','running','cancelling')
+       ORDER BY attempt DESC LIMIT 1`,
+    ).get(planId, itemId) as ExecutionRunRow | undefined;
+    return row ? executionRunFromRow(row) : undefined;
+  }
+
   function insertExecutionRun(input: {
     plan: DayPlan;
     item: DayPlanItem;
@@ -1045,9 +1056,9 @@ export function createDayPlanStore(options: {
       // the arrival against a late brief attach (no-op once the day is active).
       stampArrivalInteraction(input.planId, now().toISOString());
       const item = requireItem(plan, input.itemId);
-      // Execution can be configured while arrival is open, and also once the day is
-      // active for an accepted agent-owned item, so the started view can set up work
-      // that was not ready at Start My Day. Everything else stays locked.
+      // Execution can be configured while arrival is open for legacy API compatibility,
+      // and once the day is active for an accepted agent-owned item. The arrival UI
+      // never exposes this control, and kickoff itself is active-day-only.
       const arrivalEditing = plan.state === "proposed" && plan.arrivalState === "opened";
       const activeAgentItem =
         plan.state === "active" &&
@@ -1169,17 +1180,9 @@ export function createDayPlanStore(options: {
       const plan = getPlan(input.planId);
       if (!plan) throw new DayPlanNotFound();
       if (plan.version !== input.expectedVersion) throw new DayPlanVersionConflict(plan);
-      if (
-        !(
-          (plan.state === "proposed" && plan.arrivalState === "opened") ||
-          plan.state === "active"
-        )
-      ) {
-        throw new DayPlanInvalidTransition("Kickoff requires an open arrival or active day.");
+      if (plan.state !== "active") {
+        throw new DayPlanInvalidTransition("Kickoff requires an active day.");
       }
-      // Kicking off work from an open arrival is a real interaction (no-op once
-      // the day is active).
-      stampArrivalInteraction(input.planId, now().toISOString());
       const before = clonePlan(plan);
       const item = requireItem(plan, input.itemId);
       requireState(
@@ -2270,30 +2273,33 @@ export function createDayPlanStore(options: {
         const replayed = getPlan(input.planId);
         if (!replayed) throw new DayPlanNotFound();
         const replayedRuns = input.action === "start_day"
-          ? listExecutionRuns(replayed.id)
+          ? listExecutionRuns(replayed.id).filter(
+              (run) => run.idempotencyKey.startsWith(`${input.mutationId}:kickoff:`),
+            )
           : [];
-        const replayedUnready = input.action === "start_day"
-          ? replayed.items
-              .filter((item) => item.decision === "accepted" &&
-                (item.owner === "claude" || item.owner === "together"))
-              .map((item) => ({
-                item,
-                readiness: itemReadiness(replayed, item),
-              }))
-              .filter(({ readiness }) => !readiness.ready)
-              .map(({ item, readiness }) => ({
-                itemId: item.id,
-                taskId: item.taskId,
-                title: item.title,
-                readiness,
-              }))
+        const replayedAfter = existingEvent.after_json
+          ? parseJson<unknown>(existingEvent.after_json, "event after")
+          : undefined;
+        const replayedSkips = input.action === "start_day" && replayedAfter &&
+            typeof replayedAfter === "object" && !Array.isArray(replayedAfter) &&
+            Array.isArray((replayedAfter as { kickoffSkips?: unknown }).kickoffSkips)
+          ? (replayedAfter as { kickoffSkips: DayPlanKickoffSkip[] }).kickoffSkips
           : [];
+        const replayedUnready = replayedSkips
+          .filter((skip) => skip.reason === "not_ready" && skip.readiness)
+          .map((skip) => ({
+            itemId: skip.itemId,
+            taskId: skip.taskId,
+            title: skip.title,
+            readiness: skip.readiness!,
+          }));
         return {
           plan: replayed,
           snapshot: getSnapshot(input.planId),
           pendingReconciliations: listPendingReconciliations(),
           executionRuns: replayedRuns.length > 0 ? replayedRuns : undefined,
           unreadyItems: replayedUnready.length > 0 ? replayedUnready : undefined,
+          kickoffSkips: replayedSkips.length > 0 ? replayedSkips : undefined,
           replayed: true,
         };
       }
@@ -2312,6 +2318,7 @@ export function createDayPlanStore(options: {
       let snapshot: DaySnapshot | undefined;
       const executionRuns: DayPlanExecutionRun[] = [];
       const unreadyItems: DayPlanUnreadyItem[] = [];
+      const kickoffSkips: DayPlanKickoffSkip[] = [];
 
       switch (input.action) {
         case "arrival_open":
@@ -2560,18 +2567,27 @@ export function createDayPlanStore(options: {
           plan.confirmedAt = changedAt;
           for (const item of accepted) {
             if (item.owner !== "claude" && item.owner !== "together") continue;
+            const liveRun = findLiveItemRun(plan.id, item.id);
+            if (liveRun) {
+              kickoffSkips.push({
+                itemId: item.id,
+                taskId: item.taskId,
+                title: item.title,
+                reason: "already_live",
+                status: liveRun.status,
+              });
+              continue;
+            }
             const existingConfig = getExecutionConfig(plan.id, item.id);
-            const mode: DayPlanExecutionMode = item.owner === "together"
-              ? "plan_review"
-              : "autonomous";
+            const mode: DayPlanExecutionMode = "plan_review";
             const modelAlias = selectExecutionModel(item);
             const provisional: DayPlanExecutionConfig = {
               dayPlanId: plan.id,
               itemId: item.id,
               mode,
               modelAlias,
-              workspaceId: mode === "autonomous" ? existingConfig?.workspaceId : undefined,
-              budgetUsd: mode === "autonomous" ? existingConfig?.budgetUsd : undefined,
+              workspaceId: undefined,
+              budgetUsd: undefined,
               briefHash: dayPlanItemBriefHash(item),
               authorizationHash: "",
               lastMutationId: `${input.mutationId}:route:${item.id}`,
@@ -2607,11 +2623,30 @@ export function createDayPlanStore(options: {
             );
             const readiness = itemReadiness(plan, item, config);
             if (!readiness.ready) {
-              unreadyItems.push({
+              const unready = {
                 itemId: item.id,
                 taskId: item.taskId,
                 title: item.title,
                 readiness,
+              };
+              unreadyItems.push(unready);
+              kickoffSkips.push({ ...unready, reason: "not_ready" });
+              continue;
+            }
+            const existingRun = findExistingItemRun(
+              plan.id,
+              item.id,
+              config.briefHash,
+              config.mode,
+              config.authorizationHash,
+            );
+            if (existingRun) {
+              kickoffSkips.push({
+                itemId: item.id,
+                taskId: item.taskId,
+                title: item.title,
+                reason: "result_available",
+                status: existingRun.status,
               });
               continue;
             }
@@ -2841,7 +2876,7 @@ export function createDayPlanStore(options: {
         expectedVersion: input.expectedVersion,
         resultVersion: plan.version,
         before,
-        after: plan,
+        after: input.action === "start_day" ? { plan, kickoffSkips } : plan,
         createdAt: changedAt,
       });
       return {
@@ -2850,6 +2885,7 @@ export function createDayPlanStore(options: {
         pendingReconciliations: listPendingReconciliations(),
         executionRuns: executionRuns.length > 0 ? executionRuns : undefined,
         unreadyItems: unreadyItems.length > 0 ? unreadyItems : undefined,
+        kickoffSkips: kickoffSkips.length > 0 ? kickoffSkips : undefined,
         replayed: false,
       };
     });

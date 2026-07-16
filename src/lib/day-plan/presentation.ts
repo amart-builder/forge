@@ -1,5 +1,4 @@
 import type {
-  DayPlan,
   DayPlanExecutionConfig,
   DayPlanExecutionReadiness,
   DayPlanExecutionRun,
@@ -216,7 +215,7 @@ export type CurrentExecutionRow = {
 // Shared, pure "current execution row" selector. Applies the latest-attempt rule
 // (newest createdAt for the item) and the brief/authorization/mode hash match, so a
 // run whose brief or authorization drifted from the saved config is never treated as
-// current. Reused by Morning Arrival, the started view, and Living Current.
+// current. Reused by the board's hero and downstream execution indicators.
 export function selectCurrentExecutionRow(
   runs: readonly DayPlanExecutionRun[],
   itemId: string,
@@ -246,80 +245,74 @@ export function isRetryableRunStatus(status: DayPlanExecutionRunStatus): boolean
   return RETRYABLE_RUN_STATUSES.has(status);
 }
 
-export type StartedExecutionRow = {
-  item: DayPlanItem;
-  latestRun?: DayPlanExecutionRun;
-  currentRun?: DayPlanExecutionRun;
-  config?: DayPlanExecutionConfig;
-  readiness?: DayPlanExecutionReadiness;
-  // No run matching the current authorization means the item needs setup before it can run.
-  needsSetup: boolean;
-  // The current run ended in a retryable terminal state, so a new attempt can be kicked off.
-  retryable: boolean;
+export type BoardExecutionPresentation = {
+  statusLabel?: string;
+  action: 'none' | 'open' | 'start_plan' | 'retry';
+  showKickoff: boolean;
+  reviewable: boolean;
 };
 
-// Derives one started-view row per accepted, agent-owned item, in priority order.
-export function selectStartedExecutionRows(
-  items: readonly DayPlanItem[],
-  executionItems: ReadonlyArray<{
-    itemId: string;
-    config?: DayPlanExecutionConfig;
-    readiness: DayPlanExecutionReadiness;
-  }>,
-  runs: readonly DayPlanExecutionRun[],
-): StartedExecutionRow[] {
-  return items
-    .filter(
-      (item) =>
-        item.decision === 'accepted' &&
-        (item.owner === 'claude' || item.owner === 'together'),
-    )
-    .sort((left, right) => left.position - right.position)
-    .map((item) => {
-      const executionItem = executionItems.find((entry) => entry.itemId === item.id);
-      const { latestRun, currentRun } = selectCurrentExecutionRow(
-        runs,
-        item.id,
-        executionItem?.config,
-      );
-      return {
-        item,
-        latestRun,
-        currentRun,
-        config: executionItem?.config,
-        readiness: executionItem?.readiness,
-        needsSetup: !currentRun,
-        retryable: Boolean(currentRun && isRetryableRunStatus(currentRun.status)),
-      };
-    });
-}
-
-// True when Start My Day should open the started payoff view (at least one accepted
-// item is owned by Claude or Together); otherwise the brief transition still applies.
-export function hasAgentOwnedAcceptedWork(items: readonly DayPlanItem[]): boolean {
-  return items.some(
-    (item) =>
-      item.decision === 'accepted' &&
-      (item.owner === 'claude' || item.owner === 'together'),
-  );
+export function selectBoardExecutionPresentation(input: {
+  owner: DayOwner;
+  run?: DayPlanExecutionRun;
+  taskDone?: boolean;
+}): BoardExecutionPresentation {
+  if (input.taskDone) {
+    return { statusLabel: 'Done', action: 'none', showKickoff: false, reviewable: false };
+  }
+  const run = input.run;
+  if (!run) {
+    return input.owner === 'claude' || input.owner === 'together'
+      ? { action: 'start_plan', showKickoff: true, reviewable: false }
+      : { action: 'none', showKickoff: false, reviewable: false };
+  }
+  if (isRetryableRunStatus(run.status)) {
+    return {
+      statusLabel: 'Failed · Retry',
+      action: 'retry',
+      showKickoff: true,
+      reviewable: false,
+    };
+  }
+  if (
+    run.status === 'plan_ready' ||
+    run.status === 'ready_to_join' ||
+    run.status === 'awaiting_review'
+  ) {
+    return {
+      statusLabel: 'Plan ready · Review',
+      action: run.claudeSessionId ? 'open' : 'none',
+      showKickoff: false,
+      reviewable: Boolean(run.claudeSessionId),
+    };
+  }
+  if (run.status === 'queued') {
+    return {
+      statusLabel: 'Claude · queued',
+      action: run.claudeSessionId ? 'open' : 'none',
+      showKickoff: false,
+      reviewable: false,
+    };
+  }
+  if (run.status === 'starting' || run.status === 'running') {
+    return {
+      statusLabel: 'Claude · working',
+      action: run.claudeSessionId ? 'open' : 'none',
+      showKickoff: false,
+      reviewable: false,
+    };
+  }
+  return {
+    statusLabel: 'Claude · cancelling',
+    action: 'none',
+    showKickoff: false,
+    reviewable: false,
+  };
 }
 
 // Deep-link that asks the Claude desktop app to import and resume a CLI session.
 export function claudeResumeUrl(sessionId: string): string {
   return `claude://resume?session=${encodeURIComponent(sessionId)}`;
-}
-
-// Every accepted server response (configure conflict, kickoff, plan refresh) re-infers
-// the ritual view, and an active plan infers 'none'. The started payoff view must
-// survive those round-trips: it only closes on the explicit Enter my day action. Real
-// transitions still win — if the plan leaves 'active' (settlement opening, arrival
-// reopening after a failure) the inferred view applies as usual.
-export function shouldKeepStartedView(
-  currentView: string,
-  inferredView: string,
-  planState: DayPlan['state'],
-): boolean {
-  return currentView === 'started' && planState === 'active' && inferredView === 'none';
 }
 
 export type RitualContentSwapDecision = 'none' | 'immediate' | 'crossfade';

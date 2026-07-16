@@ -7,7 +7,6 @@ import {
   type RefObject,
 } from 'react';
 import { useBuddy, useBuddyStream } from '@/components/buddy/BuddyProvider';
-import type { DayPlanExecutionState } from '@/lib/data/day-plan';
 import { matchesArrivalAddition } from '@/lib/day-plan/arrival-addition';
 import type {
   MorningBriefGeneration,
@@ -17,9 +16,7 @@ import type {
 } from '@/lib/day-plan/brief';
 import type {
   DayPlan,
-  DayPlanExecutionMode,
   DayPlanItem,
-  DayPlanModelAlias,
   DayPlanMutationResult,
   DayPlanOwner as DayOwner,
 } from '@/lib/day-plan/types';
@@ -56,10 +53,6 @@ interface MorningArrivalProps {
   expandedItemId?: string | null;
   busy?: boolean;
   error?: string;
-  executionState?: DayPlanExecutionState;
-  executionLoading?: boolean;
-  executionBusyItemIds?: ReadonlySet<string>;
-  executionError?: string;
   titleId: string;
   descriptionId: string;
   escapeRef?: RefObject<(() => void) | null>;
@@ -68,14 +61,6 @@ interface MorningArrivalProps {
   onOwnerChange: (itemId: string, owner: DayOwner) => void | Promise<void>;
   onDragReorder: (activeId: string, overId: string) => void | Promise<void>;
   onDismiss: (itemId: string, title: string) => void | Promise<void>;
-  onKickoffExecution: (
-    itemId: string,
-    mode: DayPlanExecutionMode,
-    modelAlias: DayPlanModelAlias,
-    workspaceId?: string,
-    budgetUsd?: number,
-  ) => void | Promise<unknown>;
-  onCancelExecution: (runId: string) => void | Promise<unknown>;
   onSalesAction?: (
     actionIndex: number,
     state: MorningBriefSalesActionState,
@@ -121,10 +106,6 @@ export default function MorningArrival({
   expandedItemId,
   busy = false,
   error,
-  executionState,
-  executionLoading = false,
-  executionBusyItemIds = new Set<string>(),
-  executionError,
   titleId,
   descriptionId,
   escapeRef,
@@ -133,8 +114,6 @@ export default function MorningArrival({
   onOwnerChange,
   onDragReorder,
   onDismiss,
-  onKickoffExecution,
-  onCancelExecution,
   onSalesAction,
   onAddSuggestion,
   onSnooze,
@@ -176,7 +155,6 @@ export default function MorningArrival({
     ) ?? [],
   );
   const buddyActive = buddyBusy || Boolean(streamingTurn);
-  const anyExecutionBusy = executionBusyItemIds.size > 0;
   const currentStepIndex = Math.max(0, availableSteps.indexOf(step));
   const isFinalStep = currentStepIndex === availableSteps.length - 1;
 
@@ -294,16 +272,11 @@ export default function MorningArrival({
           </div>
         </header>
 
-        {(error || executionError) && (
+        {error && (
           <div className="mx-auto w-full max-w-[60rem] space-y-2 px-6 pt-5 sm:px-10 min-[1500px]:max-w-[76rem]">
             {error && (
               <p role="alert" className="rounded-xl border border-accent-red/30 bg-accent-red/5 p-3 text-sm text-accent-red">
                 {error}
-              </p>
-            )}
-            {executionError && (
-              <p role="alert" className="rounded-xl border border-accent-red/30 bg-accent-red/5 p-3 text-sm text-accent-red">
-                {executionError}
               </p>
             )}
           </div>
@@ -325,16 +298,11 @@ export default function MorningArrival({
               visibleItems={visibleItems}
               expandedItemId={expandedItemId}
               busy={busy}
-              executionState={executionState}
-              executionLoading={executionLoading}
-              executionBusyItemIds={executionBusyItemIds}
               draggingRef={draggingRef}
               onExpand={onExpand}
               onOwnerChange={onOwnerChange}
               onDragReorder={onDragReorder}
               onDismiss={handleDismiss}
-              onKickoffExecution={onKickoffExecution}
-              onCancelExecution={onCancelExecution}
               setDisclosureRef={setDisclosureRef}
               onOwnerChipOpen={handleOwnerChipOpen}
               onOwnerChipClose={handleOwnerChipClose}
@@ -402,7 +370,6 @@ export default function MorningArrival({
               disabled={isFinalStep && (
                 busy ||
                 buddyActive ||
-                anyExecutionBusy ||
                 visibleItems.length === 0
               )}
               className={`press-scale min-h-11 w-full rounded-xl px-5 text-sm font-semibold disabled:opacity-40 sm:ml-auto sm:w-auto ${

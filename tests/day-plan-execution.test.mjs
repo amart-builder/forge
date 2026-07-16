@@ -66,7 +66,7 @@ function mutate(store, plan, action, patch = {}) {
   }).plan;
 }
 
-test('Together plan review queues a resumable run without a workspace', (t) => {
+test('Start My Day queues Together plan review without a workspace', (t) => {
   const { store, plan: original } = setup(t);
   let plan = mutate(store, original, 'item_owner', {
     itemId: original.items[0].id,
@@ -83,22 +83,23 @@ test('Together plan review queues a resumable run without a workspace', (t) => {
   assert.equal(configured.readiness.ready, true);
   assert.equal(configured.config.workspaceId, undefined);
 
-  const kicked = store.kickoffItem({
+  const started = store.mutateDayPlan({
     planId: plan.id,
-    itemId: plan.items[0].id,
     expectedVersion: plan.version,
-    mutationId: 'kickoff:together',
+    mutationId: 'start-day:together',
+    action: 'start_day',
   });
-  assert.equal(kicked.run.status, 'queued');
-  assert.equal(kicked.run.owner, 'together');
-  assert.equal(kicked.run.mode, 'plan_review');
-  assert.match(kicked.run.claudeSessionId, /^[0-9a-f-]{36}$/);
-  assert.equal(kicked.plan.items[0].decision, 'accepted');
-  assert.equal(store.kickoffItem({
+  const [run] = started.executionRuns;
+  assert.equal(run.status, 'queued');
+  assert.equal(run.owner, 'together');
+  assert.equal(run.mode, 'plan_review');
+  assert.match(run.claudeSessionId, /^[0-9a-f-]{36}$/);
+  assert.equal(started.plan.items[0].decision, 'accepted');
+  assert.equal(store.mutateDayPlan({
     planId: plan.id,
-    itemId: plan.items[0].id,
     expectedVersion: plan.version,
-    mutationId: 'kickoff:together',
+    mutationId: 'start-day:together',
+    action: 'start_day',
   }).replayed, true);
 });
 
@@ -123,7 +124,7 @@ test('Together can never be configured for autonomous execution', (t) => {
   );
 });
 
-test('brief edits invalidate execution configuration and prevent kickoff', (t) => {
+test('arrival never permits kickoff and Start My Day uses the final edited brief', (t) => {
   const { store, plan: original } = setup(t);
   let plan = mutate(store, original, 'item_owner', {
     itemId: original.items[0].id,
@@ -137,14 +138,16 @@ test('brief edits invalidate execution configuration and prevent kickoff', (t) =
     mode: 'plan_review',
     modelAlias: 'sonnet',
   });
-  const queued = store.kickoffItem({
-    planId: plan.id,
-    itemId: plan.items[0].id,
-    expectedVersion: plan.version,
-    mutationId: 'kickoff:before-brief-change',
-  });
-  assert.equal(queued.run.status, 'queued');
-  plan = queued.plan;
+  assert.throws(
+    () => store.kickoffItem({
+      planId: plan.id,
+      itemId: plan.items[0].id,
+      expectedVersion: plan.version,
+      mutationId: 'kickoff:during-arrival',
+    }),
+    (error) => error instanceof DayPlanInvalidTransition,
+  );
+  assert.equal(store.listExecutionRuns(plan.id).length, 0);
   plan = mutate(store, plan, 'item_edit', {
     itemId: plan.items[0].id,
     outcome: 'A newly clarified outcome',
@@ -152,17 +155,15 @@ test('brief edits invalidate execution configuration and prevent kickoff', (t) =
   const readiness = store.getExecutionReadiness(plan.id, plan.items[0].id);
   assert.equal(readiness.ready, false);
   assert.ok(readiness.codes.includes('brief_changed'));
-  const kickoff = store.kickoffItem({
+  const started = store.mutateDayPlan({
     planId: plan.id,
-    itemId: plan.items[0].id,
     expectedVersion: plan.version,
-    mutationId: 'kickoff:stale-brief',
+    mutationId: 'start-day:edited-brief',
+    action: 'start_day',
   });
-  assert.equal(kickoff.run, undefined);
-  const runs = store.listExecutionRuns(plan.id);
-  assert.equal(runs.length, 1);
-  assert.equal(runs[0].status, 'cancelled');
-  assert.equal(runs[0].errorCode, 'brief_changed');
+  assert.equal(started.executionRuns.length, 1);
+  assert.equal(started.executionRuns[0].promptSnapshot.outcome, 'A newly clarified outcome');
+  assert.equal(started.executionRuns[0].status, 'queued');
 });
 
 test('execution can be configured for an accepted agent item once the day is active, but not for me-owned or dropped items', (t) => {
@@ -246,13 +247,15 @@ test('a dropped item can never be configured for execution, even while the day i
   );
 });
 
-test('claudeSessionId is projected only for loopback plan-ready and ready-to-join runs', () => {
+test('claudeSessionId is projected for loopback actionable runs only', () => {
   const statuses = [
     'queued', 'starting', 'running', 'plan_ready', 'ready_to_join',
     'awaiting_review', 'failed', 'interrupted', 'cancelling', 'cancelled',
   ];
   for (const status of statuses) {
-    const exposed = status === 'plan_ready' || status === 'ready_to_join';
+    const exposed = [
+      'queued', 'starting', 'running', 'plan_ready', 'ready_to_join', 'awaiting_review',
+    ].includes(status);
     assert.equal(includesClaudeSessionId('loopback', status), exposed);
     assert.equal(includesClaudeSessionId('session', status), false);
     assert.equal(includesClaudeSessionId(undefined, status), false);
@@ -282,7 +285,7 @@ test('claudeSessionId is projected only for loopback plan-ready and ready-to-joi
   assert.equal(publicExecutionRun(baseRun, 'loopback').claudeSessionId, baseRun.claudeSessionId);
   assert.equal(publicExecutionRun(baseRun, 'session').claudeSessionId, undefined);
   assert.equal(publicExecutionRun(baseRun).claudeSessionId, undefined);
-  assert.equal(publicExecutionRun({ ...baseRun, status: 'running' }, 'loopback').claudeSessionId, undefined);
+  assert.equal(publicExecutionRun({ ...baseRun, status: 'running' }, 'loopback').claudeSessionId, baseRun.claudeSessionId);
   assert.equal(publicExecutionRun({ ...baseRun, status: 'ready_to_join' }, 'loopback').claudeSessionId, baseRun.claudeSessionId);
 
   // workspacePath, pid, and the readiness path stay stripped regardless of access mode.
@@ -292,7 +295,7 @@ test('claudeSessionId is projected only for loopback plan-ready and ready-to-joi
   assert.equal(stripped.readiness.workspacePath, undefined);
 });
 
-test('Start My Day routes the latest agent cards and reports autonomous setup gaps', (t) => {
+test('Start My Day batch-kicks every accepted Claude and Together item in plan mode', (t) => {
   const { store, plan: original } = setup(t);
   let plan = original;
   plan = mutate(store, plan, 'item_owner', { itemId: plan.items[0].id, owner: 'together' });
@@ -304,13 +307,16 @@ test('Start My Day routes the latest agent cards and reports autonomous setup ga
     action: 'start_day',
   });
   assert.equal(started.plan.state, 'active');
-  assert.equal(started.executionRuns.length, 1);
-  assert.equal(started.executionRuns[0].itemId, plan.items[0].id);
-  assert.equal(started.executionRuns[0].mode, 'plan_review');
-  assert.equal(started.executionRuns[0].modelAlias, 'opus');
-  assert.equal(started.unreadyItems.length, 1);
-  assert.equal(started.unreadyItems[0].itemId, plan.items[1].id);
-  assert.equal(store.listExecutionRuns(plan.id).length, 1);
+  assert.equal(started.executionRuns.length, 2);
+  assert.deepEqual(
+    new Set(started.executionRuns.map((run) => run.itemId)),
+    new Set(plan.items.map((item) => item.id)),
+  );
+  assert.equal(started.executionRuns.every((run) => run.mode === 'plan_review'), true);
+  assert.equal(started.executionRuns.every((run) => run.status === 'queued'), true);
+  assert.equal(started.unreadyItems?.length ?? 0, 0);
+  assert.equal(started.kickoffSkips?.length ?? 0, 0);
+  assert.equal(store.listExecutionRuns(plan.id).length, 2);
   const replay = store.mutateDayPlan({
     planId: plan.id,
     expectedVersion: plan.version,
@@ -318,7 +324,8 @@ test('Start My Day routes the latest agent cards and reports autonomous setup ga
     action: 'start_day',
   });
   assert.equal(replay.replayed, true);
-  assert.equal(store.listExecutionRuns(plan.id).length, 1);
+  assert.equal(replay.executionRuns.length, 2);
+  assert.equal(store.listExecutionRuns(plan.id).length, 2);
 });
 
 test('reopening arrival quiesces queued and running agent work before a fresh restart', (t) => {
@@ -348,14 +355,21 @@ test('reopening arrival quiesces queued and running agent work before a fresh re
   assert.equal(store.getExecutionRun(queued.id).errorCode, 'user_cancelled');
   assert.equal(store.getExecutionRun(running.id).status, 'cancelling');
   assert.equal(store.heartbeatExecutionRun(running.id, 222), false);
-  const replacementWhileCancelling = store.kickoffItem({
+  const restarted = store.mutateDayPlan({
     planId: plan.id,
-    itemId: running.itemId,
     expectedVersion: plan.version,
-    mutationId: 'kickoff:while-reopen-cancels',
+    mutationId: 'start-day:while-one-cancels',
+    action: 'start_day',
   });
-  plan = replacementWhileCancelling.plan;
-  assert.equal(replacementWhileCancelling.run.id, running.id);
+  plan = restarted.plan;
+  assert.equal(restarted.executionRuns.length, 1);
+  assert.equal(restarted.executionRuns[0].itemId, queued.itemId);
+  assert.equal(restarted.executionRuns[0].attempt, 2);
+  assert.deepEqual(restarted.kickoffSkips.map(({ itemId, reason, status }) => ({ itemId, reason, status })), [{
+    itemId: running.itemId,
+    reason: 'already_live',
+    status: 'cancelling',
+  }]);
   assert.equal(
     store.listExecutionRuns(plan.id).filter((run) =>
       run.itemId === running.itemId &&
@@ -365,20 +379,16 @@ test('reopening arrival quiesces queued and running agent work before a fresh re
   );
   assert.equal(store.finishExecutionRun({ runId: running.id }).status, 'cancelled');
 
-  const restarted = store.mutateDayPlan({
+  const replacement = store.kickoffItem({
     planId: plan.id,
+    itemId: running.itemId,
     expectedVersion: plan.version,
-    mutationId: 'start-day:after-reopen',
-    action: 'start_day',
+    mutationId: 'kickoff:after-reopen-cancelled',
   });
-  assert.equal(restarted.plan.state, 'active');
-  assert.equal(restarted.executionRuns.length, 2);
-  assert.equal(restarted.executionRuns.every((run) => run.status === 'queued'), true);
-  assert.equal(restarted.executionRuns.every((run) => run.attempt === 2), true);
-  assert.equal(
-    restarted.executionRuns.every((run) => run.id !== queued.id && run.id !== running.id),
-    true,
-  );
+  plan = replacement.plan;
+  assert.equal(replacement.run.status, 'queued');
+  assert.equal(replacement.run.attempt, 2);
+  assert.notEqual(replacement.run.id, running.id);
 
   const liveStatuses = new Set(['queued', 'starting', 'running', 'cancelling']);
   const allRuns = store.listExecutionRuns(plan.id);
@@ -509,8 +519,15 @@ test('authorization revisions cancel queued runs for mode, model, budget, and wo
     return result.run;
   };
 
-  const initialConfig = configure({});
-  const modelRun = kickoff();
+  const started = store.mutateDayPlan({
+    planId: plan.id,
+    expectedVersion: plan.version,
+    mutationId: 'start-day:auth',
+    action: 'start_day',
+  });
+  plan = started.plan;
+  const initialConfig = store.getExecutionConfig(plan.id, itemId);
+  const modelRun = started.executionRuns[0];
   const modelConfig = configure({ modelAlias: 'opus' });
   assert.notEqual(modelConfig.authorizationHash, initialConfig.authorizationHash);
   assert.equal(store.getExecutionRun(modelRun.id).errorCode, 'authorization_changed');
@@ -549,20 +566,14 @@ test('failed and cancelled runs can be retried under the same current authorizat
     itemId: original.items[0].id,
     owner: 'claude',
   });
-  store.configureExecution({
+  const started = store.mutateDayPlan({
     planId: plan.id,
-    itemId: plan.items[0].id,
     expectedVersion: plan.version,
-    mutationId: 'configure:retry',
-    mode: 'plan_review',
-    modelAlias: 'sonnet',
+    mutationId: 'start-day:retry',
+    action: 'start_day',
   });
-  const first = store.kickoffItem({
-    planId: plan.id,
-    itemId: plan.items[0].id,
-    expectedVersion: plan.version,
-    mutationId: 'kickoff:retry:first',
-  });
+  plan = started.plan;
+  const first = { run: started.executionRuns[0], plan };
   assert.equal(first.run.attempt, 1);
   const claimed = store.claimNextExecutionRun(12345);
   assert.equal(claimed.id, first.run.id);

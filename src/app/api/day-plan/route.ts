@@ -46,6 +46,7 @@ import {
 import {
   publicDayPlan,
   publicExecutionRun,
+  publicKickoffSkip,
   publicUnreadyItem,
 } from "@/lib/day-plan/public-execution";
 
@@ -664,6 +665,7 @@ export async function POST(request: NextRequest) {
             publicExecutionRun(run, accessMode),
           ),
           unreadyItems: result.unreadyItems?.map(publicUnreadyItem),
+          kickoffSkips: result.kickoffSkips?.map(publicKickoffSkip),
           ...(parsed.action === "start_day"
             ? {
                 worker: {

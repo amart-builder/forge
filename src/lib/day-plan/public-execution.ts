@@ -3,6 +3,7 @@ import type {
   DayPlanExecutionReadiness,
   DayPlanExecutionRun,
   DayPlanExecutionRunStatus,
+  DayPlanKickoffSkip,
   DayPlanUnreadyItem,
 } from "./types";
 
@@ -31,16 +32,23 @@ export function publicDayPlan(
 }
 
 // A run's claudeSessionId is a resumable handle into a local Claude CLI session. It is
-// only safe to expose when the request is loopback (same machine, not a remote session)
-// and the run is in a state a person can actually open: a ready plan or a session ready
-// to join. Every other case strips it, exactly like workspacePath and pid.
+// only safe to expose when the request is loopback (same machine, not a remote session).
+// The board can open a queued/running planning session as well as a ready result; remote
+// sessions still never receive this resumable local handle.
 export function includesClaudeSessionId(
   accessMode: DayPlanExecutionAccessMode | undefined,
   status: DayPlanExecutionRunStatus,
 ): boolean {
   return (
     accessMode === "loopback" &&
-    (status === "plan_ready" || status === "ready_to_join")
+    [
+      "queued",
+      "starting",
+      "running",
+      "plan_ready",
+      "ready_to_join",
+      "awaiting_review",
+    ].includes(status)
   );
 }
 
@@ -73,4 +81,10 @@ export function publicUnreadyItem(item: DayPlanUnreadyItem): DayPlanUnreadyItem 
     ...item,
     readiness: publicExecutionReadiness(item.readiness),
   };
+}
+
+export function publicKickoffSkip(item: DayPlanKickoffSkip): DayPlanKickoffSkip {
+  return item.readiness
+    ? { ...item, readiness: publicExecutionReadiness(item.readiness) }
+    : item;
 }

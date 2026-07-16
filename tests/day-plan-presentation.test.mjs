@@ -7,20 +7,17 @@ import {
   firstCarriedItem,
   executionReadinessMessage,
   executionRunStatusLabel,
-  hasAgentOwnedAcceptedWork,
   helpfulProjectLabel,
-  isRetryableRunStatus,
   morningArrivalGreeting,
   ownerDescription,
   reorderDayPlanItems,
   resolveArrivalEscape,
   resolveRitualContentSwap,
+  selectBoardExecutionPresentation,
   selectCurrentExecutionRow,
   selectEssentialItems,
   selectRecommendedHumanFocus,
-  selectStartedExecutionRows,
   shortArrivalSummary,
-  shouldKeepStartedView,
   shouldPollBriefGeneration,
   staleSettlementNotice,
 } from '../src/lib/day-plan/presentation.ts';
@@ -180,10 +177,6 @@ function config(overrides = {}) {
   return { briefHash: 'brief-1', authorizationHash: 'auth-1', mode: 'plan_review', ...overrides };
 }
 
-function acceptedItem(id, owner, position = 0) {
-  return { id, taskId: `task-${id}`, title: `Task ${id}`, owner, position, decision: 'accepted', outcome: '' };
-}
-
 test('current execution row takes the latest attempt only when brief, authorization, and mode still match', () => {
   const older = run({ id: 'old', createdAt: '2026-07-10T15:00:00.000Z' });
   const newer = run({ id: 'new', createdAt: '2026-07-10T16:00:00.000Z' });
@@ -200,68 +193,51 @@ test('current execution row takes the latest attempt only when brief, authorizat
   assert.equal(selectCurrentExecutionRow([newer], 'item-a', undefined).currentRun, undefined);
 });
 
-test('started rows cover only accepted agent work and flag unready items as needing setup', () => {
-  const items = [
-    acceptedItem('a', 'claude', 0),
-    acceptedItem('b', 'together', 1),
-    acceptedItem('c', 'me', 2),
-    { ...acceptedItem('d', 'claude', 3), decision: 'dismissed' },
-  ];
-  const executionItems = [
-    { itemId: 'a', config: config(), readiness: { ready: true, codes: ['ready'], checkedAt: '' } },
-    { itemId: 'b', config: undefined, readiness: { ready: false, codes: ['workspace_required'], checkedAt: '' } },
-  ];
-  const runs = [run({ id: 'run-a', itemId: 'a', status: 'running' })];
-  const rows = selectStartedExecutionRows(items, executionItems, runs);
-  assert.deepEqual(rows.map((row) => row.item.id), ['a', 'b']);
-  assert.equal(rows[0].needsSetup, false);
-  assert.equal(rows[0].currentRun.status, 'running');
-  assert.equal(rows[0].retryable, false);
-  assert.equal(rows[1].needsSetup, true);
-  assert.equal(rows[1].currentRun, undefined);
-  assert.equal(rows[1].retryable, false);
-});
+test('board execution selector drives hero actions and retry-only kickoff visibility', () => {
+  assert.deepEqual(
+    selectBoardExecutionPresentation({ owner: 'claude' }),
+    { action: 'start_plan', showKickoff: true, reviewable: false },
+  );
+  assert.deepEqual(
+    selectBoardExecutionPresentation({ owner: 'me' }),
+    { action: 'none', showKickoff: false, reviewable: false },
+  );
 
-test('a terminal current run marks the row retryable instead of blocking a new attempt', () => {
-  const items = [acceptedItem('a', 'claude', 0)];
-  const executionItems = [
-    { itemId: 'a', config: config(), readiness: { ready: true, codes: ['ready'], checkedAt: '' } },
-  ];
   for (const status of ['failed', 'interrupted', 'cancelled']) {
-    const rows = selectStartedExecutionRows(items, executionItems, [
-      run({ id: `run-${status}`, itemId: 'a', status }),
-    ]);
-    assert.equal(rows[0].needsSetup, false, status);
-    assert.equal(rows[0].currentRun.status, status);
-    assert.equal(rows[0].retryable, true, status);
+    assert.deepEqual(
+      selectBoardExecutionPresentation({ owner: 'claude', run: run({ status }) }),
+      {
+        statusLabel: 'Failed · Retry',
+        action: 'retry',
+        showKickoff: true,
+        reviewable: false,
+      },
+      status,
+    );
   }
-  for (const status of ['queued', 'starting', 'running', 'cancelling', 'plan_ready', 'ready_to_join', 'awaiting_review']) {
-    const rows = selectStartedExecutionRows(items, executionItems, [
-      run({ id: `run-${status}`, itemId: 'a', status }),
-    ]);
-    assert.equal(rows[0].retryable, false, status);
-    assert.equal(isRetryableRunStatus(status), false, status);
+
+  for (const [status, statusLabel] of [
+    ['queued', 'Claude · queued'],
+    ['starting', 'Claude · working'],
+    ['running', 'Claude · working'],
+  ]) {
+    const presentation = selectBoardExecutionPresentation({ owner: 'together', run: run({ status }) });
+    assert.equal(presentation.statusLabel, statusLabel, status);
+    assert.equal(presentation.action, 'open', status);
+    assert.equal(presentation.showKickoff, false, status);
   }
-});
 
-test('the started view survives accepted responses while the day stays active', () => {
-  // Configure/kickoff round-trips keep an active plan inferring 'none': stay on started.
-  assert.equal(shouldKeepStartedView('started', 'none', 'active'), true);
-  // Real transitions still win: settlement opens, or the plan leaves active.
-  assert.equal(shouldKeepStartedView('started', 'settlement', 'settling'), false);
-  assert.equal(shouldKeepStartedView('started', 'none', 'settled'), false);
-  assert.equal(shouldKeepStartedView('started', 'arrival', 'proposed'), false);
-  // Other views never hijack the inferred view.
-  assert.equal(shouldKeepStartedView('arrival', 'none', 'active'), false);
-  assert.equal(shouldKeepStartedView('none', 'none', 'active'), false);
-});
+  for (const status of ['plan_ready', 'ready_to_join', 'awaiting_review']) {
+    const presentation = selectBoardExecutionPresentation({ owner: 'claude', run: run({ status }) });
+    assert.equal(presentation.statusLabel, 'Plan ready · Review', status);
+    assert.equal(presentation.action, 'open', status);
+    assert.equal(presentation.reviewable, true, status);
+    assert.equal(presentation.showKickoff, false, status);
+  }
 
-test('the started view opens only when accepted agent work exists', () => {
-  assert.equal(hasAgentOwnedAcceptedWork([acceptedItem('a', 'claude')]), true);
-  assert.equal(hasAgentOwnedAcceptedWork([acceptedItem('a', 'me')]), false);
-  assert.equal(
-    hasAgentOwnedAcceptedWork([{ ...acceptedItem('a', 'claude'), decision: 'later' }]),
-    false,
+  assert.deepEqual(
+    selectBoardExecutionPresentation({ owner: 'claude', run: run(), taskDone: true }),
+    { statusLabel: 'Done', action: 'none', showKickoff: false, reviewable: false },
   );
 });
 
@@ -276,7 +252,7 @@ test('brief-generation poll runs only on a visible, untouched arrival while writ
   assert.equal(shouldPollBriefGeneration(base), true);
   assert.equal(shouldPollBriefGeneration({ ...base, generationState: 'queued' }), true);
   // The gate closes on every off condition.
-  assert.equal(shouldPollBriefGeneration({ ...base, view: 'started' }), false);
+  assert.equal(shouldPollBriefGeneration({ ...base, view: 'none' }), false);
   assert.equal(shouldPollBriefGeneration({ ...base, documentVisible: false }), false);
   assert.equal(shouldPollBriefGeneration({ ...base, interacted: true }), false);
   assert.equal(shouldPollBriefGeneration({ ...base, hasConsumedBrief: true }), false);
@@ -313,11 +289,11 @@ test('ritual view swaps crossfade, cut immediately under reduced motion, and ski
     'none',
   );
   assert.equal(
-    resolveRitualContentSwap({ displayedKey: 'arrival', nextKey: 'started', reducedMotion: false }),
+    resolveRitualContentSwap({ displayedKey: 'arrival', nextKey: 'settlement', reducedMotion: false }),
     'crossfade',
   );
   assert.equal(
-    resolveRitualContentSwap({ displayedKey: 'arrival', nextKey: 'started', reducedMotion: true }),
+    resolveRitualContentSwap({ displayedKey: 'arrival', nextKey: 'settlement', reducedMotion: true }),
     'immediate',
   );
 });

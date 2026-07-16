@@ -15,7 +15,6 @@ import {
   rectSortingStrategy,
   sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
-import type { DayPlanExecutionState } from '@/lib/data/day-plan';
 import type { MorningArrivalItem, MorningArrivalProps } from '../MorningArrival';
 import ArrivalCard from './ArrivalCard';
 import type { OwnerChipEscapeHandler } from './OwnerChip';
@@ -24,16 +23,11 @@ export default function ArrivalStepPriorities({
   visibleItems,
   expandedItemId,
   busy,
-  executionState,
-  executionLoading,
-  executionBusyItemIds,
   draggingRef,
   onExpand,
   onOwnerChange,
   onDragReorder,
   onDismiss,
-  onKickoffExecution,
-  onCancelExecution,
   setDisclosureRef,
   onOwnerChipOpen,
   onOwnerChipClose,
@@ -43,16 +37,11 @@ export default function ArrivalStepPriorities({
   visibleItems: MorningArrivalItem[];
   expandedItemId?: string | null;
   busy: boolean;
-  executionState?: DayPlanExecutionState;
-  executionLoading: boolean;
-  executionBusyItemIds: ReadonlySet<string>;
   draggingRef: { current: boolean };
   onExpand: MorningArrivalProps['onExpand'];
   onOwnerChange: MorningArrivalProps['onOwnerChange'];
   onDragReorder: MorningArrivalProps['onDragReorder'];
   onDismiss: MorningArrivalProps['onDismiss'];
-  onKickoffExecution: MorningArrivalProps['onKickoffExecution'];
-  onCancelExecution: MorningArrivalProps['onCancelExecution'];
   setDisclosureRef: (itemId: string, node: HTMLButtonElement | null) => void;
   onOwnerChipOpen: (handler: OwnerChipEscapeHandler) => void;
   onOwnerChipClose: (itemId: string) => void;
@@ -101,13 +90,6 @@ export default function ArrivalStepPriorities({
                   onExpand={onExpand}
                   onOwnerChange={onOwnerChange}
                   onDismiss={onDismiss}
-                  executionItem={executionState?.items.find((item) => item.itemId === view.item.id)}
-                  executionRuns={executionState?.runs ?? []}
-                  executionWorkspaces={executionState?.workspaces ?? []}
-                  executionBusy={executionBusyItemIds.has(view.item.id)}
-                  executionLoading={executionLoading}
-                  onKickoffExecution={onKickoffExecution}
-                  onCancelExecution={onCancelExecution}
                   setDisclosureRef={setDisclosureRef}
                   onOwnerChipOpen={onOwnerChipOpen}
                   onOwnerChipClose={onOwnerChipClose}

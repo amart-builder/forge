@@ -33,20 +33,21 @@ import {
   firstCarriedItem,
   helpfulProjectLabel,
   reorderDayPlanItems,
+  selectBoardExecutionPresentation,
   selectCurrentExecutionRow,
   shortArrivalSummary,
 } from '@/lib/day-plan/presentation';
-import type { DayPlanExecutionRun } from '@/lib/day-plan/types';
+import type { DayPlanExecutionRun, DayPlanItem } from '@/lib/day-plan/types';
 import {
   planTaskReconciliation,
   reconciliationStateMatches,
   type ReconciliationTaskState,
 } from '@/lib/day-plan/reconciliation';
 import MorningArrival, { type MorningArrivalItem } from './MorningArrival';
-import DayStarted from './DayStarted';
 import DaySettlement from './DaySettlement';
 import DayRitualLayer, { DayRitualContentSwap } from './DayRitualLayer';
 import { OpenInClaudeCode, RunStatusChip } from './ClaudeRunIndicators';
+import ExecutionConfigPanel from './ExecutionConfigPanel';
 import CurrentCanvas, { type CurrentPoint, type Tributary } from './CurrentCanvas';
 import TaskDetail from './TaskDetail';
 import useDayRitual from './useDayRitual';
@@ -103,6 +104,18 @@ type UndoAction = {
   run: () => Promise<void>;
 };
 
+function defaultPlanningModel(item: DayPlanItem): 'sonnet' | 'opus' {
+  return item.owner === 'together' ||
+    JSON.stringify({
+      title: item.title,
+      outcome: item.outcome,
+      definitionOfDone: item.definitionOfDone,
+      whyToday: item.whyToday,
+    }).length >= 900
+    ? 'opus'
+    : 'sonnet';
+}
+
 const TODAY_ALIASES = new Set(['Must happen today', 'Needs to happen today', 'Today']);
 const NOT_STARTED_ALIASES = new Set(['Not Started', 'To Do', 'Backlog']);
 const IN_FLIGHT_ALIASES = new Set(['In Flight / Waiting', 'In Progress']);
@@ -114,18 +127,14 @@ const NOTES_KEY = 'forge.quiet-current.notes';
 
 // The hoisted DayRitualLayer stays mounted across ritual views; these stable ids let
 // each view's heading label the dialog and receive focus after a content swap.
-type OverlayRitualView = 'arrival' | 'started' | 'settlement' | 'transition';
+type OverlayRitualView = 'arrival' | 'settlement';
 const RITUAL_TITLE_IDS: Record<OverlayRitualView, string> = {
   arrival: 'day-ritual-title-arrival',
-  started: 'day-ritual-title-started',
   settlement: 'day-ritual-title-settlement',
-  transition: 'day-ritual-title-transition',
 };
 const RITUAL_DESCRIPTION_IDS: Record<OverlayRitualView, string> = {
   arrival: 'day-ritual-description-arrival',
-  started: 'day-ritual-description-started',
   settlement: 'day-ritual-description-settlement',
-  transition: 'day-ritual-description-transition',
 };
 
 function hasTag(task: TaskData, tag: string): boolean {
@@ -653,6 +662,7 @@ function TodayExperience({
   const undoRunningRef = useRef(false);
   const reconciliationRunningRef = useRef(false);
   const taskMutationRunningRef = useRef(false);
+  const recommendedFocusKeyRef = useRef<string | undefined>(undefined);
   // MorningArrival publishes its staged escape handler here so the hoisted layer can call it.
   const arrivalEscapeRef = useRef<(() => void) | null>(null);
 
@@ -732,9 +742,7 @@ function TodayExperience({
   });
   const ritualView: OverlayRitualView | undefined =
     dayRitual.view === 'arrival' ||
-    dayRitual.view === 'started' ||
-    dayRitual.view === 'settlement' ||
-    dayRitual.view === 'transition'
+    dayRitual.view === 'settlement'
       ? dayRitual.view
       : undefined;
 
@@ -882,6 +890,17 @@ function TodayExperience({
     [focusedTaskId],
   );
 
+  useEffect(() => {
+    const plan = dayRitual.plan;
+    const taskId = plan?.recommendedFirstTaskId;
+    if (!plan || plan.state !== 'active' || !taskId || !plan.confirmedAt) return;
+    if (!openTasks.some((task) => task._id === taskId)) return;
+    const key = `${plan.id}:${plan.confirmedAt}:${taskId}`;
+    if (recommendedFocusKeyRef.current === key) return;
+    recommendedFocusKeyRef.current = key;
+    if (focusedTaskId !== taskId) focusTask(taskId, 'recommended_start');
+  }, [dayRitual.plan, focusTask, focusedTaskId, openTasks]);
+
   const closeTransientSurfaces = useCallback(() => {
     setCaptureOpen(false);
     setDetailTaskId(null);
@@ -917,8 +936,6 @@ function TodayExperience({
   const startPlannedDay = useCallback(async () => {
     setSurfaceError(undefined);
     try {
-      // Purely human days return the first task to focus immediately; days with agent
-      // work hold on the started view and focus later, on Enter my day.
       const taskId = await dayRitual.startDay();
       if (taskId) focusTask(taskId, 'start_my_day');
     } catch (nextError) {
@@ -926,11 +943,6 @@ function TodayExperience({
         nextError instanceof Error ? nextError.message : "Forge couldn't start the planned day.",
       );
     }
-  }, [dayRitual, focusTask]);
-
-  const enterStartedDay = useCallback(() => {
-    const taskId = dayRitual.enterDay();
-    if (taskId) focusTask(taskId, 'start_my_day');
   }, [dayRitual, focusTask]);
 
   const reconcileDayPlanActions = useCallback(async (
@@ -1508,7 +1520,23 @@ function TodayExperience({
     hour: 'numeric',
     minute: '2-digit',
   }).format(now);
-  const downstream = commitments.filter((task) => task._id !== focusedTask?._id);
+  const planPositionByTaskId = new Map(
+    (dayRitual.plan?.items ?? [])
+      .filter((item) => item.decision === 'accepted')
+      .map((item) => [item.taskId, item.position]),
+  );
+  const downstream = commitments
+    .filter((task) => task._id !== focusedTask?._id)
+    .sort((left, right) => {
+      const leftPlanPosition = planPositionByTaskId.get(left._id);
+      const rightPlanPosition = planPositionByTaskId.get(right._id);
+      if (leftPlanPosition !== undefined && rightPlanPosition !== undefined) {
+        return leftPlanPosition - rightPlanPosition;
+      }
+      if (leftPlanPosition !== undefined) return -1;
+      if (rightPlanPosition !== undefined) return 1;
+      return left.position - right.position;
+    });
   const visibleDownstream = showAllDownstream ? downstream : downstream.slice(0, 5);
   const hiddenDownstreamCount = Math.max(0, downstream.length - visibleDownstream.length);
   const focusPoint: CurrentPoint = { x: 500, y: 330 };
@@ -1605,29 +1633,39 @@ function TodayExperience({
   const recommendation = arrivalPlanItems[0]
     ? `Start with ${arrivalPlanItems[0].title}. ${arrivalPlanItems[0].whyToday}`
     : 'Forge does not have enough current evidence to choose your first move yet.';
-  // Current (non-stale) execution run per task, so Living Current can surface Claude's
-  // status on the tasks it already touches. Keyed by taskId to match Living Current nodes.
-  const executionRunByTaskId = useMemo(() => {
-    const map = new Map<string, DayPlanExecutionRun>();
+  const boardExecutionByTaskId = useMemo(() => {
+    const map = new Map<string, {
+      item: DayPlanItem;
+      run?: DayPlanExecutionRun;
+      presentation: ReturnType<typeof selectBoardExecutionPresentation>;
+    }>();
     const activePlan = dayRitual.plan;
     const executionState = dayRitual.executionState;
-    if (!activePlan || !executionState) return map;
+    if (!activePlan) return map;
     for (const item of activePlan.items) {
-      const config = executionState.items.find((entry) => entry.itemId === item.id)?.config;
-      const { currentRun } = selectCurrentExecutionRow(executionState.runs, item.id, config);
-      if (currentRun) map.set(item.taskId, currentRun);
+      const config = executionState?.items.find((entry) => entry.itemId === item.id)?.config;
+      const { latestRun, currentRun } = selectCurrentExecutionRow(
+        executionState?.runs ?? [],
+        item.id,
+        config,
+      );
+      const run = currentRun ?? latestRun;
+      const task = tasks.find((candidate) => candidate._id === item.taskId);
+      map.set(item.taskId, {
+        item,
+        run,
+        presentation: selectBoardExecutionPresentation({
+          owner: item.owner,
+          run,
+          taskDone: task?.status === 'done' || task?.columnId === doneColumn?._id,
+        }),
+      });
     }
     return map;
-  }, [dayRitual.plan, dayRitual.executionState]);
-  const focusedExecutionRun = focusedTask
-    ? executionRunByTaskId.get(focusedTask._id)
+  }, [dayRitual.plan, dayRitual.executionState, doneColumn?._id, tasks]);
+  const focusedBoardExecution = focusedTask
+    ? boardExecutionByTaskId.get(focusedTask._id)
     : undefined;
-  const focusedOpenableSessionId =
-    focusedExecutionRun &&
-    (focusedExecutionRun.status === 'plan_ready' ||
-      focusedExecutionRun.status === 'ready_to_join')
-      ? focusedExecutionRun.claudeSessionId
-      : undefined;
   const planEvidenceRefreshedAt = dayRitual.plan?.items
     .flatMap((item) => item.sourceRefs.map((source) => source.refreshedAt))
     .map((value) => new Date(value).getTime())
@@ -1684,6 +1722,7 @@ function TodayExperience({
   const proposedTomorrow = firstCarriedItem(orderedPlanItems, settlementDecisions);
   const visibleSurfaceError = combineSurfaceErrors(
     dayRitual.ritualOpen ? undefined : dayRitual.error,
+    dayRitual.ritualOpen ? undefined : dayRitual.executionError,
     surfaceError,
   );
 
@@ -1807,6 +1846,11 @@ function TodayExperience({
             {visibleSurfaceError && (
               <p role="alert" className="current-surface-error">{visibleSurfaceError}</p>
             )}
+            {dayRitual.startReceipt && (
+              <p role="status" className="current-start-receipt">
+                {dayRitual.startReceipt}
+              </p>
+            )}
             {error && (
               <div role="alert" className="current-refresh-warning">
                 <span>{error}</span>
@@ -1877,8 +1921,12 @@ function TodayExperience({
                     {focusedIsWithJarvis ? 'Held for Jarvis' : focusedIsBrief ? 'Email brief' : 'Now'}
                     {focusedTask.blocked ? ' · Waiting' : ''}
                     {focusedIsOutsideToday && !focusedIsWithJarvis && !focusedIsBrief ? ' · Outside today' : ''}
-                    {focusedExecutionRun && (
-                      <RunStatusChip status={focusedExecutionRun.status} className="ml-2 align-middle" />
+                    {focusedBoardExecution?.run && focusedBoardExecution.presentation.statusLabel && (
+                      <RunStatusChip
+                        status={focusedBoardExecution.run.status}
+                        label={focusedBoardExecution.presentation.statusLabel}
+                        className="ml-2 align-middle"
+                      />
                     )}
                   </span>
                   <h2 ref={focusHeadingRef} id="quiet-now-title" tabIndex={-1}>{focusedTask.title}</h2>
@@ -1898,6 +1946,55 @@ function TodayExperience({
                   )}
                 </button>
               </div>
+
+              {focusedBoardExecution &&
+                (focusedBoardExecution.item.owner === 'claude' ||
+                  focusedBoardExecution.item.owner === 'together') && (
+                <div className="current-hero-execution" aria-label={`Claude planning for ${focusedTask.title}`}>
+                  {focusedBoardExecution.presentation.action === 'open' &&
+                    focusedBoardExecution.run?.claudeSessionId ? (
+                    <OpenInClaudeCode
+                      sessionId={focusedBoardExecution.run.claudeSessionId}
+                      title={focusedTask.title}
+                    />
+                  ) : focusedBoardExecution.presentation.showKickoff ? (
+                    <button
+                      type="button"
+                      disabled={dayRitual.executionBusyItemIds.has(focusedBoardExecution.item.id)}
+                      className="press-scale min-h-9 rounded-full border border-accent-blue/40 bg-white/55 px-4 text-xs font-semibold text-foreground disabled:opacity-40"
+                      onClick={() => {
+                        const configured = dayRitual.executionState?.items.find(
+                          (entry) => entry.itemId === focusedBoardExecution.item.id,
+                        )?.config;
+                        const retryMode = focusedBoardExecution.presentation.action === 'retry'
+                          ? configured?.mode ?? focusedBoardExecution.run?.mode ?? 'plan_review'
+                          : 'plan_review';
+                        const retryModel = focusedBoardExecution.presentation.action === 'retry'
+                          ? configured?.modelAlias ?? focusedBoardExecution.run?.modelAlias ??
+                            defaultPlanningModel(focusedBoardExecution.item)
+                          : defaultPlanningModel(focusedBoardExecution.item);
+                        void dayRitual.kickoffExecution(
+                          focusedBoardExecution.item.id,
+                          retryMode,
+                          retryModel,
+                          retryMode === 'autonomous'
+                            ? configured?.workspaceId ?? focusedBoardExecution.run?.workspaceId
+                            : undefined,
+                          retryMode === 'autonomous'
+                            ? configured?.budgetUsd ?? focusedBoardExecution.run?.budgetUsd
+                            : undefined,
+                        );
+                      }}
+                    >
+                      {dayRitual.executionBusyItemIds.has(focusedBoardExecution.item.id)
+                        ? 'Preparing…'
+                        : focusedBoardExecution.presentation.action === 'retry'
+                          ? 'Retry'
+                          : 'Start planning in Claude Code'}
+                    </button>
+                  ) : null}
+                </div>
+              )}
 
               {focusExpanded && (
                 <div className="current-focus-details">
@@ -1925,10 +2022,28 @@ function TodayExperience({
                     <button type="button" onClick={() => setDetailTaskId(focusedTask._id)}>Edit details</button>
                     {!focusedIsWithJarvis && <button type="button" onClick={() => void handToJarvis(focusedTask)}>Hold for Jarvis</button>}
                     <button type="button" onClick={openSearch}>Find other work <kbd>⌘K</kbd></button>
-                    {focusedOpenableSessionId && (
-                      <OpenInClaudeCode sessionId={focusedOpenableSessionId} title={focusedTask.title} />
-                    )}
                   </div>
+                  {focusedBoardExecution &&
+                    (focusedBoardExecution.item.owner === 'claude' ||
+                      focusedBoardExecution.item.owner === 'together') && (
+                    <ExecutionConfigPanel
+                      item={focusedBoardExecution.item}
+                      ariaTitle={focusedTask.title}
+                      complexityText={`${focusedBoardExecution.item.title} ${focusedBoardExecution.item.outcome} ${focusedBoardExecution.item.definitionOfDone ?? ''}`}
+                      executionItem={dayRitual.executionState?.items.find(
+                        (entry) => entry.itemId === focusedBoardExecution.item.id,
+                      )}
+                      runs={dayRitual.executionState?.runs ?? []}
+                      workspaces={dayRitual.executionState?.workspaces ?? []}
+                      busy={dayRitual.busy}
+                      executionBusy={dayRitual.executionBusyItemIds.has(focusedBoardExecution.item.id)}
+                      executionLoading={dayRitual.executionLoading}
+                      error={dayRitual.executionError}
+                      planActionHandledExternally
+                      onKickoffExecution={dayRitual.kickoffExecution}
+                      onCancelExecution={dayRitual.cancelExecution}
+                    />
+                  )}
                 </div>
               )}
             </article>
@@ -1941,27 +2056,44 @@ function TodayExperience({
 
           {downstreamLayout.map(({ task, x, y, side }, index) => {
             const time = realTimeLabel(task.dueAt);
+            const execution = boardExecutionByTaskId.get(task._id);
             return (
-              <button
+              <article
                 key={task._id}
-                type="button"
                 className={`current-river-node is-${side} ${time ? 'is-anchored' : ''}`}
                 style={{ left: `${x / 10}%`, top: y }}
-                onClick={() => focusTask(task._id, 'pointer')}
-                aria-label={`Downstream ${index + 1} of ${downstream.length}: ${task.title}${time ? ` at ${time}` : ''}`}
               >
-                <span className="current-node-dot" aria-hidden="true" />
-                <span className="current-node-copy">
+                <button
+                  type="button"
+                  className="current-node-target"
+                  onClick={() => focusTask(task._id, 'pointer')}
+                  aria-label={`Downstream ${index + 1} of ${downstream.length}: ${task.title}${time ? ` at ${time}` : ''}`}
+                >
+                  <span className="current-node-dot" aria-hidden="true" />
+                </button>
+                <div className="current-node-copy">
                   {time && <time>{time}</time>}
-                  <strong>{task.title}</strong>
-                  {executionRunByTaskId.get(task._id) && (
-                    <RunStatusChip
-                      status={executionRunByTaskId.get(task._id)!.status}
-                      className="mt-1 self-start"
-                    />
+                  <button type="button" className="current-node-title" onClick={() => focusTask(task._id, 'pointer')}>
+                    <strong>{task.title}</strong>
+                  </button>
+                  {execution?.run && execution.presentation.statusLabel && (
+                    execution.presentation.reviewable && execution.run.claudeSessionId ? (
+                      <OpenInClaudeCode
+                        sessionId={execution.run.claudeSessionId}
+                        title={task.title}
+                        label={execution.presentation.statusLabel}
+                        className="current-execution-chip mt-1"
+                      />
+                    ) : (
+                      <RunStatusChip
+                        status={execution.run.status}
+                        label={execution.presentation.statusLabel}
+                        className="mt-1 self-start"
+                      />
+                    )
                   )}
-                </span>
-              </button>
+                </div>
+              </article>
             );
           })}
 
@@ -1994,9 +2126,10 @@ function TodayExperience({
                   <button type="button" onClick={() => isEmailDigest(task) ? setDetailTaskId(task._id) : focusTask(task._id, 'jarvis_current')}>
                     <span>{isEmailDigest(task) ? 'Email brief ready' : 'Held for Jarvis'}</span>
                     <strong>{task.title}</strong>
-                    {executionRunByTaskId.get(task._id) && (
+                    {boardExecutionByTaskId.get(task._id)?.run && (
                       <RunStatusChip
-                        status={executionRunByTaskId.get(task._id)!.status}
+                        status={boardExecutionByTaskId.get(task._id)!.run!.status}
+                        label={boardExecutionByTaskId.get(task._id)!.presentation.statusLabel}
                         className="mt-1 self-start"
                       />
                     )}
@@ -2190,10 +2323,6 @@ function TodayExperience({
                 expandedItemId={expandedArrivalItemId}
                 busy={dayRitual.busy}
                 error={dayRitual.error}
-                executionState={dayRitual.executionState}
-                executionLoading={dayRitual.executionLoading}
-                executionBusyItemIds={dayRitual.executionBusyItemIds}
-                executionError={dayRitual.executionError}
                 titleId={RITUAL_TITLE_IDS.arrival}
                 descriptionId={RITUAL_DESCRIPTION_IDS.arrival}
                 escapeRef={arrivalEscapeRef}
@@ -2210,8 +2339,6 @@ function TodayExperience({
                   if (position >= 0) await dayRitual.reorder(activeId, position, title);
                 }}
                 onDismiss={dayRitual.dismissItem}
-                onKickoffExecution={dayRitual.kickoffExecution}
-                onCancelExecution={dayRitual.cancelExecution}
                 onSalesAction={dayRitual.markBriefSalesAction}
                 onAddSuggestion={dayRitual.addItem}
                 onSnooze={() => dayRitual.snooze().catch(() => undefined)}
@@ -2248,39 +2375,8 @@ function TodayExperience({
                 onCancel={dayRitual.cancelSettlement}
                 onCloseDay={closeSettledDay}
               />
-            ) : ritualView === 'started' ? (
-              <DayStarted
-                plan={dayRitual.plan}
-                executionState={dayRitual.executionState}
-                executionLoading={dayRitual.executionLoading}
-                executionBusyItemIds={dayRitual.executionBusyItemIds}
-                executionError={dayRitual.executionError}
-                busy={dayRitual.busy}
-                titleId={RITUAL_TITLE_IDS.started}
-                descriptionId={RITUAL_DESCRIPTION_IDS.started}
-                onKickoffExecution={dayRitual.kickoffExecution}
-                onCancelExecution={dayRitual.cancelExecution}
-                onEnterDay={enterStartedDay}
-              />
             ) : (
-              <div
-                className="mx-auto w-full max-w-xl rounded-3xl border bg-background px-6 py-12 text-center shadow-2xl sm:px-10"
-                data-day-plan-id={dayRitual.plan.id}
-              >
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                  Living Current
-                </p>
-                <h1
-                  id={RITUAL_TITLE_IDS.transition}
-                  tabIndex={-1}
-                  className="mt-3 text-2xl font-semibold tracking-tight text-foreground outline-none sm:text-3xl"
-                >
-                  {dayRitual.transitionMessage}
-                </h1>
-                <p id={RITUAL_DESCRIPTION_IDS.transition} className="mt-3 text-sm text-muted-foreground">
-                  Bringing your first focus into view.
-                </p>
-              </div>
+              null
             )}
           </DayRitualContentSwap>
         </DayRitualLayer>

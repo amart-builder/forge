@@ -3,17 +3,12 @@
 import { useId, useSyncExternalStore } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { DayPlanExecutionState } from '@/lib/data/day-plan';
 import {
-  executionRunStatusLabel,
   ownerLabel,
-  selectCurrentExecutionRow,
 } from '@/lib/day-plan/presentation';
 import type { MorningArrivalItem, MorningArrivalProps } from '../MorningArrival';
-import ExecutionConfigPanel from '../ExecutionConfigPanel';
 import OwnerChip, { type OwnerChipEscapeHandler } from './OwnerChip';
 
-const ACTIVE_RUN_STATUSES = ['queued', 'starting', 'running', 'cancelling'];
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 
 function subscribeToReducedMotion(onChange: () => void) {
@@ -35,13 +30,6 @@ export type ArrivalCardProps = {
   onExpand: MorningArrivalProps['onExpand'];
   onOwnerChange: MorningArrivalProps['onOwnerChange'];
   onDismiss: MorningArrivalProps['onDismiss'];
-  executionItem?: DayPlanExecutionState['items'][number];
-  executionRuns: DayPlanExecutionState['runs'];
-  executionWorkspaces: DayPlanExecutionState['workspaces'];
-  executionBusy: boolean;
-  executionLoading: boolean;
-  onKickoffExecution: MorningArrivalProps['onKickoffExecution'];
-  onCancelExecution: MorningArrivalProps['onCancelExecution'];
   setDisclosureRef: (itemId: string, node: HTMLButtonElement | null) => void;
   onOwnerChipOpen: (handler: OwnerChipEscapeHandler) => void;
   onOwnerChipClose: (itemId: string) => void;
@@ -56,13 +44,6 @@ export default function ArrivalCard({
   onExpand,
   onOwnerChange,
   onDismiss,
-  executionItem,
-  executionRuns,
-  executionWorkspaces,
-  executionBusy,
-  executionLoading,
-  onKickoffExecution,
-  onCancelExecution,
   setDisclosureRef,
   onOwnerChipOpen,
   onOwnerChipClose,
@@ -85,22 +66,13 @@ export default function ArrivalCard({
     isDragging,
   } = useSortable({
     id: view.item.id,
-    disabled: busy || executionBusy,
+    disabled: busy,
   });
   const style = {
     transform: CSS.Translate.toString(transform),
     transition: reducedMotion ? 'none' : transition ?? undefined,
   };
-  const { latestRun, currentRun } = selectCurrentExecutionRow(
-    executionRuns,
-    view.item.id,
-    executionItem?.config,
-  );
-  const activeRun = latestRun && ACTIVE_RUN_STATUSES.includes(latestRun.status)
-    ? latestRun
-    : undefined;
-  const controlBusy = busy || executionBusy;
-  const displayedRun = activeRun ?? currentRun;
+  const controlBusy = busy;
 
   return (
     <li
@@ -181,30 +153,9 @@ export default function ArrivalCard({
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground" role="status">
             {view.item.owner === 'me'
               ? 'You own this.'
-              : displayedRun
-                ? executionRunStatusLabel(displayedRun.status)
-                : view.item.owner === 'together'
-                  ? 'Plan with Claude selected automatically.'
-                  : 'Autonomous selected automatically.'}
+              : 'Plan with Claude selected automatically.'}
           </p>
         </div>
-
-        {(view.item.owner === 'claude' || view.item.owner === 'together') && (
-          <ExecutionConfigPanel
-            item={view.item}
-            ariaTitle={view.title}
-            complexityText={`${view.title} ${view.description} ${view.definitionOfDone ?? ''}`}
-            executionItem={executionItem}
-            runs={executionRuns}
-            workspaces={executionWorkspaces}
-            busy={busy}
-            executionBusy={executionBusy}
-            executionLoading={executionLoading}
-            quietPrimaryAction
-            onKickoffExecution={onKickoffExecution}
-            onCancelExecution={onCancelExecution}
-          />
-        )}
 
         {expanded && (
           <div

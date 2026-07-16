@@ -10,7 +10,7 @@ import type {
 // change regenerates the brief even when the underlying sources are unchanged.
 // v3: target timezone + canonical weekday/date assertion in the prompt, with a
 // deterministic narrative-date correction before storage.
-export const MORNING_BRIEF_PROMPT_VERSION = 3;
+export const MORNING_BRIEF_PROMPT_VERSION = 4;
 export const MORNING_BRIEF_SCHEMA_VERSION = 2;
 
 export type MorningBriefStatus = "queued" | "running" | "succeeded" | "failed";

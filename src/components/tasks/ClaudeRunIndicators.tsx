@@ -7,16 +7,18 @@ import { claudeResumeUrl, executionRunStatusLabel } from '@/lib/day-plan/present
 // (downstream node, shelf entry) without nesting interactive controls.
 export function RunStatusChip({
   status,
+  label,
   className = '',
 }: {
   status: DayPlanExecutionRunStatus;
+  label?: string;
   className?: string;
 }) {
   return (
     <span
       className={`inline-flex items-center rounded-full border border-accent-blue/40 bg-accent-blue/10 px-2 py-0.5 text-[0.6875rem] font-medium leading-none text-foreground ${className}`}
     >
-      {executionRunStatusLabel(status)}
+      {label ?? executionRunStatusLabel(status)}
     </span>
   );
 }
@@ -27,10 +29,12 @@ export function RunStatusChip({
 export function OpenInClaudeCode({
   sessionId,
   title,
+  label = 'Open in Claude Code',
   className = '',
 }: {
   sessionId: string;
   title?: string;
+  label?: string;
   className?: string;
 }) {
   return (
@@ -42,7 +46,7 @@ export function OpenInClaudeCode({
         window.location.href = claudeResumeUrl(sessionId);
       }}
     >
-      Open in Claude Code
+      {label}
     </button>
   );
 }

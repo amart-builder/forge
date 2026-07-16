@@ -28,7 +28,8 @@ export type ExecutionConfigPanelProps = {
   busy: boolean;
   executionBusy: boolean;
   executionLoading: boolean;
-  quietPrimaryAction?: boolean;
+  error?: string;
+  planActionHandledExternally?: boolean;
   onKickoffExecution: (
     itemId: string,
     mode: DayPlanExecutionMode,
@@ -39,9 +40,8 @@ export type ExecutionConfigPanelProps = {
   onCancelExecution: (runId: string) => void | Promise<unknown>;
 };
 
-// The Claude execution controls for a single agent-owned item: mode chip, autonomous
-// project/budget setup, kickoff/cancel, live status, and (when a plan or joinable session
-// is ready) the Open in Claude Code button. Shared by Morning Arrival and the started view.
+// Post-start controls for a single agent-owned item. Kickoff is shown only for a
+// never-started item or a retryable terminal attempt; live and ready work opens instead.
 export default function ExecutionConfigPanel({
   item,
   ariaTitle,
@@ -52,12 +52,14 @@ export default function ExecutionConfigPanel({
   busy,
   executionBusy,
   executionLoading,
-  quietPrimaryAction = false,
+  error,
+  planActionHandledExternally = false,
   onKickoffExecution,
   onCancelExecution,
 }: ExecutionConfigPanelProps) {
   const titleId = useId();
   const [executionDraft, setExecutionDraft] = useState<{
+    mode?: DayPlanExecutionMode;
     workspaceId?: string;
     budgetUsd?: string;
     readinessCheckedAt?: string;
@@ -79,9 +81,9 @@ export default function ExecutionConfigPanel({
     (item.owner === 'together' && executionItem?.config?.mode === 'autonomous')
     ? undefined
     : executionItem?.config?.mode;
-  const selectedMode: DayPlanExecutionMode | undefined = item.owner === 'together'
+  const selectedMode: DayPlanExecutionMode = item.owner === 'together'
     ? 'plan_review'
-    : 'autonomous';
+    : executionDraft.mode ?? configuredMode ?? 'plan_review';
   const taskComplexity = complexityText.length;
   const selectedModel: DayPlanModelAlias = item.owner === 'together' || taskComplexity >= 900
     ? 'opus'
@@ -127,18 +129,21 @@ export default function ExecutionConfigPanel({
   // A current run only blocks a new kickoff while it is live or holds a result. Runs
   // that ended failed, interrupted, or cancelled are retryable: the store supports a
   // fresh attempt under the same authorization, so Kick Off stays available.
-  const blockingRun = currentRun && !isRetryableRunStatus(currentRun.status)
-    ? currentRun
-    : undefined;
+  const actionRun = currentRun ?? latestRun;
+  const showKickoff = !actionRun || isRetryableRunStatus(actionRun.status);
+  const showKickoffControl = showKickoff && !(
+    planActionHandledExternally && selectedMode === 'plan_review'
+  );
   const reviewRun = currentRun &&
     ['plan_ready', 'ready_to_join', 'awaiting_review'].includes(currentRun.status) &&
     currentRun.resultSummary?.text
     ? currentRun
     : undefined;
-  const openableRun = currentRun &&
-    (currentRun.status === 'plan_ready' || currentRun.status === 'ready_to_join') &&
-    currentRun.claudeSessionId
-    ? currentRun
+  const openableRun = actionRun &&
+    ['queued', 'starting', 'running', 'plan_ready', 'ready_to_join', 'awaiting_review']
+      .includes(actionRun.status) &&
+    actionRun.claudeSessionId
+    ? actionRun
     : undefined;
   const reviewHeadingId = `${titleId}-claude-review`;
   const executionStatusMessage = selectedMode === 'autonomous' && workspaces.length === 0
@@ -149,6 +154,8 @@ export default function ExecutionConfigPanel({
         ? 'Set a budget before kickoff.'
         : selectedMode === 'autonomous' && !autonomousSetupReady
           ? `Budget must be between $0.01 and $${selectedWorkspace?.maximumBudgetUsd ?? 0}.`
+          : selectedMode === 'plan_review' && readiness?.codes.includes('mode_required')
+            ? 'Ready to plan with Claude.'
           : briefChanged
             ? executionReadinessMessage(readiness, item.owner)
             : displayedRun
@@ -172,11 +179,32 @@ export default function ExecutionConfigPanel({
       aria-label={`Claude execution for ${ariaTitle}`}
       data-card-control
     >
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="rounded-full border border-accent-blue/40 bg-accent-blue/10 px-2.5 py-1 font-medium text-foreground">
-          {selectedMode === 'plan_review' ? 'Plan with Claude' : 'Autonomous'}
-        </span>
-      </div>
+      {showKickoff && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {item.owner === 'claude' ? (
+            (['plan_review', 'autonomous'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                disabled={controlBusy}
+                aria-pressed={selectedMode === mode}
+                className={`rounded-full border px-2.5 py-1 font-medium ${
+                  selectedMode === mode
+                    ? 'border-accent-blue/40 bg-accent-blue/10 text-foreground'
+                    : 'text-muted-foreground'
+                }`}
+                onClick={() => setExecutionDraft((current) => ({ ...current, mode }))}
+              >
+                {mode === 'plan_review' ? 'Plan with Claude' : 'Autonomous'}
+              </button>
+            ))
+          ) : (
+            <span className="rounded-full border border-accent-blue/40 bg-accent-blue/10 px-2.5 py-1 font-medium text-foreground">
+              Plan with Claude
+            </span>
+          )}
+        </div>
+      )}
       {selectedMode === 'autonomous' && workspaces.length > 0 && (
         <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(6.5rem,0.7fr)] gap-2">
           <label className="min-w-0 text-xs text-muted-foreground">
@@ -237,41 +265,43 @@ export default function ExecutionConfigPanel({
             {activeRun.status === 'cancelling' ? 'Cancelling…' : 'Cancel'}
           </button>
         )}
-        <button
-          type="button"
-          disabled={
-            controlBusy ||
-            executionLoading ||
-            !selectedMode ||
-            Boolean(activeRun) ||
-            Boolean(blockingRun) ||
-            !readinessAllowsAttempt
-          }
-          className={`press-scale min-h-9 shrink-0 rounded-lg px-3 text-xs font-semibold disabled:opacity-40 ${
-            quietPrimaryAction
-              ? 'border text-foreground hover:bg-muted'
-              : 'bg-foreground text-background'
-          }`}
-          onClick={() => {
-            if (!selectedMode) return;
-            void Promise.resolve(
-              onKickoffExecution(
-                item.id,
-                selectedMode,
-                selectedModel,
-                selectedMode === 'autonomous' ? selectedWorkspaceId : undefined,
-                selectedMode === 'autonomous' ? selectedBudget : undefined,
-              ),
-            ).catch(() => undefined);
-          }}
-        >
-          {executionBusy
-            ? 'Preparing…'
-            : currentRun && isRetryableRunStatus(currentRun.status)
-              ? 'Retry'
-              : 'Kick Off'}
-        </button>
+        {showKickoffControl && (
+          <button
+            type="button"
+            disabled={
+              controlBusy ||
+              executionLoading ||
+              Boolean(activeRun) ||
+              !readinessAllowsAttempt
+            }
+            className="press-scale min-h-9 shrink-0 rounded-lg bg-foreground px-3 text-xs font-semibold text-background disabled:opacity-40"
+            onClick={() => {
+              void Promise.resolve(
+                onKickoffExecution(
+                  item.id,
+                  selectedMode,
+                  selectedModel,
+                  selectedMode === 'autonomous' ? selectedWorkspaceId : undefined,
+                  selectedMode === 'autonomous' ? selectedBudget : undefined,
+                ),
+              ).catch(() => undefined);
+            }}
+          >
+            {executionBusy
+              ? 'Preparing…'
+              : actionRun && isRetryableRunStatus(actionRun.status)
+                ? 'Retry'
+                : selectedMode === 'plan_review'
+                  ? 'Start planning in Claude Code'
+                  : 'Start autonomous work'}
+          </button>
+        )}
       </div>
+      {error && (
+        <p role="alert" className="mt-2 text-xs leading-relaxed text-accent-red">
+          {error}
+        </p>
+      )}
       {openableRun && (
         <div className="panel-pop-in mt-2 flex justify-end">
           <OpenInClaudeCode sessionId={openableRun.claudeSessionId} title={ariaTitle} />

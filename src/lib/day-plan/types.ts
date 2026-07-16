@@ -251,6 +251,7 @@ export type DayPlanMutationResult = {
   pendingReconciliations?: DayPlanReconciliation[];
   executionRuns?: DayPlanExecutionRun[];
   unreadyItems?: DayPlanUnreadyItem[];
+  kickoffSkips?: DayPlanKickoffSkip[];
   worker?: {
     queuedRuns: number;
     available: boolean;
@@ -459,6 +460,15 @@ export type DayPlanUnreadyItem = {
   taskId: string;
   title: string;
   readiness: DayPlanExecutionReadiness;
+};
+
+export type DayPlanKickoffSkip = {
+  itemId: string;
+  taskId: string;
+  title: string;
+  reason: "not_ready" | "already_live" | "result_available";
+  status?: DayPlanExecutionRunStatus;
+  readiness?: DayPlanExecutionReadiness;
 };
 
 export type ConfigureDayPlanExecutionInput = {

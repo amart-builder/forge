@@ -42,9 +42,8 @@ import type {
   SettlementDisposition,
 } from '@/lib/day-plan/types';
 import {
-  hasAgentOwnedAcceptedWork,
+  executionReadinessMessage,
   shouldAttemptLateBriefAttach,
-  shouldKeepStartedView,
   shouldPollBriefGeneration,
 } from '@/lib/day-plan/presentation';
 
@@ -56,8 +55,6 @@ export type DayRitualView =
   | 'checking'
   | 'none'
   | 'arrival'
-  | 'transition'
-  | 'started'
   | 'settlement';
 
 type UseDayRitualInput = {
@@ -147,7 +144,7 @@ export default function useDayRitual({
   const [savingItemIds, setSavingItemIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string>();
   const [announcement, setAnnouncement] = useState('');
-  const [transitionMessage, setTransitionMessage] = useState('');
+  const [startReceipt, setStartReceipt] = useState<string>();
   const [executionState, setExecutionState] = useState<DayPlanExecutionState>();
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionBusyItemIds, setExecutionBusyItemIds] = useState<Set<string>>(new Set());
@@ -158,6 +155,7 @@ export default function useDayRitual({
   const candidatesRef = useRef(candidates);
   const reconciliationBlockedRef = useRef(false);
   const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const receiptTimerRef = useRef<number | undefined>(undefined);
 
   candidatesRef.current = candidates;
 
@@ -214,14 +212,14 @@ export default function useDayRitual({
         })
         .catch(() => undefined);
     }
-    setView((current) => {
-      const inferred = inferView(nextPlan);
-      // An active plan infers 'none', but the started payoff view stays open across
-      // accepted responses (configure, kickoff, refresh) until Enter my day. Real
-      // transitions (settlement opening, arrival reopening) still apply.
-      return shouldKeepStartedView(current, inferred, nextPlan.state) ? current : inferred;
-    });
+    setView(inferView(nextPlan));
   }, [applyMorningBrief]);
+
+  useEffect(() => () => {
+    if (receiptTimerRef.current !== undefined) {
+      window.clearTimeout(receiptTimerRef.current);
+    }
+  }, []);
 
   const refreshPlan = useCallback(async () => {
     const readModel = await getDayPlanState();
@@ -727,7 +725,11 @@ export default function useDayRitual({
   ) => {
     const current = planRef.current;
     if (!current) throw new Error('The day plan is not ready.');
-    markArrivalInteraction();
+    if (current.state !== 'active') {
+      const message = 'Start your day before handing work to Claude.';
+      setExecutionError(message);
+      throw new Error(message);
+    }
     setExecutionBusyItemIds((items) => new Set(items).add(itemId));
     setExecutionError(undefined);
     try {
@@ -773,7 +775,7 @@ export default function useDayRitual({
         return next;
       });
     }
-  }, [acceptExecutionState, acceptPlan, markArrivalInteraction]);
+  }, [acceptExecutionState, acceptPlan]);
 
   const kickoffExecution = useCallback(async (
     itemId: string,
@@ -784,7 +786,11 @@ export default function useDayRitual({
   ) => {
     const current = planRef.current;
     if (!current) throw new Error('The day plan is not ready.');
-    markArrivalInteraction();
+    if (current.state !== 'active') {
+      const message = 'Start your day before handing work to Claude.';
+      setExecutionError(message);
+      throw new Error(message);
+    }
     setExecutionBusyItemIds((items) => new Set(items).add(itemId));
     setExecutionError(undefined);
     try {
@@ -821,7 +827,10 @@ export default function useDayRitual({
         });
       }
       if (!itemState?.readiness.ready) {
-        setAnnouncement('That task is not ready to queue yet.');
+        const owner = current.items.find((item) => item.id === itemId)?.owner ?? 'claude';
+        const message = executionReadinessMessage(itemState?.readiness, owner);
+        setExecutionError(message);
+        setAnnouncement(message);
         return undefined;
       }
 
@@ -842,7 +851,12 @@ export default function useDayRitual({
           ? 'Claude work is queued, but the Claude worker needs attention.'
           : 'Claude work is queued.');
       } else {
-        setAnnouncement('That task is not ready to queue yet.');
+        const message = executionReadinessMessage(
+          result.readiness,
+          current.items.find((item) => item.id === itemId)?.owner ?? 'claude',
+        );
+        setExecutionError(message);
+        setAnnouncement(message);
       }
       return result.run;
     } catch (nextError) {
@@ -859,7 +873,7 @@ export default function useDayRitual({
         return next;
       });
     }
-  }, [acceptExecutionState, acceptPlan, markArrivalInteraction]);
+  }, [acceptExecutionState, acceptPlan]);
 
   const cancelExecution = useCallback(async (runId: string) => {
     const run = executionStateRef.current?.runs.find((candidate) => candidate.id === runId);
@@ -899,54 +913,33 @@ export default function useDayRitual({
       mutationId: stableMutationId('start-day', current),
       announce: 'Your day is set.',
     });
-    const firstItem = result.plan.items.find(
-      (item) => item.id === result.plan.recommendedFirstItemId,
-    );
     const executionRuns = result.executionRuns ?? [];
-    const queuedCount = result.worker?.queuedRuns ?? executionRuns.filter((run) =>
-      run.status === 'queued'
-    ).length;
-    const startingCount = executionRuns.filter((run) => run.status === 'starting').length;
-    const workingCount = executionRuns.filter((run) => run.status === 'running').length;
-    const readyCount = executionRuns.filter((run) =>
-      run.status === 'plan_ready' ||
-      run.status === 'ready_to_join' ||
-      run.status === 'awaiting_review'
-    ).length;
-    const attentionCount = executionRuns.length -
-      executionRuns.filter((run) => run.status === 'queued').length -
-      startingCount - workingCount - readyCount;
-    const unreadyCount = result.unreadyItems?.length ?? 0;
-    const parts = ['Your day is set.'];
-    if (queuedCount > 0) {
-      parts.push(`${queuedCount} Claude ${queuedCount === 1 ? 'task is' : 'tasks are'} queued.`);
-      if (result.worker?.available === false) {
-        parts.push('The Claude worker needs attention.');
-      }
+    const handedOffCount = executionRuns.filter((run) => run.status === 'queued').length;
+    const needsSetupCount = result.kickoffSkips?.filter(
+      (skip) => skip.reason === 'not_ready',
+    ).length ?? 0;
+    const alreadyHandledCount = (result.kickoffSkips?.length ?? 0) - needsSetupCount;
+    const receiptParts = [
+      `${handedOffCount} ${handedOffCount === 1 ? 'item' : 'items'} handed to Claude.`,
+    ];
+    if (needsSetupCount > 0) {
+      receiptParts.push(
+        `${needsSetupCount} ${needsSetupCount === 1 ? 'item needs' : 'items need'} setup.`,
+      );
     }
-    if (startingCount > 0) {
-      parts.push(`Claude is starting ${startingCount} ${startingCount === 1 ? 'task' : 'tasks'}.`);
+    if (alreadyHandledCount > 0) {
+      receiptParts.push(
+        `${alreadyHandledCount} ${alreadyHandledCount === 1 ? 'item already has' : 'items already have'} Claude work in progress or ready.`,
+      );
     }
-    if (workingCount > 0) {
-      parts.push(`Claude is already working on ${workingCount} ${workingCount === 1 ? 'task' : 'tasks'}.`);
+    if (handedOffCount > 0 && result.worker?.available === false) {
+      receiptParts.push('The Claude worker needs attention.');
     }
-    if (readyCount > 0) {
-      parts.push(`${readyCount} Claude ${readyCount === 1 ? 'result is' : 'results are'} ready.`);
-    }
-    if (attentionCount > 0) {
-      parts.push(`${attentionCount} Claude ${attentionCount === 1 ? 'task needs' : 'tasks need'} attention.`);
-    }
-    if (unreadyCount > 0) {
-      parts.push(`${unreadyCount === 1 ? 'One needs' : `${unreadyCount} need`} more context.`);
-    }
-    if (firstItem) {
-      parts.push(firstItem.owner === 'me'
-        ? `Start with ${firstItem.title}.`
-        : `Start with the brief for ${firstItem.title}.`);
-    } else {
-      parts.push('Living Current is ready.');
-    }
-    setTransitionMessage(parts.join(' '));
+    const receipt = receiptParts.join(' ');
+    setAnnouncement(receipt);
+    setStartReceipt(receipt);
+    if (receiptTimerRef.current !== undefined) window.clearTimeout(receiptTimerRef.current);
+    receiptTimerRef.current = window.setTimeout(() => setStartReceipt(undefined), 7000);
     if (result.executionRuns?.length) {
       const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
       acceptExecutionState({
@@ -959,24 +952,9 @@ export default function useDayRitual({
         ],
       });
     }
-    // When Claude or Together own accepted work, hold on the started payoff view so the
-    // person can watch execution and open sessions. It stays open until they enter their
-    // day; there is no auto-close timer. A purely human day keeps the brief transition.
-    if (hasAgentOwnedAcceptedWork(result.plan.items)) {
-      setView('started');
-      return undefined;
-    }
-    setView('transition');
-    await new Promise((resolve) => window.setTimeout(resolve, 1200));
     setView('none');
     return result.plan.recommendedFirstTaskId;
   }, [acceptExecutionState, enqueueMutation]);
-
-  const enterDay = useCallback((): string | undefined => {
-    setView('none');
-    setAnnouncement('Living Current is ready.');
-    return planRef.current?.recommendedFirstTaskId;
-  }, []);
 
   const openSettlement = useCallback(async () => {
     const current = planRef.current;
@@ -1143,15 +1121,13 @@ export default function useDayRitual({
     savingItemIds,
     error,
     announcement,
-    transitionMessage,
+    startReceipt,
     executionState,
     executionLoading,
     executionBusyItemIds,
     executionError,
     ritualOpen:
       view === 'arrival' ||
-      view === 'transition' ||
-      view === 'started' ||
       view === 'settlement',
     openArrival,
     markArrivalInteraction,
@@ -1167,7 +1143,6 @@ export default function useDayRitual({
     cancelExecution,
     refreshExecution,
     startDay,
-    enterDay,
     openSettlement,
     cancelSettlement,
     decideSettlement,
