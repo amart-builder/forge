@@ -49,7 +49,7 @@ export default function ArrivalStepBrief({
             {watchItems.map((watch, index) => (
               <p key={index} className="text-sm leading-relaxed text-muted-foreground min-[1500px]:text-pretty">
                 <span className="font-medium text-foreground">{watch.label}.</span>{' '}
-                {watch.evidence} Last seen: {watch.lastSeenState}
+                {watch.evidence}
               </p>
             ))}
           </div>

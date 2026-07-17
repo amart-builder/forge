@@ -541,6 +541,10 @@ test('installer provisions a supervised watch worker without enabling autonomy',
     installer.indexOf('# --- Morning Brief on the MBP'),
   );
   assert.doesNotMatch(miniProfile, /FORGE_NOTIFY/);
+  assert.match(miniProfile, /<key>FORGE_BRIEF_WRITER<\/key>\s*<string>codex<\/string>/);
+  assert.match(miniProfile, /<key>FORGE_CODEX_BIN<\/key>\s*<string>\/opt\/homebrew\/bin\/codex<\/string>/);
+  assert.match(miniProfile, /FORGE_BRIEF_OPERATOR_PROFILE_PATH/);
+  assert.match(miniProfile, /FORGE_BRIEF_LEADUP_PATH/);
   assert.match(workerProfile, /<key>FORGE_NOTIFY<\/key>\s*<string>1<\/string>/);
   assert.doesNotMatch(installer, /<key>FORGE_CLAUDE_EXECUTION_ENABLED<\/key>/);
 });

@@ -19,6 +19,8 @@ import {
 import {
   collectMorningBriefSources,
   defaultGoalsPath,
+  defaultLeadupPath,
+  defaultOperatorProfilePath,
   defaultSprintMemoPath,
   type CollectedBriefSources,
 } from "../day-plan/brief-sources";
@@ -40,9 +42,16 @@ import {
 } from "./commands";
 import {
   buildMorningBriefCommand,
+  buildMorningBriefPrompt,
   morningBriefModelConfig,
   parseMorningBriefOutput,
 } from "./brief-commands";
+import {
+  configuredMorningBriefWriter,
+  createCodexMorningBriefAttempt,
+  readCodexMorningBriefOutput,
+  type MorningBriefWriter,
+} from "./morning-brief-writer";
 import { markForgeOrchestratorSession } from "./orchestrator-session";
 import {
   notifyExecutionRun,
@@ -482,6 +491,8 @@ export type BriefRelayOptions = {
   host?: string;
   requireSourceCheckpoint?: boolean;
   goalsPath?: string;
+  operatorProfilePath?: string;
+  leadupPath?: string;
   sprintMemoPath?: string;
 };
 
@@ -489,6 +500,8 @@ export type MorningBriefWorkerOptions = ClaudeWorkerOptions & {
   // Test seam; production uses the real collector (files + loopback task fetch).
   collectBriefSources?: (store: DayPlanStore) => Promise<CollectedBriefSources>;
   briefTimeoutMs?: number;
+  briefWriter?: MorningBriefWriter;
+  codexPath?: string;
   relay?: BriefRelayOptions;
 };
 
@@ -529,6 +542,8 @@ function resolveBriefTargetDate(store: DayPlanStore, now: Date): string {
 function relayCheckpointSources(relay: BriefRelayOptions): Record<string, string> {
   return {
     goals: relay.goalsPath ?? defaultGoalsPath(),
+    operator_profile: relay.operatorProfilePath ?? defaultOperatorProfilePath(),
+    leadup: relay.leadupPath ?? defaultLeadupPath(),
     sprint_memo: relay.sprintMemoPath ?? defaultSprintMemoPath(),
   };
 }
@@ -611,6 +626,7 @@ export async function runOneMorningBrief(
       failBrief(`required_source_missing:${context.missingRequired.join(",")}`);
       return true;
     }
+    const preferredWriter = options.briefWriter ?? configuredMorningBriefWriter();
     // The hash covers the full generation envelope: the bounded sections
     // exactly as sent, target date and timezone, contract versions, model configuration,
     // and per-source freshness states.
@@ -628,6 +644,7 @@ export async function runOneMorningBrief(
         modelAlias: claimed.modelAlias,
         effort: claimed.effort,
         budgetUsd: claimed.budgetUsd,
+        writer: preferredWriter,
       }),
       sourceManifest: context.manifest,
       promptVersion: MORNING_BRIEF_PROMPT_VERSION,
@@ -635,45 +652,98 @@ export async function runOneMorningBrief(
     });
     // Identical inputs already produced an artifact; nothing new to generate.
     if (inputs.duplicateOfId) return true;
-    const command = buildMorningBriefCommand({
-      claudePath: options.claudePath,
-      emptyMcpConfigPath: options.emptyMcpConfigPath,
-      cwd: options.fallbackCwd,
+    const promptInput = {
       targetLocalDate: claimed.targetLocalDate,
       targetTimezone,
       sections: context.sections,
       manifest: context.manifest,
-      modelAlias: claimed.modelAlias,
-      effort: claimed.effort,
-      budgetUsd: claimed.budgetUsd,
-    });
-    const result = await spawnCommand(command, {
-      spawnImpl: options.spawnImpl ?? spawn,
-      timeoutMs: options.briefTimeoutMs ?? morningBriefModelConfig().timeoutMs,
-      maxStdoutBytes: 1024 * 1024,
-      maxStderrBytes: 64 * 1024,
-      terminationGraceMs: options.terminationGraceMs ?? 2000,
-      abortSignal: options.abortSignal,
-    });
-    if (result.terminatedBy || result.signal) {
-      failBrief(result.terminatedBy === "timeout" ? "brief_timeout" : "worker_interrupted");
-      return true;
-    }
-    if (result.exitCode !== 0 || result.overflowed) {
-      failBrief(result.overflowed ? "brief_output_too_large" : "claude_failed");
-      return true;
-    }
-    const validated = validateMorningBrief(parseMorningBriefOutput(result.stdout), {
+    };
+    const prompt = buildMorningBriefPrompt(promptInput);
+    const sourceIds = new Set(
+      context.manifest.sources
+        .filter((source) => source.freshness !== "missing" && source.chars > 0)
+        .map((source) => source.id),
+    );
+    const validateOutput = (raw: string) => validateMorningBrief(parseMorningBriefOutput(raw), {
       knownTaskIds: collected.knownTaskIds,
       // Bounded grounding: watch items and sales actions must cite sources the
       // model actually received bytes of (missing or fully-trimmed-out sources
       // cannot ground anything; citing them is fabrication by construction).
-      sourceIds: new Set(
-        context.manifest.sources
-          .filter((source) => source.freshness !== "missing" && source.chars > 0)
-          .map((source) => source.id),
-      ),
+      sourceIds,
     });
+    const timeoutMs = options.briefTimeoutMs ?? morningBriefModelConfig().timeoutMs;
+    let writer: MorningBriefWriter = preferredWriter;
+    let validated: ReturnType<typeof validateMorningBrief> | undefined;
+
+    if (writer === "codex") {
+      let codexPrompt = prompt;
+      for (let attemptIndex = 0; attemptIndex < 2 && !validated; attemptIndex += 1) {
+        const attempt = createCodexMorningBriefAttempt({
+          prompt: codexPrompt,
+          executable: options.codexPath,
+        });
+        if (!attempt) break;
+        try {
+          const result = await spawnCommand(attempt.command, {
+            spawnImpl: options.spawnImpl ?? spawn,
+            timeoutMs,
+            maxStdoutBytes: 1024 * 1024,
+            maxStderrBytes: 64 * 1024,
+            terminationGraceMs: options.terminationGraceMs ?? 2000,
+            abortSignal: options.abortSignal,
+          });
+          if (result.terminatedBy === "shutdown") {
+            failBrief("worker_interrupted");
+            return true;
+          }
+          if (result.exitCode !== 0 || result.signal || result.terminatedBy || result.overflowed) {
+            break;
+          }
+          try {
+            validated = validateOutput(readCodexMorningBriefOutput(attempt));
+          } catch (error) {
+            if (attemptIndex === 0) {
+              const reason = (error instanceof Error ? error.message : "validation failed")
+                .replace(/\s+/g, " ")
+                .slice(0, 240);
+              codexPrompt = `${prompt}\n\nYour previous output failed validation: ${reason}. Emit ONLY the JSON object.`;
+            }
+          }
+        } finally {
+          attempt.cleanup();
+        }
+      }
+      if (!validated) writer = "claude";
+    }
+
+    if (!validated) {
+      const command = buildMorningBriefCommand({
+        claudePath: options.claudePath,
+        emptyMcpConfigPath: options.emptyMcpConfigPath,
+        cwd: options.fallbackCwd,
+        ...promptInput,
+        modelAlias: claimed.modelAlias,
+        effort: claimed.effort,
+        budgetUsd: claimed.budgetUsd,
+      });
+      const result = await spawnCommand(command, {
+        spawnImpl: options.spawnImpl ?? spawn,
+        timeoutMs,
+        maxStdoutBytes: 1024 * 1024,
+        maxStderrBytes: 64 * 1024,
+        terminationGraceMs: options.terminationGraceMs ?? 2000,
+        abortSignal: options.abortSignal,
+      });
+      if (result.terminatedBy || result.signal) {
+        failBrief(result.terminatedBy === "timeout" ? "brief_timeout" : "worker_interrupted");
+        return true;
+      }
+      if (result.exitCode !== 0 || result.overflowed) {
+        failBrief(result.overflowed ? "brief_output_too_large" : "claude_failed");
+        return true;
+      }
+      validated = validateOutput(result.stdout);
+    }
     const datedNarrative = normalizeMorningBriefNarrativeDate(
       validated.brief.lensNarrative,
       claimed.targetLocalDate,
@@ -688,8 +758,13 @@ export async function runOneMorningBrief(
     }
     const completed = options.store.completeMorningBrief(
       claimed.id,
-      JSON.stringify({ ...validated.brief, lensNarrative: datedNarrative.narrative }),
+      JSON.stringify({
+        ...validated.brief,
+        lensNarrative: datedNarrative.narrative,
+        writer,
+      }),
     );
+    console.info("Morning brief generated.", { briefId: claimed.id, writer });
     // Publish the immutable artifact to the relay so the other machine imports
     // it. The authoritative machine (the MBP) also refreshes the settlement
     // summary and source checkpoint from its own state. All fail-open.

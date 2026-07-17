@@ -18,8 +18,8 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-07-16T21:38:51-0700
-- **task:** seams build: trust fixes + notifications + handoff
+- **since:** 2026-07-17T11:03:28-0700
+- **task:** brief v5: Sol writer + lean prompt + new sources
 <!-- END active-session -->
 
 ---
@@ -41,6 +41,19 @@ Forge is the day's MEMORY and CONTROL TOWER; the Claude desktop app is the HANDS
 - Closed tasks require direct evidence before marking done.
 
 ## Current State
+
+### 2026-07-17 Morning brief v5: Sol chief-of-staff writer + lean prompt + operator context (shipped)
+
+- Alex's verdict on v4: unhelpful, confusing, cold, AI-sounding, "doesn't understand me." v5 rebuilds the brief around a lean owner-authored mandate (`prompts/chief-of-staff.md`, edited only by the president, loaded verbatim at prompt build, module-relative path + cwd fallback + logged v4 fallback) with his voice rules (warm greeting + three-lane re-anchor, never guess, no jargon, no "beats", watch items as finished human sentences, LEADUP supersedes stale planning docs).
+- Writer is now GPT-5.6 Sol at high reasoning via codex CLI (`FORGE_BRIEF_WRITER=codex`, `FORGE_CODEX_BIN`), read-only sandbox from a private temp dir, one corrective retry, automatic Claude fallback, `writer` provenance stored in the brief JSON. Both machines codex-first.
+- Two new file sources: `operator_profile` (~/Atlas/brain/operator-profile.md, P2) and `leadup` (~/Atlas/brain/brief-leadup.md, P3, the 14-day interview backfill approved by Alex 2026-07-17). Jarvis memory pull widened to 3 merged searches. Full source priority reorder. Checkpoint protocol records explicit null for absent optional files so a missing optional file can never brick the Mini (all four absence cases tested).
+- UI: watch items render as "Label. finished-sentence" only (no evidence refs/last-seen); "Beats only" chip renamed "Talking points"; MORNING_BRIEF_PROMPT_VERSION=5 everywhere (relay skips foreign versions).
+- Verified: 289/289 tests + tsc clean under the president's own run; fresh Opus review (one gating checkpoint finding, fixed + retested); two real end-to-end acceptance briefs generated through the full pipeline with writer=codex, second one judged against the golden voice example and accepted. Today's stored brief (ab4c3bff) is that accepted one.
+- Live plists still need env application at deploy: FORGE_BRIEF_WRITER/FORGE_CODEX_BIN (+ Mini operator-profile/leadup paths, since Mini Atlas lives under ~/Desktop). Next check: tomorrow's 7:30 Mini brief should arrive Sol-written; get Alex's read on the voice.
+
+### 2026-07-16 gbrain code index live (working tree)
+
+- Repo indexed into local gbrain (171 files, 1069 chunks, checkpoint bbc1e4d): `gbrain search` / `code-def` / `code-refs` / `code-callers` work from anywhere in this worktree (pinned via `.gbrain-source`, gitignored). Search guidance block added to CLAUDE.md. Code-search only; jarvis-memory remains the only memory system. Semantic search live (Voyage voyage-code-3 embeddings; key at ~/.config/edge-ai/voyage.key, exported in ~/.zshrc). Re-index after real changes with `/sync-gbrain`. CLAUDE.md + .gitignore edits uncommitted; fold into the next commit.
 
 ### 2026-07-16 Forge kickoff relay upgraded to Fable 5 + orchestrator (working tree)
 

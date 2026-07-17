@@ -12,6 +12,8 @@ function fixture(t) {
   const dir = path.join(os.tmpdir(), `forge-brief-sources-${process.pid}-${Date.now()}-${Math.random()}`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, 'goals.md'), 'Grow Edge AI.');
+  writeFileSync(path.join(dir, 'operator-profile.md'), 'Alex runs three operating lanes.');
+  writeFileSync(path.join(dir, 'leadup.md'), 'This week started with client delivery.');
   writeFileSync(path.join(dir, 'memo.md'), 'Ship the current sprint.');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return {
@@ -19,6 +21,8 @@ function fixture(t) {
     options: {
       store: { listRecentSnapshots: () => [] },
       goalsPath: path.join(dir, 'goals.md'),
+      operatorProfilePath: path.join(dir, 'operator-profile.md'),
+      leadupPath: path.join(dir, 'leadup.md'),
       sprintMemoPath: path.join(dir, 'memo.md'),
       dataDir: dir,
       webBaseUrl: 'http://forge.test',
@@ -132,7 +136,7 @@ test('calendar fetches MCP SSE, derives DST-aware bounds, and formats visible ev
     'all day — Planning day\n9:00am-9:30am — Strategy call (with one@example.com, two@example.com, three@example.com) [Meet]\ntime unknown — Malformed time',
   );
   assert.equal(initializeResponse.bodyUsed, true);
-  assert.equal(calendar.priority, 4);
+  assert.equal(calendar.priority, 6);
   const toolArguments = requests[1].params.arguments.tools[0].arguments;
   assert.equal(toolArguments.timeMin, '2026-11-01T00:00:00-07:00');
   assert.equal(toolArguments.timeMax, '2026-11-02T00:00:00-08:00');
@@ -244,7 +248,7 @@ test('CRM handles Attio value variants and formats recent and quiet contacts', a
   );
   assert.equal(crm.content.includes('fallback@example.com — last touch 4d ago'), true);
   assert.equal(crm.content.includes('Alex Martin'), false);
-  assert.equal(crm.priority, 7);
+  assert.equal(crm.priority, 9);
 });
 
 test('.env.local strips unquoted inline comments but preserves hashes inside quotes', async (t) => {
@@ -287,30 +291,40 @@ test('memory decisions prefer decision-tagged Jarvis results and bound each line
   writeFileSync(tokenPath, 'jarvis-test-token\n');
   disableExternalSources(t, dir, { FORGE_BRIEF_JARVIS_TOKEN_PATH: tokenPath });
   const longDecision = `[DECISION] ${'x'.repeat(450)}`;
-  const results = [
-    { content: longDecision },
-    { content: 'Background context that should be filtered out.' },
-    { content: '[DECISION] Keep Forge as the command center.' },
-    { content: '[DECISION] Route from the latest saved state.' },
-  ];
+  const requests = [];
+  const resultsByQuery = new Map([
+    ['recent decisions, commitments, and direction changes', [
+      { uuid: 'long', score: 0.9, content: longDecision },
+      { uuid: 'background', score: 0.4, content: 'Background context that should be filtered out.' },
+      { uuid: 'forge', score: 0.8, content: '[DECISION] Keep Forge as the command center.' },
+    ]],
+    ['what Alex worked on in Claude sessions the last three days', [
+      { uuid: 'forge', score: 0.95, content: '[DECISION] Keep Forge as the source of truth.' },
+      { uuid: 'route', score: 0.7, content: '[DECISION] Route from the latest saved state.' },
+    ]],
+    ['current state of Jarvis Pro, Boomer AI (Slipstream community), content engine', [
+      { uuid: 'jarvis', score: 0.6, content: '[DECISION] Keep Jarvis Pro moving.' },
+    ]],
+  ]);
   const fetchImpl = async (url, init = {}) => {
     const forge = forgeRowsResponse(url);
     if (forge) return forge;
     assert.equal(String(url), 'http://100.102.6.81:3510/api/v2/scored_search');
-    assert.deepEqual(JSON.parse(init.body), {
-      query: 'recent decisions, commitments, and direction changes',
-      limit: 10,
-    });
+    const body = JSON.parse(init.body);
+    requests.push(body.query);
+    assert.equal(body.limit, 12);
     assert.ok(init.signal instanceof AbortSignal);
-    return new Response(JSON.stringify({ results }), { status: 200 });
+    return new Response(JSON.stringify({ results: resultsByQuery.get(body.query) }), { status: 200 });
   };
   const collected = await collectMorningBriefSources({ ...options, fetchImpl });
   const memory = collected.sources.find((source) => source.id === 'memory_decisions');
   const lines = memory.content.split('\n');
-  assert.equal(lines.length, 3);
-  assert.equal(lines[0].length, 402);
+  assert.deepEqual(requests, [...resultsByQuery.keys()]);
+  assert.equal(lines.length, 4);
+  assert.equal(lines[1].length, 402);
+  assert.equal(lines.filter((line) => line.includes('Keep Forge')).length, 1);
   assert.equal(memory.content.includes('Background context'), false);
-  assert.equal(memory.priority, 8);
+  assert.equal(memory.priority, 10);
 });
 
 test('memory decisions preserve file-path mode without calling Jarvis', async (t) => {
@@ -334,6 +348,26 @@ test('memory decisions report not_configured when the hub token file is missing'
   disableExternalSources(t, dir);
   const collected = await collectMorningBriefSources({ ...options, fetchImpl: async (url) => forgeRowsResponse(url) });
   assert.equal(collected.sources.find((source) => source.id === 'memory_decisions').note, 'not_configured');
+});
+
+test('memory decisions stop after the first Jarvis search fails', async (t) => {
+  const { dir, options } = fixture(t);
+  const tokenPath = path.join(dir, 'jarvis-token');
+  writeFileSync(tokenPath, 'jarvis-test-token');
+  disableExternalSources(t, dir, { FORGE_BRIEF_JARVIS_TOKEN_PATH: tokenPath });
+  let searches = 0;
+  const collected = await collectMorningBriefSources({
+    ...options,
+    fetchImpl: async (url) => {
+      const forge = forgeRowsResponse(url);
+      if (forge) return forge;
+      searches += 1;
+      throw new Error('Jarvis unavailable');
+    },
+  });
+  const memory = collected.sources.find((source) => source.id === 'memory_decisions');
+  assert.equal(searches, 1);
+  assert.match(memory.note, /^error:Jarvis unavailable/);
 });
 
 test('real source ids overwrite coverage fallbacks, while failed fetches remain missing', async (t) => {
@@ -365,13 +399,24 @@ test('real source ids overwrite coverage fallbacks, while failed fetches remain 
     included.sources.map((source) => [source.id, source.priority]),
     [
       ['goals', 1],
-      ['sprint_memo', 2],
-      ['task_snapshot', 3],
-      ['calendar', 4],
-      ['settlement_summary', 5],
-      ['email_brief', 6],
-      ['crm_last_touch', 7],
-      ['memory_decisions', 8],
+      ['operator_profile', 2],
+      ['leadup', 3],
+      ['sprint_memo', 4],
+      ['task_snapshot', 5],
+      ['calendar', 6],
+      ['settlement_summary', 7],
+      ['email_brief', 8],
+      ['crm_last_touch', 9],
+      ['memory_decisions', 10],
+    ],
+  );
+  assert.deepEqual(
+    included.sources
+      .filter((source) => source.id === 'operator_profile' || source.id === 'leadup')
+      .map(({ id, label, required, maxChars }) => ({ id, label, required, maxChars })),
+    [
+      { id: 'operator_profile', label: 'OPERATOR_PROFILE', required: false, maxChars: 6000 },
+      { id: 'leadup', label: 'LEADUP', required: false, maxChars: 9000 },
     ],
   );
   const includedCoverage = assembleMorningBriefContext(included.sources, { now: NOW }).manifest.coverage;

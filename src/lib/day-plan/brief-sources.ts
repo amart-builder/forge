@@ -10,7 +10,7 @@ const DEFAULT_BRIEF_TIMEZONE = "America/Los_Angeles";
 const COMPOSIO_MCP_URL = "https://connect.composio.dev/mcp";
 const ATTIO_PEOPLE_QUERY_URL = "https://api.attio.com/v2/objects/people/records/query";
 
-// Required-source defaults. Both are configurable; these point at Alex's real
+// File-source defaults. Each is configurable; these point at Alex's real
 // operating files so the default installation briefs from the same documents
 // he maintains by hand.
 export function defaultGoalsPath(): string {
@@ -24,6 +24,20 @@ export function defaultSprintMemoPath(): string {
   return (
     process.env.FORGE_BRIEF_SPRINT_MEMO_PATH ??
     path.join(homedir(), "Atlas", "brain", "path-to-30k-2026-07.md")
+  );
+}
+
+export function defaultOperatorProfilePath(): string {
+  return (
+    process.env.FORGE_BRIEF_OPERATOR_PROFILE_PATH ??
+    path.join(homedir(), "Atlas", "brain", "operator-profile.md")
+  );
+}
+
+export function defaultLeadupPath(): string {
+  return (
+    process.env.FORGE_BRIEF_LEADUP_PATH ??
+    path.join(homedir(), "Atlas", "brain", "brief-leadup.md")
   );
 }
 
@@ -53,6 +67,8 @@ export type CollectedBriefSources = {
 export type MorningBriefSourceOptions = {
   store: DayPlanStore;
   goalsPath?: string;
+  operatorProfilePath?: string;
+  leadupPath?: string;
   sprintMemoPath?: string;
   memoryDecisionsPath?: string;
   targetLocalDate?: string;
@@ -360,7 +376,7 @@ async function calendarSource(
     label: "CALENDAR_TODAY",
     required: false,
     maxChars: 3000,
-    priority: 4,
+    priority: 6,
   } as const;
   const rawKey = process.env.FORGE_BRIEF_COMPOSIO_KEY?.trim();
   const keyPath = process.env.FORGE_BRIEF_COMPOSIO_KEY_PATH?.trim()
@@ -553,7 +569,7 @@ async function crmSource(
     label: "CRM_LAST_TOUCH",
     required: false,
     maxChars: 4000,
-    priority: 7,
+    priority: 9,
   } as const;
   const key = readEnvLocalVar("ATTIO_API_KEY") ?? readEnvLocalVar("ATTIO_TOKEN");
   if (!key) return { ...source, note: "not_configured" };
@@ -602,6 +618,44 @@ function formatDecisionResults(results: readonly unknown[]): string {
     .join("\n");
 }
 
+const MEMORY_QUERIES = [
+  "recent decisions, commitments, and direction changes",
+  "what Alex worked on in Claude sessions the last three days",
+  "current state of Jarvis Pro, Boomer AI (Slipstream community), content engine",
+] as const;
+
+function memoryResultScore(result: unknown): number {
+  const score = asRecord(result)?.score;
+  return typeof score === "number" && Number.isFinite(score) ? score : 0;
+}
+
+function memoryResultUuid(result: unknown): string | undefined {
+  const record = asRecord(result);
+  const uuid = record?.uuid ?? record?.memory_uuid;
+  return typeof uuid === "string" && uuid.trim() ? uuid : undefined;
+}
+
+async function fetchMemoryResults(
+  fetchImpl: typeof fetch,
+  hubUrl: string,
+  token: string,
+  query: string,
+): Promise<unknown[]> {
+  const response = await fetchImpl(`${hubUrl}/api/v2/scored_search`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, limit: 12 }),
+    signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`Jarvis scored search ${response.status}`);
+  const results = asRecord(await response.json())?.results;
+  if (!Array.isArray(results)) throw new Error("Jarvis search response shape");
+  return results;
+}
+
 async function memoryDecisionsSource(
   fetchImpl: typeof fetch,
   memoryPath: string | undefined,
@@ -610,7 +664,7 @@ async function memoryDecisionsSource(
   const sourceOptions = {
     required: false,
     maxChars: 4000,
-    priority: 8,
+    priority: 10,
     freshnessThresholdHours: staleThresholdHours("memory_decisions", 24 * 7),
   } as const;
   if (memoryPath) {
@@ -630,21 +684,29 @@ async function memoryDecisionsSource(
   try {
     const hubUrl = (process.env.FORGE_BRIEF_JARVIS_URL?.trim() || "http://100.102.6.81:3510")
       .replace(/\/$/, "");
-    const response = await fetchImpl(`${hubUrl}/api/v2/scored_search`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        query: "recent decisions, commitments, and direction changes",
-        limit: 10,
-      }),
-      signal: AbortSignal.timeout(EXTERNAL_FETCH_TIMEOUT_MS),
-    });
-    if (!response.ok) throw new Error(`Jarvis scored search ${response.status}`);
-    const results = asRecord(await response.json())?.results;
-    if (!Array.isArray(results)) throw new Error("Jarvis search response shape");
+    const batches: unknown[][] = [
+      await fetchMemoryResults(fetchImpl, hubUrl, token, MEMORY_QUERIES[0]),
+    ];
+    for (const query of MEMORY_QUERIES.slice(1)) {
+      try {
+        batches.push(await fetchMemoryResults(fetchImpl, hubUrl, token, query));
+      } catch {
+        // The first search preserves the source. Later context lanes are
+        // additive and may fail independently without discarding it.
+      }
+    }
+    const byUuid = new Map<string, unknown>();
+    let anonymousIndex = 0;
+    for (const result of batches.flat()) {
+      const uuid = memoryResultUuid(result) ?? `anonymous:${anonymousIndex++}`;
+      const existing = byUuid.get(uuid);
+      if (!existing || memoryResultScore(result) > memoryResultScore(existing)) {
+        byUuid.set(uuid, result);
+      }
+    }
+    const results = [...byUuid.values()]
+      .sort((left, right) => memoryResultScore(right) - memoryResultScore(left))
+      .slice(0, 12);
     return {
       id: "memory_decisions",
       label: "RECENT_DECISIONS",
@@ -700,13 +762,33 @@ export async function collectMorningBriefSources(
       freshnessThresholdHours: staleThresholdHours("goals", 24 * 30),
     }),
     fileSource(
+      "operator_profile",
+      "OPERATOR_PROFILE",
+      options.operatorProfilePath ?? defaultOperatorProfilePath(),
+      {
+        required: false,
+        maxChars: 6000,
+        priority: 2,
+      },
+    ),
+    fileSource(
+      "leadup",
+      "LEADUP",
+      options.leadupPath ?? defaultLeadupPath(),
+      {
+        required: false,
+        maxChars: 9000,
+        priority: 3,
+      },
+    ),
+    fileSource(
       "sprint_memo",
       "SPRINT_MEMO",
       options.sprintMemoPath ?? defaultSprintMemoPath(),
       {
         required: true,
         maxChars: 12_000,
-        priority: 2,
+        priority: 4,
         // The sprint memo should move weekly.
         freshnessThresholdHours: staleThresholdHours("sprint_memo", 24 * 7),
       },
@@ -719,7 +801,7 @@ export async function collectMorningBriefSources(
     label: "EMAIL_BRIEF",
     required: false,
     maxChars: 3000,
-    priority: 6,
+    priority: 8,
     // Email triage runs twice a day; older than a day is stale.
     freshnessThresholdHours: staleThresholdHours("email_brief", 24),
   };
@@ -770,7 +852,7 @@ export async function collectMorningBriefSources(
       label: "OPEN_TASKS",
       required: true,
       maxChars: 14_000,
-      priority: 3,
+      priority: 5,
       content: lines.length > 0 ? lines.join("\n") : "The task board has no open Today, In-Flight, or Not Started work.",
       asOf: newestUpdate || undefined,
       // A board untouched for three days is a signal worth surfacing.
@@ -782,7 +864,7 @@ export async function collectMorningBriefSources(
       label: "OPEN_TASKS",
       required: true,
       maxChars: 14_000,
-      priority: 3,
+      priority: 5,
       note: error instanceof Error ? error.message.slice(0, 200) : "task_snapshot_failed",
     });
   }
@@ -825,7 +907,7 @@ export async function collectMorningBriefSources(
           label: "RECENT_SETTLEMENTS",
           required: true,
           maxChars: 6000,
-          priority: 5,
+          priority: 7,
           content: settlementContent,
           asOf: settlementAsOf,
           freshnessThresholdHours: settlementThreshold,
@@ -835,7 +917,7 @@ export async function collectMorningBriefSources(
           label: "RECENT_SETTLEMENTS",
           required: true,
           maxChars: 6000,
-          priority: 5,
+          priority: 7,
           note: "settlement_summary_unavailable",
         },
   );

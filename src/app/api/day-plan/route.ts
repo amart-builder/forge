@@ -41,6 +41,8 @@ import {
 } from "@/lib/day-plan/brief-relay";
 import {
   defaultGoalsPath,
+  defaultLeadupPath,
+  defaultOperatorProfilePath,
   defaultSprintMemoPath,
 } from "@/lib/day-plan/brief-sources";
 import {
@@ -646,6 +648,8 @@ export async function POST(request: NextRequest) {
         writeSourceCheckpoint({
           sources: {
             goals: defaultGoalsPath(),
+            operator_profile: defaultOperatorProfilePath(),
+            leadup: defaultLeadupPath(),
             sprint_memo: defaultSprintMemoPath(),
           },
         });

@@ -16,6 +16,7 @@ import {
   MORNING_BRIEF_SCHEMA_VERSION,
   localDateInTimezone,
   morningBriefFromArtifact,
+  morningBriefWriterFromJson,
   type MorningBriefArtifact,
 } from "./brief";
 import type { DaySnapshot } from "./types";
@@ -450,6 +451,7 @@ export function parseRelayFile(
       modelAlias: envelope.model_alias,
       effort: envelope.effort,
       budgetUsd: envelope.budget_usd,
+      writer: morningBriefWriterFromJson(envelope.brief_json),
       briefJson: envelope.brief_json,
       createdAt: envelope.created_at as string,
       updatedAt: envelope.finished_at as string,
@@ -846,11 +848,14 @@ export function readSettlementRelay(options: {
 // ---------------------------------------------------------------------------
 
 type CheckpointEntry = { hash: string; mtime: string; as_of: string };
+type CheckpointSource = CheckpointEntry | null;
+
+const OPTIONAL_CHECKPOINT_SOURCE_IDS = new Set(["operator_profile", "leadup"]);
 
 type SourceCheckpointFile = {
   relay_version: number;
   written_at: string;
-  sources: Record<string, CheckpointEntry>;
+  sources: Record<string, CheckpointSource>;
 };
 
 function checkpointEntry(filePath: string): CheckpointEntry | undefined {
@@ -873,10 +878,16 @@ export function writeSourceCheckpoint(options: {
   log?: (message: string) => void;
 }): boolean {
   try {
-    const sources: Record<string, CheckpointEntry> = {};
+    const sources: Record<string, CheckpointSource> = {};
     for (const [id, filePath] of Object.entries(options.sources)) {
       const entry = checkpointEntry(filePath);
-      if (entry) sources[id] = entry;
+      if (entry) {
+        sources[id] = entry;
+      } else if (OPTIONAL_CHECKPOINT_SOURCE_IDS.has(id)) {
+        // Explicit absence lets the verifier distinguish an optional file the
+        // writer checked from a source an older checkpoint never knew about.
+        sources[id] = null;
+      }
     }
     if (Object.keys(sources).length === 0) return false;
     const file: SourceCheckpointFile = {
@@ -930,8 +941,19 @@ export function verifySourceCheckpoint(options: {
       return { ok: false, reason: "stale" };
     }
     for (const [id, filePathForId] of Object.entries(options.sources)) {
+      const checkpointKnowsSource = Object.prototype.hasOwnProperty.call(parsed.sources, id);
+      if (!checkpointKnowsSource) {
+        // Checkpoints written before operator_profile and leadup existed omit
+        // those ids entirely. Preserve their compatibility until refreshed.
+        if (OPTIONAL_CHECKPOINT_SOURCE_IDS.has(id)) continue;
+        return { ok: false, reason: "mismatch" };
+      }
       const expected = parsed.sources[id];
       const local = checkpointEntry(filePathForId);
+      if (expected === null) {
+        if (local) return { ok: false, reason: "mismatch" };
+        continue;
+      }
       if (!expected || !local || expected.hash !== local.hash) {
         return { ok: false, reason: "mismatch" };
       }

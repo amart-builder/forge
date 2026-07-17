@@ -156,8 +156,16 @@ STIGNORE_BLOCK
     <string>America/Los_Angeles</string>
     <key>FORGE_BRIEF_REQUIRE_SOURCE_CHECKPOINT</key>
     <string>1</string>
+    <key>FORGE_BRIEF_WRITER</key>
+    <string>codex</string>
+    <key>FORGE_CODEX_BIN</key>
+    <string>/opt/homebrew/bin/codex</string>
     <key>FORGE_BRIEF_GOALS_PATH</key>
     <string>$ATLAS_ROOT/brain/GOALS.md</string>
+    <key>FORGE_BRIEF_OPERATOR_PROFILE_PATH</key>
+    <string>$ATLAS_ROOT/brain/operator-profile.md</string>
+    <key>FORGE_BRIEF_LEADUP_PATH</key>
+    <string>$ATLAS_ROOT/brain/brief-leadup.md</string>
     <key>FORGE_BRIEF_SPRINT_MEMO_PATH</key>
     <string>$ATLAS_ROOT/brain/path-to-30k-2026-07.md</string>
   </dict>

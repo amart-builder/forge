@@ -47,6 +47,7 @@ import { applyAssistantProposal, validateAssistantProposal } from "./assistant-p
 import { arrivalAdditionOutcomeKey } from "./arrival-addition";
 import {
   morningBriefFromArtifact,
+  morningBriefWriterFromJson,
   overlayBriefOnCandidates,
   MORNING_BRIEF_PROMPT_VERSION,
   MORNING_BRIEF_SCHEMA_VERSION,
@@ -553,6 +554,7 @@ function morningBriefFromRow(row: MorningBriefRow): MorningBriefArtifact {
     modelAlias: row.model_alias,
     effort: row.effort,
     budgetUsd: row.budget_usd,
+    writer: morningBriefWriterFromJson(row.brief_json ?? undefined),
     briefJson: row.brief_json ?? undefined,
     errorCode: row.error_code ?? undefined,
     createdAt: row.created_at,

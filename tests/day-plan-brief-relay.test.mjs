@@ -602,6 +602,73 @@ test('a source checkpoint stamped in the future fails closed like a stale one', 
   assert.deepEqual(verifySourceCheckpoint({ sources, now, dataDir: dir }), { ok: false, reason: 'mismatch' });
 });
 
+test('optional checkpoint files absent on both machines verify successfully', (t) => {
+  const { dir } = fixture(t);
+  const goalsPath = path.join(dir, 'GOALS.md');
+  writeFileSync(goalsPath, 'North star.');
+  const sources = {
+    goals: goalsPath,
+    operator_profile: path.join(dir, 'missing-operator-profile.md'),
+    leadup: path.join(dir, 'missing-leadup.md'),
+  };
+  const now = new Date('2026-07-14T15:00:00.000Z');
+
+  assert.equal(writeSourceCheckpoint({ sources, now, dataDir: dir }), true);
+  const checkpoint = JSON.parse(readFileSync(path.join(dir, 'source-checkpoint.json'), 'utf8'));
+  assert.equal(checkpoint.sources.operator_profile, null);
+  assert.equal(checkpoint.sources.leadup, null);
+  assert.deepEqual(verifySourceCheckpoint({ sources, now, dataDir: dir }), { ok: true });
+});
+
+test('an optional checkpoint file present on the writer but absent on the verifier mismatches', (t) => {
+  const { dir } = fixture(t);
+  const goalsPath = path.join(dir, 'GOALS.md');
+  const operatorPath = path.join(dir, 'operator-profile.md');
+  writeFileSync(goalsPath, 'North star.');
+  writeFileSync(operatorPath, 'Operator profile.');
+  const sources = { goals: goalsPath, operator_profile: operatorPath };
+  const now = new Date('2026-07-14T15:00:00.000Z');
+
+  assert.equal(writeSourceCheckpoint({ sources, now, dataDir: dir }), true);
+  rmSync(operatorPath);
+  assert.deepEqual(verifySourceCheckpoint({ sources, now, dataDir: dir }), {
+    ok: false,
+    reason: 'mismatch',
+  });
+});
+
+test('an optional checkpoint file absent on the writer but present on the verifier mismatches', (t) => {
+  const { dir } = fixture(t);
+  const goalsPath = path.join(dir, 'GOALS.md');
+  const leadupPath = path.join(dir, 'brief-leadup.md');
+  writeFileSync(goalsPath, 'North star.');
+  const sources = { goals: goalsPath, leadup: leadupPath };
+  const now = new Date('2026-07-14T15:00:00.000Z');
+
+  assert.equal(writeSourceCheckpoint({ sources, now, dataDir: dir }), true);
+  writeFileSync(leadupPath, 'Leadup now exists.');
+  assert.deepEqual(verifySourceCheckpoint({ sources, now, dataDir: dir }), {
+    ok: false,
+    reason: 'mismatch',
+  });
+});
+
+test('old-format checkpoints without the new optional ids remain compatible', (t) => {
+  const { dir } = fixture(t);
+  const goalsPath = path.join(dir, 'GOALS.md');
+  const operatorPath = path.join(dir, 'operator-profile.md');
+  writeFileSync(goalsPath, 'North star.');
+  const now = new Date('2026-07-14T15:00:00.000Z');
+
+  assert.equal(writeSourceCheckpoint({ sources: { goals: goalsPath }, now, dataDir: dir }), true);
+  writeFileSync(operatorPath, 'A source the old checkpoint did not know about.');
+  assert.deepEqual(verifySourceCheckpoint({
+    sources: { goals: goalsPath, operator_profile: operatorPath },
+    now,
+    dataDir: dir,
+  }), { ok: true });
+});
+
 // ---------------------------------------------------------------------------
 // Review finding 4: the earliest-finished same-key winner adopts the FULL
 // canonical payload, but never under a plan that already consumed the brief.

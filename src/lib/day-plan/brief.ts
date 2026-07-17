@@ -8,9 +8,9 @@ import type {
 
 // Version stamps participate in the composite input hash so a prompt or contract
 // change regenerates the brief even when the underlying sources are unchanged.
-// v3: target timezone + canonical weekday/date assertion in the prompt, with a
-// deterministic narrative-date correction before storage.
-export const MORNING_BRIEF_PROMPT_VERSION = 4;
+// v5: the owner-authored chief-of-staff mandate, richer operator context, and
+// the Codex-first writer contract.
+export const MORNING_BRIEF_PROMPT_VERSION = 5;
 export const MORNING_BRIEF_SCHEMA_VERSION = 2;
 
 export type MorningBriefStatus = "queued" | "running" | "succeeded" | "failed";
@@ -93,6 +93,7 @@ export type MorningBriefArtifact = {
   modelAlias: string;
   effort: string;
   budgetUsd: number;
+  writer?: "codex" | "claude";
   briefJson?: string;
   errorCode?: string;
   createdAt: string;
@@ -100,6 +101,18 @@ export type MorningBriefArtifact = {
   startedAt?: string;
   finishedAt?: string;
 };
+
+export function morningBriefWriterFromJson(
+  briefJson: string | undefined,
+): "codex" | "claude" | undefined {
+  if (!briefJson) return undefined;
+  try {
+    const writer = (JSON.parse(briefJson) as { writer?: unknown }).writer;
+    return writer === "codex" || writer === "claude" ? writer : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export type MorningBriefSalesActionState = "approved" | "edited" | "skipped";
 
@@ -146,7 +159,7 @@ export type AssembledBriefContext = {
 export const MORNING_BRIEF_TOTAL_MAX_CHARS = 48_000;
 
 // Everything that shapes the generated brief participates in the input hash:
-// the exact bounded sections as sent to Claude (not the untrimmed source
+// the exact bounded sections as sent to the selected writer (not the untrimmed source
 // bytes), the target date and timezone, both contract versions, the model
 // configuration, and each source's freshness state. Two runs with the same hash
 // would produce an equivalent artifact, so the second is skipped as a duplicate.
@@ -160,6 +173,7 @@ export type MorningBriefGenerationEnvelope = {
   modelAlias: string;
   effort: string;
   budgetUsd: number;
+  writer?: "codex" | "claude";
 };
 
 export function morningBriefInputHash(
@@ -168,7 +182,12 @@ export function morningBriefInputHash(
   const canonical = JSON.stringify({
     versions: [envelope.promptVersion, envelope.schemaVersion],
     target: [envelope.targetLocalDate, envelope.targetTimezone],
-    model: [envelope.modelAlias, envelope.effort, envelope.budgetUsd],
+    model: [
+      envelope.writer ?? "claude",
+      envelope.modelAlias,
+      envelope.effort,
+      envelope.budgetUsd,
+    ],
     freshness: [...envelope.sourceFreshness]
       .sort((left, right) => left.id.localeCompare(right.id))
       .map((entry) => `${entry.id}=${entry.freshness}`),

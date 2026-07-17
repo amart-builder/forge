@@ -7,7 +7,7 @@ import OwnerChip, { type OwnerChipEscapeHandler } from './OwnerChip';
 
 const DRAFT_KIND_LABELS: Record<string, string> = {
   full: 'Draft ready',
-  beats_only: 'Beats only',
+  beats_only: 'Talking points',
   pointer: 'Pointer',
   blocked: 'Blocked',
 };
