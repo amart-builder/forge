@@ -2077,29 +2077,31 @@ function TodayExperience({
                     <strong>{task.title}</strong>
                   </button>
                   {execution?.run && execution.presentation.statusLabel && (
-                    execution.presentation.reviewable && execution.run.claudeSessionId ? (
-                      <OpenInClaudeCode
-                        sessionId={execution.run.claudeSessionId}
-                        title={task.title}
-                        label={execution.presentation.statusLabel}
-                        className="current-execution-chip mt-1"
-                      />
-                    ) : ['queued', 'starting', 'running', 'cancelling']
-                        .includes(execution.run.status) ? (
-                      <button
-                        type="button"
-                        disabled
-                        className="current-execution-chip mt-1 opacity-60"
-                      >
-                        Working…
-                      </button>
-                    ) : (
-                      <RunStatusChip
-                        status={execution.run.status}
-                        label={execution.presentation.statusLabel}
-                        className="mt-1 self-start"
-                      />
-                    )
+                    <div className="current-node-execution">
+                      {execution.presentation.reviewable && execution.run.claudeSessionId ? (
+                        <OpenInClaudeCode
+                          sessionId={execution.run.claudeSessionId}
+                          title={task.title}
+                          label={execution.presentation.statusLabel}
+                          className="current-execution-chip"
+                        />
+                      ) : ['queued', 'starting', 'running', 'cancelling']
+                          .includes(execution.run.status) ? (
+                        <button
+                          type="button"
+                          disabled
+                          className="current-execution-chip opacity-60"
+                        >
+                          Working…
+                        </button>
+                      ) : (
+                        <RunStatusChip
+                          status={execution.run.status}
+                          label={execution.presentation.statusLabel}
+                          className="current-execution-chip"
+                        />
+                      )}
+                    </div>
                   )}
                 </div>
               </article>
