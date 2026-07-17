@@ -9,7 +9,9 @@ import type {
 } from '@/lib/day-plan/types';
 import {
   executionReadinessMessage,
+  executionRestartLabel,
   executionRunStatusLabel,
+  executionWorkspaceLabel,
   isRetryableRunStatus,
   selectCurrentExecutionRow,
 } from '@/lib/day-plan/presentation';
@@ -128,7 +130,14 @@ export default function ExecutionConfigPanel({
   // that ended failed, interrupted, or cancelled are retryable: the store supports a
   // fresh attempt under the same authorization, so Kick Off stays available.
   const actionRun = currentRun ?? latestRun;
-  const showKickoff = !actionRun || isRetryableRunStatus(actionRun.status);
+  const reviewableActionRun = actionRun &&
+    ['plan_ready', 'ready_to_join', 'awaiting_review'].includes(actionRun.status)
+    ? actionRun
+    : undefined;
+  const missingSessionRun = reviewableActionRun && !reviewableActionRun.claudeSessionId
+    ? reviewableActionRun
+    : undefined;
+  const showKickoff = !actionRun || isRetryableRunStatus(actionRun.status) || Boolean(missingSessionRun);
   const showKickoffControl = showKickoff && !(
     planActionHandledExternally && selectedMode === 'plan_review'
   );
@@ -137,11 +146,7 @@ export default function ExecutionConfigPanel({
     currentRun.resultSummary?.text
     ? currentRun
     : undefined;
-  const openableRun = actionRun &&
-    ['plan_ready', 'ready_to_join', 'awaiting_review'].includes(actionRun.status) &&
-    actionRun.claudeSessionId
-    ? actionRun
-    : undefined;
+  const openableRun = reviewableActionRun?.claudeSessionId ? reviewableActionRun : undefined;
   const reviewHeadingId = `${titleId}-claude-review`;
   const executionStatusMessage = selectedMode === 'autonomous' && workspaces.length === 0
     ? 'Tell Buddy which project should be connected to this item.'
@@ -155,6 +160,8 @@ export default function ExecutionConfigPanel({
             ? 'Ready to plan with Claude.'
           : briefChanged
             ? executionReadinessMessage(readiness, item.owner)
+            : missingSessionRun
+              ? "Claude's session reference is missing — restart planning to reopen it."
             : displayedRun
               ? executionRunStatusLabel(displayedRun.status)
               : executionLoading
@@ -192,7 +199,7 @@ export default function ExecutionConfigPanel({
                 }`}
                 onClick={() => setExecutionDraft((current) => ({ ...current, mode }))}
               >
-                {mode === 'plan_review' ? 'Plan with Claude' : 'Autonomous'}
+                {mode === 'plan_review' ? 'Plan with Claude' : 'Hands-off (Claude does it)'}
               </button>
             ))
           ) : (
@@ -203,9 +210,9 @@ export default function ExecutionConfigPanel({
         </div>
       )}
       {selectedMode === 'autonomous' && workspaces.length > 0 && (
-        <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(6.5rem,0.7fr)] gap-2">
+        <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(7.5rem,0.7fr)] gap-2">
           <label className="min-w-0 text-xs text-muted-foreground">
-            <span className="sr-only">Connected project</span>
+            <span className="mb-1 block">Project</span>
             <select
               value={selectedWorkspaceId}
               disabled={controlBusy || Boolean(activeRun)}
@@ -215,14 +222,15 @@ export default function ExecutionConfigPanel({
               <option value="">Project…</option>
               {workspaces.map((workspace) => (
                 <option key={workspace.id} value={workspace.id}>
-                  {workspace.id} (max ${workspace.maximumBudgetUsd})
+                  {executionWorkspaceLabel(workspace.id)} — ${workspace.maximumBudgetUsd} limit
                 </option>
               ))}
             </select>
           </label>
-          <label className="flex min-w-0 items-center rounded-lg border bg-background px-2 text-xs text-muted-foreground">
-            <span className="mr-1">$</span>
-            <input
+          <label className="min-w-0 text-xs text-muted-foreground">
+            <span className="mb-1 block">Spend limit ($)</span>
+            <span className="flex items-center rounded-lg border bg-background px-2">
+              <input
               type="number"
               inputMode="decimal"
               min="0.01"
@@ -231,7 +239,7 @@ export default function ExecutionConfigPanel({
               value={selectedBudgetText}
               disabled={controlBusy || Boolean(activeRun) || !selectedWorkspace}
               className="h-8 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none"
-              aria-label="Autonomous budget in dollars"
+              aria-label="Spend limit ($)"
               placeholder={selectedWorkspace
                 ? `up to ${selectedWorkspace.maximumBudgetUsd}`
                 : 'budget'}
@@ -240,7 +248,8 @@ export default function ExecutionConfigPanel({
                 budgetUsd: event.target.value,
                 readinessCheckedAt: readiness?.checkedAt,
               }))}
-            />
+              />
+            </span>
           </label>
         </div>
       )}
@@ -259,7 +268,7 @@ export default function ExecutionConfigPanel({
             className="press-scale min-h-9 shrink-0 rounded-lg border px-2.5 text-xs font-medium text-muted-foreground disabled:opacity-40"
             onClick={() => void Promise.resolve(onCancelExecution(activeRun.id)).catch(() => undefined)}
           >
-            {activeRun.status === 'cancelling' ? 'Cancelling…' : 'Cancel'}
+            {activeRun.status === 'cancelling' ? 'Stopping…' : 'Cancel'}
           </button>
         )}
         {showKickoffControl && (
@@ -286,11 +295,13 @@ export default function ExecutionConfigPanel({
           >
             {executionBusy
               ? 'Preparing…'
+              : missingSessionRun
+                ? 'Restart'
               : actionRun && isRetryableRunStatus(actionRun.status)
-                ? 'Retry'
+                ? executionRestartLabel(actionRun.status)
                 : selectedMode === 'plan_review'
-                  ? 'Start planning in Claude Code'
-                  : 'Start autonomous work'}
+                  ? 'Ask Claude to plan'
+                  : 'Start hands-off work'}
           </button>
         )}
       </div>
@@ -304,14 +315,27 @@ export default function ExecutionConfigPanel({
           <button
             type="button"
             disabled
-            className="min-h-9 shrink-0 rounded-lg border border-accent-blue/50 bg-accent-blue/10 px-3 text-xs font-semibold text-foreground opacity-60"
+            className={`min-h-9 shrink-0 rounded-lg border px-3 text-xs font-semibold opacity-60 ${
+              activeRun.status === 'running'
+                ? 'border-accent-blue/50 bg-accent-blue/10 text-foreground'
+                : 'border-border/70 bg-muted/60 text-muted-foreground'
+            }`}
           >
-            Working…
+            {activeRun.status === 'running'
+              ? 'Working…'
+              : activeRun.status === 'cancelling'
+                ? 'Stopping…'
+                : 'Waiting to start'}
           </button>
         </div>
       ) : openableRun && (
         <div className="panel-pop-in mt-2 flex justify-end">
-          <OpenInClaudeCode sessionId={openableRun.claudeSessionId} title={ariaTitle} />
+          <OpenInClaudeCode
+            sessionId={openableRun.claudeSessionId}
+            title={ariaTitle}
+            label="Review plan"
+            resumeCommand={openableRun.resumeCommand}
+          />
         </div>
       )}
       {reviewRun && (

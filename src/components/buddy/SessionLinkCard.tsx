@@ -8,6 +8,7 @@ import {
   type BuddySpawnedSessionState,
 } from '@/lib/buddy/spawned-session-state';
 import { OpenInClaudeCode } from '@/components/tasks/ClaudeRunIndicators';
+import { buildClaudeResumeCommand } from '@/lib/claude-execution/resume-command';
 
 type SpawnedSessionStatus = SpawnedSessionReceipt & {
   state: BuddySpawnedSessionState;
@@ -19,10 +20,6 @@ type SpawnedSessionStatus = SpawnedSessionReceipt & {
 function abbreviatedDir(dir: string): string {
   const atlas = dir.indexOf('/Atlas');
   return atlas >= 0 ? `~${dir.slice(atlas)}` : dir;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 export default function SessionLinkCard({ session }: { session: SpawnedSessionReceipt }) {
@@ -59,7 +56,7 @@ export default function SessionLinkCard({ session }: { session: SpawnedSessionRe
   }, [session.sessionId]);
 
   const command = useMemo(
-    () => `cd ${shellQuote(status.dir)} && claude --resume ${shellQuote(status.sessionId)}`,
+    () => buildClaudeResumeCommand(status.dir, status.sessionId),
     [status.dir, status.sessionId],
   );
   const openable = isBuddySpawnedSessionOpenable(status.state);
@@ -103,7 +100,12 @@ export default function SessionLinkCard({ session }: { session: SpawnedSessionRe
       )}
 
       {openable && status.deepLinksEnabled === true && (
-        <OpenInClaudeCode sessionId={status.sessionId} title={status.title} className="mt-3" />
+        <OpenInClaudeCode
+          sessionId={status.sessionId}
+          title={status.title}
+          resumeCommand={command}
+          className="mt-3"
+        />
       )}
 
       {openable && status.deepLinksEnabled === false && (

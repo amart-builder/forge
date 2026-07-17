@@ -19,7 +19,10 @@ import type {
   DayPlanModelAlias,
 } from "@/lib/day-plan/types";
 import { getQuietCurrentCsrfToken } from "@/lib/quiet-current/store";
-import { triggerOneShotWorker } from "@/lib/claude-execution/trigger";
+import {
+  isClaudeWorkerAvailable,
+  triggerOneShotWorker,
+} from "@/lib/claude-execution/trigger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -136,6 +139,7 @@ export async function GET(request: NextRequest) {
         publicExecutionRun(run, accessMode),
       ),
       workspaces: store.listExecutionWorkspaces(),
+      workerAvailable: isClaudeWorkerAvailable(),
     });
   } catch (error) {
     return errorResponse(error);

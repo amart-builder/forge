@@ -39,6 +39,7 @@ export type DayPlanExecutionState = {
   }>;
   runs: DayPlanExecutionRun[];
   workspaces: DayPlanExecutionWorkspaceMetadata[];
+  workerAvailable: boolean;
 };
 
 export class DayPlanApiConflict extends Error {

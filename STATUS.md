@@ -18,8 +18,8 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-07-16T18:02:06-0700
-- **task:** board chip spacing fix
+- **since:** 2026-07-16T21:38:51-0700
+- **task:** seams build: trust fixes + notifications + handoff
 <!-- END active-session -->
 
 ---
@@ -29,6 +29,9 @@
 
 ## North Star Goal
 Make Forge the source of truth for Alex's day-to-day execution: tasks, email action items, CRM context, and daily priorities in one operating surface.
+
+## Product Direction (decided 2026-07-16, Alex-approved)
+Forge is the day's MEMORY and CONTROL TOWER; the Claude desktop app is the HANDS where work happens. Forge is a visible cockpit for exactly two ritual moments (Morning Arrival, evening settlement) and a background state layer in between. Mid-day, Forge's surface inside Claude is the `forge-day` skill (~/.claude/skills/forge-day): log outcomes, offer the next priority, capture tasks/decisions via scripts/forge-buddy-data.ts. Pull-back mechanism: strictly budgeted Mac notifications (needs-a-decision / blocked / didn't-finish only). Refuse: in-Forge plan-review consoles, growing the buddy beyond a Forge-data command palette, hard dependence on claude:// deep links (copy/resume path is co-equal; context transfer is the product, auto-open is polish). Product metric: time from finished task to right next task — not time spent in Forge.
 
 ## Assumptions
 - Forge Tasks is the primary task surface.

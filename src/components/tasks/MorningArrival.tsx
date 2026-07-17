@@ -85,7 +85,7 @@ const STEP_TITLES: Record<Exclude<ArrivalStep, 'brief'>, string> = {
 
 const STEP_DESCRIPTIONS: Record<ArrivalStep, string> = {
   brief: 'A quiet read on what changed, what matters, and what Forge is watching for you.',
-  priorities: 'Drag three outcomes into priority order, then choose who owns each one.',
+  priorities: 'Drag three outcomes into priority order, then choose who owns each one. Items you give to Claude start planning when you begin your day.',
   extras: 'Review the optional details, make any final refinements, and begin your day.',
 };
 

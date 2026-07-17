@@ -6,6 +6,7 @@ import type {
   DayPlanKickoffSkip,
   DayPlanUnreadyItem,
 } from "./types";
+import { buildClaudeResumeCommand } from "../claude-execution/resume-command";
 
 export type DayPlanExecutionAccessMode = "loopback" | "session";
 
@@ -67,8 +68,14 @@ export function publicExecutionRun(
   const publicRun = { ...run };
   delete publicRun.workspacePath;
   delete publicRun.pid;
-  if (!includesClaudeSessionId(accessMode, run.status)) {
+  if (includesClaudeSessionId(accessMode, run.status)) {
+    publicRun.resumeCommand = buildClaudeResumeCommand(
+      run.workspacePath ?? process.cwd(),
+      run.claudeSessionId,
+    );
+  } else {
     delete (publicRun as Partial<DayPlanExecutionRun>).claudeSessionId;
+    delete publicRun.resumeCommand;
   }
   return {
     ...publicRun,

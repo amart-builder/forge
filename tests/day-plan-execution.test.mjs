@@ -283,12 +283,17 @@ test('claudeSessionId is projected for loopback actionable runs only', () => {
     updatedAt: '2026-07-10T16:00:00.000Z',
   };
   assert.equal(publicExecutionRun(baseRun, 'loopback').claudeSessionId, baseRun.claudeSessionId);
+  assert.equal(
+    publicExecutionRun(baseRun, 'loopback').resumeCommand,
+    "cd '/private/allowlisted/project' && claude --resume '00000000-0000-4000-8000-000000000000'",
+  );
   assert.equal(publicExecutionRun(baseRun, 'session').claudeSessionId, undefined);
+  assert.equal(publicExecutionRun(baseRun, 'session').resumeCommand, undefined);
   assert.equal(publicExecutionRun(baseRun).claudeSessionId, undefined);
   assert.equal(publicExecutionRun({ ...baseRun, status: 'running' }, 'loopback').claudeSessionId, baseRun.claudeSessionId);
   assert.equal(publicExecutionRun({ ...baseRun, status: 'ready_to_join' }, 'loopback').claudeSessionId, baseRun.claudeSessionId);
 
-  // workspacePath, pid, and the readiness path stay stripped regardless of access mode.
+  // Raw workspacePath, pid, and the readiness path stay stripped regardless of access mode.
   const stripped = publicExecutionRun(baseRun, 'loopback');
   assert.equal(stripped.workspacePath, undefined);
   assert.equal(stripped.pid, undefined);
@@ -473,6 +478,7 @@ test('browser execution payloads omit local paths and process identifiers', () =
     updatedAt: '2026-07-10T16:00:00.000Z',
   });
   assert.equal(run.workspacePath, undefined);
+  assert.equal(run.resumeCommand, undefined);
   assert.equal(run.pid, undefined);
   assert.equal(run.readiness.workspacePath, undefined);
 });

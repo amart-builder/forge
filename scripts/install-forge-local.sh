@@ -332,6 +332,8 @@ cat > "$WORKER_PLIST" <<EOF
     <string>$HOME</string>
     <key>FORGE_CLAUDE_WORKER_ENABLED</key>
     <string>1</string>
+    <key>FORGE_NOTIFY</key>
+    <string>1</string>
     <key>FORGE_CLAUDE_BIN</key>
     <string>$CLAUDE_BIN</string>
     <key>FORGE_BUDDY_DEEPLINKS</key>

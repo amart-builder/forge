@@ -44,8 +44,16 @@ import {
   parseMorningBriefOutput,
 } from "./brief-commands";
 import { markForgeOrchestratorSession } from "./orchestrator-session";
+import {
+  notifyExecutionRun,
+  rememberNotificationTransition,
+  type ExecutionNotificationInput,
+} from "./notify";
 
 type SpawnImpl = typeof spawn;
+type ExecutionNotifier = (input: ExecutionNotificationInput) => void | Promise<void>;
+const WORKER_PROCESS_STARTED_AT = new Date(Date.now() - process.uptime() * 1_000);
+const workerNotifiedTransitions = new Set<string>();
 
 export type ClaudeWorkerOptions = {
   store: DayPlanStore;
@@ -62,6 +70,9 @@ export type ClaudeWorkerOptions = {
   abortSignal?: AbortSignal;
   markSession?: (sessionId: string) => void;
   openSession?: (sessionId: string) => void;
+  notifyExecution?: ExecutionNotifier;
+  processStartedAt?: Date;
+  notifiedTransitions?: Set<string>;
 };
 
 type ChildResult = {
@@ -72,6 +83,34 @@ type ChildResult = {
   overflowed: boolean;
   terminatedBy?: "timeout" | "cancelled" | "shutdown";
 };
+
+export function emitExecutionTransitionNotification(input: {
+  run: ReturnType<DayPlanStore["getExecutionRun"]>;
+  previousStatus: ExecutionNotificationInput["state"];
+  processStartedAt?: Date;
+  notify?: ExecutionNotifier;
+  notifiedTransitions?: Set<string>;
+}): void {
+  const run = input.run;
+  if (!run || run.status === input.previousStatus) return;
+  if (!["plan_ready", "ready_to_join", "awaiting_review", "failed"].includes(run.status)) return;
+  const processStartedAt = input.processStartedAt ?? WORKER_PROCESS_STARTED_AT;
+  if (new Date(run.updatedAt).getTime() < processStartedAt.getTime()) return;
+  const notifiedTransitions = input.notifiedTransitions ?? workerNotifiedTransitions;
+  const transitionKey = `${run.id}:${run.status}`;
+  if (!rememberNotificationTransition(notifiedTransitions, transitionKey)) return;
+  try {
+    void Promise.resolve((input.notify ?? notifyExecutionRun)({
+      runId: run.id,
+      state: run.status,
+      itemTitle: run.promptSnapshot.title,
+      claudeSessionId: run.claudeSessionId,
+      transitionedAt: run.updatedAt,
+    })).catch(() => undefined);
+  } catch {
+    // Notifications never participate in the durable run lifecycle.
+  }
+}
 
 export function openClaudeSessionInBackground(
   sessionId: string,
@@ -399,6 +438,13 @@ export async function runOneExecution(options: ClaudeWorkerOptions): Promise<boo
               ? undefined
               : resultError ?? (childPid ? "claude_failed" : "spawn_failed"),
     });
+    emitExecutionTransitionNotification({
+      run: finished,
+      previousStatus: run.status,
+      processStartedAt: options.processStartedAt,
+      notify: options.notifyExecution,
+      notifiedTransitions: options.notifiedTransitions,
+    });
     if (
       resultSummary &&
       ["plan_ready", "ready_to_join", "awaiting_review"].includes(finished.status)
@@ -410,9 +456,16 @@ export async function runOneExecution(options: ClaudeWorkerOptions): Promise<boo
       }
     }
   } catch (error) {
-    options.store.finishExecutionRun({
+    const finished = options.store.finishExecutionRun({
       runId: run.id,
       errorCode: error instanceof Error ? error.message : "worker_failed",
+    });
+    emitExecutionTransitionNotification({
+      run: finished,
+      previousStatus: run.status,
+      processStartedAt: options.processStartedAt,
+      notify: options.notifyExecution,
+      notifiedTransitions: options.notifiedTransitions,
     });
   } finally {
     log?.close();

@@ -6,7 +6,9 @@ import {
   combineSurfaceErrors,
   firstCarriedItem,
   executionReadinessMessage,
+  executionRestartLabel,
   executionRunStatusLabel,
+  executionWorkspaceLabel,
   helpfulProjectLabel,
   morningArrivalGreeting,
   ownerDescription,
@@ -17,10 +19,13 @@ import {
   selectCurrentExecutionRow,
   selectEssentialItems,
   selectRecommendedHumanFocus,
+  shouldShowNeedsSetupToStart,
   shortArrivalSummary,
   shouldPollBriefGeneration,
   staleSettlementNotice,
+  startDayReceiptCopy,
 } from '../src/lib/day-plan/presentation.ts';
+import { buildClaudeResumeCommand } from '../src/lib/claude-execution/resume-command.ts';
 
 test('morning arrival greeting follows the plan timezone', () => {
   const timezone = 'America/Los_Angeles';
@@ -88,7 +93,8 @@ test('recommended focus is the highest ordered item involving the person', () =>
 test('an all-Claude plan still yields one deterministic handoff-preparation focus', () => {
   const items = [item('first', 'claude'), item('second', 'claude')];
   assert.equal(selectRecommendedHumanFocus(items)?.id, 'first');
-  assert.match(ownerDescription('claude'), /Execution has not started\./);
+  assert.equal(ownerDescription('claude'), 'Claude will draft a plan for you to review.');
+  assert.equal(ownerDescription('together'), 'You and Claude will work through this together.');
 });
 
 test('settlement derives tomorrow from the first carried item', () => {
@@ -115,21 +121,26 @@ test('project pills suppress operational tags and overlong labels', () => {
 });
 
 test('execution states use truthful non-completion labels', () => {
-  assert.equal(executionRunStatusLabel('running'), 'Claude is working');
-  assert.equal(executionRunStatusLabel('plan_ready'), 'Plan ready');
-  assert.equal(executionRunStatusLabel('awaiting_review'), 'Awaiting review');
-  assert.equal(executionRunStatusLabel('cancelling'), 'Cancelling');
+  assert.equal(executionRunStatusLabel('queued'), 'Waiting to start');
+  assert.equal(executionRunStatusLabel('starting'), 'Waiting to start');
+  assert.equal(executionRunStatusLabel('running'), 'Claude · working');
+  assert.equal(executionRunStatusLabel('plan_ready'), 'Needs you · Review plan');
+  assert.equal(executionRunStatusLabel('awaiting_review'), 'Needs you · Review plan');
+  assert.equal(executionRunStatusLabel('cancelling'), 'Stopping…');
+  assert.equal(executionRunStatusLabel('failed'), "Didn't finish · Retry");
+  assert.equal(executionRunStatusLabel('cancelled'), 'Stopped · Restart');
+  assert.notEqual(executionRunStatusLabel('cancelled'), executionRunStatusLabel('failed'));
   assert.notEqual(executionRunStatusLabel('plan_ready'), 'Completed');
 });
 
 test('readiness copy explains mode and brief resets without exposing paths', () => {
   assert.equal(
     executionReadinessMessage({ ready: false, codes: ['mode_required'], checkedAt: '' }, 'claude'),
-    'Choose Plan with Claude or Autonomous before kickoff.',
+    'Choose Plan with Claude or Hands-off before kickoff.',
   );
   assert.equal(
     executionReadinessMessage({ ready: false, codes: ['owner_not_agent'], checkedAt: '' }, 'claude'),
-    'Choose Plan with Claude or Autonomous before kickoff.',
+    'Choose Plan with Claude or Hands-off before kickoff.',
   );
   assert.equal(
     executionReadinessMessage({ ready: false, codes: ['brief_changed'], checkedAt: '' }, 'together'),
@@ -203,42 +214,86 @@ test('board execution selector drives hero actions and retry-only kickoff visibi
     { action: 'none', showKickoff: false, reviewable: false },
   );
 
-  for (const status of ['failed', 'interrupted', 'cancelled']) {
-    assert.deepEqual(
-      selectBoardExecutionPresentation({ owner: 'claude', run: run({ status }) }),
-      {
-        statusLabel: 'Failed · Retry',
-        action: 'retry',
-        showKickoff: true,
-        reviewable: false,
-      },
-      status,
-    );
+  assert.deepEqual(
+    selectBoardExecutionPresentation({ owner: 'claude', run: run({ status: 'failed' }) }),
+    {
+      statusLabel: "Didn't finish · Retry",
+      action: 'retry',
+      showKickoff: true,
+      reviewable: false,
+    },
+  );
+  for (const status of ['interrupted', 'cancelled']) {
+    assert.deepEqual(selectBoardExecutionPresentation({ owner: 'claude', run: run({ status }) }), {
+      statusLabel: 'Stopped · Restart',
+      action: 'restart',
+      showKickoff: true,
+      reviewable: false,
+    }, status);
+    assert.equal(executionRestartLabel(status), 'Restart');
   }
+  assert.equal(executionRestartLabel('failed'), 'Retry');
 
   for (const [status, statusLabel] of [
-    ['queued', 'Claude · queued'],
-    ['starting', 'Claude · working'],
+    ['queued', 'Waiting to start'],
+    ['starting', 'Waiting to start'],
     ['running', 'Claude · working'],
   ]) {
     const presentation = selectBoardExecutionPresentation({ owner: 'together', run: run({ status }) });
     assert.equal(presentation.statusLabel, statusLabel, status);
-    assert.equal(presentation.action, 'open', status);
+    assert.equal(presentation.action, 'none', status);
     assert.equal(presentation.showKickoff, false, status);
   }
 
   for (const status of ['plan_ready', 'ready_to_join', 'awaiting_review']) {
     const presentation = selectBoardExecutionPresentation({ owner: 'claude', run: run({ status }) });
-    assert.equal(presentation.statusLabel, 'Plan ready · Review', status);
+    assert.equal(presentation.statusLabel, 'Needs you · Review plan', status);
     assert.equal(presentation.action, 'open', status);
     assert.equal(presentation.reviewable, true, status);
     assert.equal(presentation.showKickoff, false, status);
   }
 
+  const missingSession = selectBoardExecutionPresentation({
+    owner: 'claude',
+    run: run({ status: 'plan_ready', claudeSessionId: undefined }),
+  });
+  assert.deepEqual(missingSession, {
+    statusLabel: 'Needs you · Review plan',
+    action: 'restart',
+    showKickoff: true,
+    reviewable: true,
+  });
+
   assert.deepEqual(
     selectBoardExecutionPresentation({ owner: 'claude', run: run(), taskDone: true }),
     { statusLabel: 'Done', action: 'none', showKickoff: false, reviewable: false },
   );
+});
+
+test('needs-setup chip is derived only for agent work skipped after the day starts', () => {
+  const base = { planState: 'active', owner: 'claude', hasRun: false };
+  assert.equal(shouldShowNeedsSetupToStart(base), true);
+  assert.equal(shouldShowNeedsSetupToStart({ ...base, owner: 'together' }), true);
+  assert.equal(shouldShowNeedsSetupToStart({ ...base, owner: 'me' }), false);
+  assert.equal(shouldShowNeedsSetupToStart({ ...base, hasRun: true }), false);
+  assert.equal(shouldShowNeedsSetupToStart({ ...base, planState: 'settled' }), false);
+  assert.equal(shouldShowNeedsSetupToStart({ ...base, taskDone: true }), false);
+  assert.equal(shouldShowNeedsSetupToStart({ ...base, startDayApplying: true }), false);
+});
+
+test('start-day receipt keeps setup details out and mentions only work already moving', () => {
+  assert.equal(startDayReceiptCopy(2, 0), 'Claude is starting on 2 items.');
+  assert.equal(startDayReceiptCopy(1, 2), 'Claude is starting on 1 item. 2 already in motion.');
+  assert.equal(startDayReceiptCopy(0, 0).includes('setup'), false);
+  assert.equal(startDayReceiptCopy(0, 0).includes('worker'), false);
+});
+
+test('resume command quotes both workspace and session for the copy fallback', () => {
+  assert.equal(
+    buildClaudeResumeCommand("/tmp/Alex's project", 'session id'),
+    `cd '/tmp/Alex'"'"'s project' && claude --resume 'session id'`,
+  );
+  assert.equal(executionWorkspaceLabel('/projects/acme-site'), 'Acme site');
 });
 
 test('brief-generation poll runs only on a visible, untouched arrival while writing', () => {

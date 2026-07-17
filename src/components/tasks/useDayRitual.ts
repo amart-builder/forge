@@ -45,6 +45,7 @@ import {
   executionReadinessMessage,
   shouldAttemptLateBriefAttach,
   shouldPollBriefGeneration,
+  startDayReceiptCopy,
 } from '@/lib/day-plan/presentation';
 
 // While the arrival is open with no brief and one is still being written, re-poll
@@ -97,6 +98,10 @@ function stableMutationId(action: string, plan: DayPlan): string {
 
 const ACTIVE_EXECUTION_STATES = new Set(['queued', 'starting', 'running', 'cancelling']);
 
+function emptyExecutionState(workerAvailable = true): DayPlanExecutionState {
+  return { items: [], runs: [], workspaces: [], workerAvailable };
+}
+
 function assertAutonomousSetup(
   mode: DayPlanExecutionMode,
   state: DayPlanExecutionState | undefined,
@@ -145,6 +150,7 @@ export default function useDayRitual({
   const [error, setError] = useState<string>();
   const [announcement, setAnnouncement] = useState('');
   const [startReceipt, setStartReceipt] = useState<string>();
+  const [startDayApplying, setStartDayApplying] = useState(false);
   const [executionState, setExecutionState] = useState<DayPlanExecutionState>();
   const [executionLoading, setExecutionLoading] = useState(false);
   const [executionBusyItemIds, setExecutionBusyItemIds] = useState<Set<string>>(new Set());
@@ -749,7 +755,7 @@ export default function useDayRitual({
         workspaceId: mode === 'autonomous' ? workspaceId : undefined,
         budgetUsd: mode === 'autonomous' ? budgetUsd : undefined,
       });
-      const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
+      const previous = executionStateRef.current ?? emptyExecutionState();
       acceptExecutionState({
         ...previous,
         items: [
@@ -820,7 +826,7 @@ export default function useDayRitual({
           budgetUsd: mode === 'autonomous' ? budgetUsd : undefined,
         });
         itemState = { itemId, config: configured.config, readiness: configured.readiness };
-        const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
+        const previous = executionStateRef.current ?? emptyExecutionState();
         acceptExecutionState({
           ...previous,
           items: [...previous.items.filter((item) => item.itemId !== itemId), itemState],
@@ -842,14 +848,15 @@ export default function useDayRitual({
       });
       acceptPlan(result.plan);
       if (result.run) {
-        const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
+        const previous = executionStateRef.current ?? emptyExecutionState(
+          result.worker?.workerAvailable ?? true,
+        );
         acceptExecutionState({
           ...previous,
+          workerAvailable: result.worker?.workerAvailable ?? previous.workerAvailable,
           runs: [...previous.runs.filter((run) => run.id !== result.run!.id), result.run],
         });
-        setAnnouncement(result.worker?.workerAvailable === false
-          ? 'Claude work is queued, but the Claude worker needs attention.'
-          : 'Claude work is queued.');
+        setAnnouncement('Claude work is queued.');
       } else {
         const message = executionReadinessMessage(
           result.readiness,
@@ -882,7 +889,7 @@ export default function useDayRitual({
     setExecutionError(undefined);
     try {
       const result = await cancelDayPlanExecutionRun(runId);
-      const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
+      const previous = executionStateRef.current ?? emptyExecutionState();
       acceptExecutionState({
         ...previous,
         runs: [...previous.runs.filter((candidate) => candidate.id !== runId), result.run],
@@ -909,51 +916,42 @@ export default function useDayRitual({
   const startDay = useCallback(async (): Promise<string | undefined> => {
     const current = planRef.current;
     if (!current) throw new Error('The day plan is not ready.');
-    const result = await enqueueMutation('start_day', {}, {
-      mutationId: stableMutationId('start-day', current),
-      announce: 'Your day is set.',
-    });
-    const executionRuns = result.executionRuns ?? [];
-    const handedOffCount = executionRuns.filter((run) => run.status === 'queued').length;
-    const needsSetupCount = result.kickoffSkips?.filter(
-      (skip) => skip.reason === 'not_ready',
-    ).length ?? 0;
-    const alreadyHandledCount = (result.kickoffSkips?.length ?? 0) - needsSetupCount;
-    const receiptParts = [
-      `${handedOffCount} ${handedOffCount === 1 ? 'item' : 'items'} handed to Claude.`,
-    ];
-    if (needsSetupCount > 0) {
-      receiptParts.push(
-        `${needsSetupCount} ${needsSetupCount === 1 ? 'item needs' : 'items need'} setup.`,
-      );
-    }
-    if (alreadyHandledCount > 0) {
-      receiptParts.push(
-        `${alreadyHandledCount} ${alreadyHandledCount === 1 ? 'item already has' : 'items already have'} Claude work in progress or ready.`,
-      );
-    }
-    if (handedOffCount > 0 && result.worker?.available === false) {
-      receiptParts.push('The Claude worker needs attention.');
-    }
-    const receipt = receiptParts.join(' ');
-    setAnnouncement(receipt);
-    setStartReceipt(receipt);
-    if (receiptTimerRef.current !== undefined) window.clearTimeout(receiptTimerRef.current);
-    receiptTimerRef.current = window.setTimeout(() => setStartReceipt(undefined), 7000);
-    if (result.executionRuns?.length) {
-      const previous = executionStateRef.current ?? { items: [], runs: [], workspaces: [] };
-      acceptExecutionState({
-        ...previous,
-        runs: [
-          ...previous.runs.filter(
-            (run) => !result.executionRuns!.some((queued) => queued.id === run.id),
-          ),
-          ...result.executionRuns,
-        ],
+    setStartDayApplying(true);
+    try {
+      const result = await enqueueMutation('start_day', {}, {
+        mutationId: stableMutationId('start-day', current),
+        announce: 'Your day is set.',
       });
+      const executionRuns = result.executionRuns ?? [];
+      const handedOffCount = executionRuns.filter((run) => run.status === 'queued').length;
+      const alreadyHandledCount = result.kickoffSkips?.filter(
+        (skip) => skip.reason === 'already_live' || skip.reason === 'result_available',
+      ).length ?? 0;
+      const receipt = startDayReceiptCopy(handedOffCount, alreadyHandledCount);
+      setAnnouncement(receipt);
+      setStartReceipt(receipt);
+      if (receiptTimerRef.current !== undefined) window.clearTimeout(receiptTimerRef.current);
+      receiptTimerRef.current = window.setTimeout(() => setStartReceipt(undefined), 7000);
+      if (executionRuns.length) {
+        const previous = executionStateRef.current ?? emptyExecutionState(
+          result.worker?.available ?? true,
+        );
+        acceptExecutionState({
+          ...previous,
+          workerAvailable: result.worker?.available ?? previous.workerAvailable,
+          runs: [
+            ...previous.runs.filter(
+              (run) => !executionRuns.some((queued) => queued.id === run.id),
+            ),
+            ...executionRuns,
+          ],
+        });
+      }
+      setView('none');
+      return result.plan.recommendedFirstTaskId;
+    } finally {
+      setStartDayApplying(false);
     }
-    setView('none');
-    return result.plan.recommendedFirstTaskId;
   }, [acceptExecutionState, enqueueMutation]);
 
   const openSettlement = useCallback(async () => {
@@ -1122,6 +1120,7 @@ export default function useDayRitual({
     error,
     announcement,
     startReceipt,
+    startDayApplying,
     executionState,
     executionLoading,
     executionBusyItemIds,

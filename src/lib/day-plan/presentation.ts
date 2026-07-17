@@ -4,6 +4,7 @@ import type {
   DayPlanExecutionRun,
   DayPlanExecutionRunStatus,
   DayPlanItem,
+  DayPlanState,
   DayPlanOwner as DayOwner,
   SettlementDisposition,
 } from './types';
@@ -22,9 +23,13 @@ const OWNER_LABELS: Record<DayOwner, string> = {
 
 const OWNER_DESCRIPTIONS: Record<DayOwner, string> = {
   me: 'This needs your judgment or direct action.',
-  claude: 'Planned for Claude. Execution has not started.',
-  together: 'You and Claude will work through this together. Execution has not started.',
+  claude: 'Claude will draft a plan for you to review.',
+  together: 'You and Claude will work through this together.',
 };
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled execution status: ${String(value)}`);
+}
 
 const NON_PROJECT_TAGS = new Set([
   'blocked',
@@ -74,14 +79,26 @@ export function helpfulProjectLabel(value: string | undefined): string | undefin
 }
 
 export function executionRunStatusLabel(status: DayPlanExecutionRunStatus): string {
-  if (status === 'queued') return 'Queued';
-  if (status === 'starting' || status === 'running') return 'Claude is working';
-  if (status === 'plan_ready') return 'Plan ready';
-  if (status === 'ready_to_join') return 'Ready to join';
-  if (status === 'awaiting_review') return 'Awaiting review';
-  if (status === 'cancelling') return 'Cancelling';
-  if (status === 'failed') return 'Failed';
-  return 'Interrupted';
+  switch (status) {
+    case 'queued':
+    case 'starting':
+      return 'Waiting to start';
+    case 'running':
+      return 'Claude · working';
+    case 'plan_ready':
+    case 'ready_to_join':
+    case 'awaiting_review':
+      return 'Needs you · Review plan';
+    case 'failed':
+      return "Didn't finish · Retry";
+    case 'interrupted':
+    case 'cancelled':
+      return 'Stopped · Restart';
+    case 'cancelling':
+      return 'Stopping…';
+    default:
+      return assertNever(status);
+  }
 }
 
 export function executionReadinessMessage(
@@ -96,7 +113,7 @@ export function executionReadinessMessage(
   ) {
     return owner === 'together'
       ? 'Choose Plan with Claude before kickoff.'
-      : 'Choose Plan with Claude or Autonomous before kickoff.';
+      : 'Choose Plan with Claude or Hands-off before kickoff.';
   }
   if (readiness.ready) return 'Ready to queue.';
   if (readiness.codes.includes('brief_changed')) {
@@ -106,10 +123,10 @@ export function executionReadinessMessage(
     return 'Together can only use Plan with Claude.';
   }
   if (readiness.codes.includes('execution_disabled')) {
-    return 'Autonomous work is not enabled on this Forge setup.';
+    return 'Hands-off work is not enabled on this Forge setup.';
   }
   if (readiness.codes.includes('definition_of_done_required')) {
-    return 'Add a definition of done before autonomous kickoff.';
+    return 'Add a definition of done before hands-off work can start.';
   }
   if (
     readiness.codes.includes('workspace_required') ||
@@ -117,19 +134,19 @@ export function executionReadinessMessage(
     readiness.codes.includes('workspace_missing') ||
     readiness.codes.includes('workspace_not_git')
   ) {
-    return 'This task is not linked to an approved project for autonomous work.';
+    return 'This task is not linked to an approved project for hands-off work.';
   }
   if (readiness.codes.includes('workspace_dirty')) {
-    return 'The approved project has uncommitted changes, so autonomous work is paused.';
+    return 'The approved project has uncommitted changes, so hands-off work is paused.';
   }
   if (readiness.codes.includes('project_not_opted_in')) {
-    return 'This project has not opted into autonomous work.';
+    return 'This project has not opted into hands-off work.';
   }
   if (
     readiness.codes.includes('budget_required') ||
     readiness.codes.includes('budget_exceeds_limit')
   ) {
-    return 'Autonomous budget setup is incomplete.';
+    return 'Hands-off spend limit setup is incomplete.';
   }
   return 'This brief needs more context before kickoff.';
 }
@@ -247,7 +264,7 @@ export function isRetryableRunStatus(status: DayPlanExecutionRunStatus): boolean
 
 export type BoardExecutionPresentation = {
   statusLabel?: string;
-  action: 'none' | 'open' | 'start_plan' | 'retry';
+  action: 'none' | 'open' | 'start_plan' | 'retry' | 'restart';
   showKickoff: boolean;
   reviewable: boolean;
 };
@@ -266,48 +283,87 @@ export function selectBoardExecutionPresentation(input: {
       ? { action: 'start_plan', showKickoff: true, reviewable: false }
       : { action: 'none', showKickoff: false, reviewable: false };
   }
-  if (isRetryableRunStatus(run.status)) {
-    return {
-      statusLabel: 'Failed · Retry',
-      action: 'retry',
-      showKickoff: true,
-      reviewable: false,
-    };
+  switch (run.status) {
+    case 'queued':
+    case 'starting':
+      return {
+        statusLabel: 'Waiting to start',
+        action: 'none',
+        showKickoff: false,
+        reviewable: false,
+      };
+    case 'running':
+      return {
+        statusLabel: 'Claude · working',
+        action: 'none',
+        showKickoff: false,
+        reviewable: false,
+      };
+    case 'plan_ready':
+    case 'ready_to_join':
+    case 'awaiting_review':
+      return {
+        statusLabel: 'Needs you · Review plan',
+        action: run.claudeSessionId ? 'open' : 'restart',
+        showKickoff: !run.claudeSessionId,
+        reviewable: true,
+      };
+    case 'failed':
+      return {
+        statusLabel: "Didn't finish · Retry",
+        action: 'retry',
+        showKickoff: true,
+        reviewable: false,
+      };
+    case 'interrupted':
+    case 'cancelled':
+      return {
+        statusLabel: 'Stopped · Restart',
+        action: 'restart',
+        showKickoff: true,
+        reviewable: false,
+      };
+    case 'cancelling':
+      return {
+        statusLabel: 'Stopping…',
+        action: 'none',
+        showKickoff: false,
+        reviewable: false,
+      };
+    default:
+      return assertNever(run.status);
   }
-  if (
-    run.status === 'plan_ready' ||
-    run.status === 'ready_to_join' ||
-    run.status === 'awaiting_review'
-  ) {
-    return {
-      statusLabel: 'Plan ready · Review',
-      action: run.claudeSessionId ? 'open' : 'none',
-      showKickoff: false,
-      reviewable: Boolean(run.claudeSessionId),
-    };
-  }
-  if (run.status === 'queued') {
-    return {
-      statusLabel: 'Claude · queued',
-      action: run.claudeSessionId ? 'open' : 'none',
-      showKickoff: false,
-      reviewable: false,
-    };
-  }
-  if (run.status === 'starting' || run.status === 'running') {
-    return {
-      statusLabel: 'Claude · working',
-      action: run.claudeSessionId ? 'open' : 'none',
-      showKickoff: false,
-      reviewable: false,
-    };
-  }
-  return {
-    statusLabel: 'Claude · cancelling',
-    action: 'none',
-    showKickoff: false,
-    reviewable: false,
-  };
+}
+
+export function shouldShowNeedsSetupToStart(input: {
+  planState: DayPlanState;
+  owner: DayOwner;
+  hasRun: boolean;
+  taskDone?: boolean;
+  startDayApplying?: boolean;
+}): boolean {
+  return !input.startDayApplying &&
+    input.planState === 'active' &&
+    (input.owner === 'claude' || input.owner === 'together') &&
+    !input.hasRun &&
+    !input.taskDone;
+}
+
+export function startDayReceiptCopy(startingCount: number, alreadyInMotionCount: number): string {
+  const starting = `Claude is starting on ${startingCount} ${startingCount === 1 ? 'item' : 'items'}.`;
+  return alreadyInMotionCount > 0
+    ? `${starting} ${alreadyInMotionCount} already in motion.`
+    : starting;
+}
+
+export function executionRestartLabel(status: DayPlanExecutionRunStatus): 'Retry' | 'Restart' {
+  return status === 'failed' ? 'Retry' : 'Restart';
+}
+
+export function executionWorkspaceLabel(id: string): string {
+  const segment = id.split(/[\\/]/).filter(Boolean).at(-1) ?? id;
+  const words = segment.replace(/[-_]+/g, ' ').trim().toLocaleLowerCase();
+  return words ? `${words[0].toLocaleUpperCase()}${words.slice(1)}` : id;
 }
 
 // Deep-link that asks the Claude desktop app to import and resume a CLI session.

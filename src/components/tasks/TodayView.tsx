@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDataChanged } from '@/lib/data/refresh-bus';
+import { retryBoardRequest } from '@/lib/data/board-refresh';
 import {
   createTask as createRestTask,
   deleteTask as deleteRestTask,
@@ -35,6 +36,7 @@ import {
   reorderDayPlanItems,
   selectBoardExecutionPresentation,
   selectCurrentExecutionRow,
+  shouldShowNeedsSetupToStart,
   shortArrivalSummary,
 } from '@/lib/day-plan/presentation';
 import type { DayPlanExecutionRun, DayPlanItem } from '@/lib/day-plan/types';
@@ -368,17 +370,23 @@ function RestTodayView({ onOpenAllWork }: TodayViewProps) {
     const requestRevision = mutationRevisionRef.current;
     const hadCredibleData = hasCredibleDataRef.current;
     if (!hadCredibleData) setLoading(true);
-    setError(undefined);
     try {
-      const [nextColumns, nextTasks] = await Promise.all([listTaskColumns(), listTasks()]);
-      const normalizedColumns = nextColumns.map(normalizeRestColumn);
-      const normalizedTasks = nextTasks.map(normalizeRestTask);
+      const [columnsResult, tasksResult] = await Promise.allSettled([
+        retryBoardRequest(listTaskColumns),
+        retryBoardRequest(listTasks),
+      ]);
+      const normalizedColumns = columnsResult.status === 'fulfilled'
+        ? columnsResult.value.map(normalizeRestColumn)
+        : columnsRef.current;
+      const normalizedTasks = tasksResult.status === 'fulfilled'
+        ? tasksResult.value.map(normalizeRestTask)
+        : tasksRef.current;
       const hasRequiredColumns = Boolean(
         findColumn(normalizedColumns, TODAY_ALIASES) &&
           findColumn(normalizedColumns, DONE_ALIASES),
       );
 
-      if (!hasRequiredColumns) {
+      if (columnsResult.status === 'fulfilled' && !hasRequiredColumns) {
         if (!hadCredibleData) {
           columnsRef.current = normalizedColumns;
           tasksRef.current = normalizedTasks;
@@ -393,35 +401,42 @@ function RestTodayView({ onOpenAllWork }: TodayViewProps) {
         return;
       }
 
-      hasCredibleDataRef.current = true;
-      columnsRef.current = normalizedColumns;
-      setColumns(normalizedColumns);
-      if (
+      if (columnsResult.status === 'fulfilled') {
+        columnsRef.current = normalizedColumns;
+        setColumns(normalizedColumns);
+      }
+      const canApplyTasks = tasksResult.status === 'fulfilled' &&
         canApplyArrivalRefresh({
           requestRevision,
           currentRevision: mutationRevisionRef.current,
           inFlightMutations: inFlightMutationsRef.current,
-        })
-      ) {
+        });
+      if (canApplyTasks) {
+        hasCredibleDataRef.current = hasRequiredColumns;
         setTasks(normalizedTasks);
-        persistSnapshot(normalizedColumns, normalizedTasks);
+        if (hasRequiredColumns) {
+          persistSnapshot(normalizedColumns, normalizedTasks);
+        } else {
+          tasksRef.current = normalizedTasks;
+          confirmedTasksRef.current = normalizedTasks;
+        }
         setCandidateEvidence({
           refreshedAt: new Date().toISOString(),
           freshness: 'current',
         });
-      } else {
+      } else if (tasksResult.status === 'fulfilled') {
         refreshAfterMutationsRef.current = true;
         if (inFlightMutationsRef.current === 0) {
           refreshAfterMutationsRef.current = false;
           window.setTimeout(() => void reloadRef.current(), 0);
         }
       }
-    } catch {
-      setError(
-        hadCredibleData
-          ? `Forge couldn't refresh. You're seeing ${savedCurrentDescription(lastSnapshotSavedAtRef.current)}.`
-          : "Forge couldn't load your tasks. Check that Forge is running, then try again.",
-      );
+
+      if (columnsResult.status === 'rejected' || tasksResult.status === 'rejected') {
+        setError("Some data didn't refresh — retrying…");
+      } else {
+        setError(undefined);
+      }
     } finally {
       setLoading(false);
     }
@@ -469,6 +484,12 @@ function RestTodayView({ onOpenAllWork }: TodayViewProps) {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (!error) return;
+    const timer = window.setInterval(() => void reloadRef.current(), 30_000);
+    return () => window.clearInterval(timer);
+  }, [error]);
 
   return (
     <TodayExperience
@@ -1631,6 +1652,7 @@ function TodayExperience({
       item: DayPlanItem;
       run?: DayPlanExecutionRun;
       presentation: ReturnType<typeof selectBoardExecutionPresentation>;
+      needsSetup: boolean;
     }>();
     const activePlan = dayRitual.plan;
     const executionState = dayRitual.executionState;
@@ -1644,21 +1666,62 @@ function TodayExperience({
       );
       const run = currentRun ?? latestRun;
       const task = tasks.find((candidate) => candidate._id === item.taskId);
+      const taskDone = task?.status === 'done' || task?.columnId === doneColumn?._id;
       map.set(item.taskId, {
         item,
         run,
         presentation: selectBoardExecutionPresentation({
           owner: item.owner,
           run,
-          taskDone: task?.status === 'done' || task?.columnId === doneColumn?._id,
+          taskDone,
+        }),
+        needsSetup: shouldShowNeedsSetupToStart({
+          planState: activePlan.state,
+          owner: item.owner,
+          hasRun: Boolean(run),
+          taskDone,
+          startDayApplying: dayRitual.startDayApplying,
         }),
       });
     }
     return map;
-  }, [dayRitual.plan, dayRitual.executionState, doneColumn?._id, tasks]);
+  }, [
+    dayRitual.plan,
+    dayRitual.executionState,
+    dayRitual.startDayApplying,
+    doneColumn?._id,
+    tasks,
+  ]);
   const focusedBoardExecution = focusedTask
     ? boardExecutionByTaskId.get(focusedTask._id)
     : undefined;
+  const kickoffBoardExecution = (
+    execution: NonNullable<typeof focusedBoardExecution>,
+  ) => {
+    const configured = dayRitual.executionState?.items.find(
+      (entry) => entry.itemId === execution.item.id,
+    )?.config;
+    const isRepeat = execution.presentation.action === 'retry' ||
+      execution.presentation.action === 'restart';
+    const mode = isRepeat
+      ? configured?.mode ?? execution.run?.mode ?? 'plan_review'
+      : 'plan_review';
+    void dayRitual.kickoffExecution(
+      execution.item.id,
+      mode,
+      defaultPlanningModel(execution.item),
+      mode === 'autonomous'
+        ? configured?.workspaceId ?? execution.run?.workspaceId
+        : undefined,
+      mode === 'autonomous'
+        ? configured?.budgetUsd ?? execution.run?.budgetUsd
+        : undefined,
+    );
+  };
+  const openExecutionSetup = (taskId: string) => {
+    focusTask(taskId, 'execution_setup');
+    window.requestAnimationFrame(() => setFocusExpanded(true));
+  };
   const planEvidenceRefreshedAt = dayRitual.plan?.items
     .flatMap((item) => item.sourceRefs.map((source) => source.refreshedAt))
     .map((value) => new Date(value).getTime())
@@ -1844,6 +1907,12 @@ function TodayExperience({
                 {dayRitual.startReceipt}
               </p>
             )}
+            {dayRitual.plan?.state === 'active' &&
+              dayRitual.executionState?.workerAvailable === false && (
+              <p role="status" className="current-worker-warning">
+                Claude&apos;s background runner looks offline — runs will wait until it&apos;s back.
+              </p>
+            )}
             {error && (
               <div role="alert" className="current-refresh-warning">
                 <span>{error}</span>
@@ -1944,53 +2013,72 @@ function TodayExperience({
                 (focusedBoardExecution.item.owner === 'claude' ||
                   focusedBoardExecution.item.owner === 'together') && (
                 <div className="current-hero-execution" aria-label={`Claude planning for ${focusedTask.title}`}>
-                  {focusedBoardExecution.presentation.action === 'open' &&
+                  {focusedBoardExecution.needsSetup ? (
+                    <button
+                      type="button"
+                      className="press-scale min-h-9 rounded-full border border-border/70 bg-white/55 px-4 text-xs font-semibold text-muted-foreground"
+                      onClick={() => setFocusExpanded(true)}
+                    >
+                      Needs setup to start
+                    </button>
+                  ) : focusedBoardExecution.presentation.action === 'open' &&
                     focusedBoardExecution.presentation.reviewable &&
                     focusedBoardExecution.run?.claudeSessionId ? (
                     <OpenInClaudeCode
                       sessionId={focusedBoardExecution.run.claudeSessionId}
                       title={focusedTask.title}
+                      label="Review plan"
+                      resumeCommand={focusedBoardExecution.run.resumeCommand}
                     />
+                  ) : focusedBoardExecution.presentation.reviewable &&
+                    focusedBoardExecution.presentation.action === 'restart' ? (
+                    <div className="flex max-w-sm flex-col items-center gap-2 text-center">
+                      <p className="text-[11px] leading-relaxed text-muted-foreground">
+                        Claude&apos;s session reference is missing — restart planning to reopen it.
+                      </p>
+                      <button
+                        type="button"
+                        disabled={dayRitual.executionBusyItemIds.has(focusedBoardExecution.item.id)}
+                        className="press-scale min-h-9 rounded-full border border-accent-blue/40 bg-white/55 px-4 text-xs font-semibold text-foreground disabled:opacity-40"
+                        onClick={() => kickoffBoardExecution(focusedBoardExecution)}
+                      >
+                        {dayRitual.executionBusyItemIds.has(focusedBoardExecution.item.id)
+                          ? 'Preparing…'
+                          : 'Restart'}
+                      </button>
+                    </div>
                   ) : focusedBoardExecution.run &&
                     ['queued', 'starting', 'running', 'cancelling']
                       .includes(focusedBoardExecution.run.status) ? (
                     <button
                       type="button"
                       disabled
-                      className="min-h-9 rounded-full border border-accent-blue/40 bg-white/55 px-4 text-xs font-semibold text-foreground opacity-60"
+                      className={`min-h-9 rounded-full border px-4 text-xs font-semibold opacity-60 ${
+                        focusedBoardExecution.run.status === 'running'
+                          ? 'border-accent-blue/40 bg-white/55 text-foreground'
+                          : 'border-border/70 bg-muted/60 text-muted-foreground'
+                      }`}
                     >
-                      Working…
+                      {focusedBoardExecution.run.status === 'running'
+                        ? 'Working…'
+                        : focusedBoardExecution.run.status === 'cancelling'
+                          ? 'Stopping…'
+                          : 'Waiting to start'}
                     </button>
                   ) : focusedBoardExecution.presentation.showKickoff ? (
                     <button
                       type="button"
                       disabled={dayRitual.executionBusyItemIds.has(focusedBoardExecution.item.id)}
                       className="press-scale min-h-9 rounded-full border border-accent-blue/40 bg-white/55 px-4 text-xs font-semibold text-foreground disabled:opacity-40"
-                      onClick={() => {
-                        const configured = dayRitual.executionState?.items.find(
-                          (entry) => entry.itemId === focusedBoardExecution.item.id,
-                        )?.config;
-                        const retryMode = focusedBoardExecution.presentation.action === 'retry'
-                          ? configured?.mode ?? focusedBoardExecution.run?.mode ?? 'plan_review'
-                          : 'plan_review';
-                        void dayRitual.kickoffExecution(
-                          focusedBoardExecution.item.id,
-                          retryMode,
-                          defaultPlanningModel(focusedBoardExecution.item),
-                          retryMode === 'autonomous'
-                            ? configured?.workspaceId ?? focusedBoardExecution.run?.workspaceId
-                            : undefined,
-                          retryMode === 'autonomous'
-                            ? configured?.budgetUsd ?? focusedBoardExecution.run?.budgetUsd
-                            : undefined,
-                        );
-                      }}
+                      onClick={() => kickoffBoardExecution(focusedBoardExecution)}
                     >
                       {dayRitual.executionBusyItemIds.has(focusedBoardExecution.item.id)
                         ? 'Preparing…'
                         : focusedBoardExecution.presentation.action === 'retry'
                           ? 'Retry'
-                          : 'Start planning in Claude Code'}
+                          : focusedBoardExecution.presentation.action === 'restart'
+                            ? 'Restart'
+                            : 'Ask Claude to plan'}
                     </button>
                   ) : null}
                 </div>
@@ -2076,31 +2164,41 @@ function TodayExperience({
                   <button type="button" className="current-node-title" onClick={() => focusTask(task._id, 'pointer')}>
                     <strong>{task.title}</strong>
                   </button>
-                  {execution?.run && execution.presentation.statusLabel && (
+                  {execution && (execution.needsSetup || (
+                    execution.run && execution.presentation.statusLabel
+                  )) && (
                     <div className="current-node-execution">
-                      {execution.presentation.reviewable && execution.run.claudeSessionId ? (
+                      {execution.needsSetup ? (
+                        <button
+                          type="button"
+                          className="current-execution-chip border border-border/70 bg-muted/60 text-muted-foreground"
+                          onClick={() => openExecutionSetup(task._id)}
+                        >
+                          Needs setup to start
+                        </button>
+                      ) : execution.run && execution.presentation.reviewable && execution.run.claudeSessionId ? (
                         <OpenInClaudeCode
                           sessionId={execution.run.claudeSessionId}
                           title={task.title}
                           label={execution.presentation.statusLabel}
+                          resumeCommand={execution.run.resumeCommand}
                           className="current-execution-chip"
                         />
-                      ) : ['queued', 'starting', 'running', 'cancelling']
-                          .includes(execution.run.status) ? (
+                      ) : execution.run && execution.presentation.showKickoff ? (
                         <button
                           type="button"
-                          disabled
-                          className="current-execution-chip opacity-60"
+                          className="current-execution-chip border border-border/70 bg-muted/60 text-muted-foreground"
+                          onClick={() => openExecutionSetup(task._id)}
                         >
-                          Working…
+                          {execution.presentation.statusLabel}
                         </button>
-                      ) : (
+                      ) : execution.run ? (
                         <RunStatusChip
                           status={execution.run.status}
                           label={execution.presentation.statusLabel}
                           className="current-execution-chip"
                         />
-                      )}
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -2134,7 +2232,15 @@ function TodayExperience({
             <div className="current-jarvis-nodes">
               {jarvisTasks.length > 0 ? jarvisTasks.slice(0, 3).map((task) => (
                 <article key={task._id} className={focusedTaskId === task._id ? 'is-focused' : ''}>
-                  <button type="button" onClick={() => isEmailDigest(task) ? setDetailTaskId(task._id) : focusTask(task._id, 'jarvis_current')}>
+                  <button type="button" onClick={() => {
+                    if (boardExecutionByTaskId.get(task._id)?.needsSetup) {
+                      openExecutionSetup(task._id);
+                    } else if (isEmailDigest(task)) {
+                      setDetailTaskId(task._id);
+                    } else {
+                      focusTask(task._id, 'jarvis_current');
+                    }
+                  }}>
                     <span>{isEmailDigest(task) ? 'Email brief ready' : 'Held for Jarvis'}</span>
                     <strong>{task.title}</strong>
                     {boardExecutionByTaskId.get(task._id)?.run && (
@@ -2143,6 +2249,11 @@ function TodayExperience({
                         label={boardExecutionByTaskId.get(task._id)!.presentation.statusLabel}
                         className="mt-1 self-start"
                       />
+                    )}
+                    {boardExecutionByTaskId.get(task._id)?.needsSetup && (
+                      <span className="mt-1 w-fit rounded-full border border-border/70 bg-muted/60 px-2 py-1 text-[0.6875rem] font-medium normal-case tracking-normal">
+                        Needs setup to start
+                      </span>
                     )}
                   </button>
                 </article>

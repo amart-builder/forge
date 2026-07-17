@@ -4,6 +4,7 @@ import { useId, useSyncExternalStore } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import {
+  ownerDescription,
   ownerLabel,
 } from '@/lib/day-plan/presentation';
 import type { MorningArrivalItem, MorningArrivalProps } from '../MorningArrival';
@@ -151,9 +152,7 @@ export default function ArrivalCard({
             onClose={onOwnerChipClose}
           />
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground" role="status">
-            {view.item.owner === 'me'
-              ? 'You own this.'
-              : 'Plan with Claude selected automatically.'}
+            {ownerDescription(view.item.owner)}
           </p>
         </div>
 

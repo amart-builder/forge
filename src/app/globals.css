@@ -890,6 +890,14 @@ input, textarea, select {
   backdrop-filter: blur(14px);
   animation: quiet-rise 180ms ease both;
 }
+.current-worker-warning {
+  width: fit-content;
+  max-width: min(480px, calc(100vw - 36px));
+  margin-top: 9px;
+  color: color-mix(in srgb, var(--foreground) 58%, transparent);
+  font-size: 10px;
+  line-height: 1.45;
+}
 .current-refresh-warning {
   display: flex;
   width: min(390px, calc(100vw - 36px));

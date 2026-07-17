@@ -418,6 +418,8 @@ export type DayPlanExecutionRun = {
   idempotencyKey: string;
   attempt: number;
   claudeSessionId: string;
+  // Loopback-only command projection for recovering when the Claude deep link is blocked.
+  resumeCommand?: string;
   briefHash: string;
   authorizationHash: string;
   promptSnapshot: {
