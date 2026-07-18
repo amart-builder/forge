@@ -32,6 +32,7 @@ const JSON_COLUMNS: Record<string, string[]> = {
 const BOOLEAN_COLUMNS: Record<string, string[]> = {
   task_columns: ["is_default"],
   tasks: ["remind_native", "remind_text"],
+  commitments: ["confirmed"],
 };
 
 /** Default Kanban columns, matching the canonical board in KanbanBoard.tsx. */
@@ -175,6 +176,29 @@ CREATE TABLE IF NOT EXISTS email_triage_runs (
   created_at TEXT,
   updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS commitments (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('follow_up','promise','waiting_on','open_decision','overnight_request','idea')),
+  title TEXT NOT NULL,
+  details TEXT,
+  counterparty TEXT,
+  contact_id TEXT,
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('brain_dump','manual','chat','detector','brief')),
+  source_quote TEXT,
+  source_ref TEXT,
+  due_at TEXT,
+  review_at TEXT,
+  confidence TEXT NOT NULL DEFAULT 'high' CHECK (confidence IN ('high','medium','low')),
+  confirmed INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done','dropped','expired')),
+  evidence TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS commitments_status_due_at_idx
+  ON commitments(status, due_at);
+CREATE INDEX IF NOT EXISTS commitments_status_review_at_idx
+  ON commitments(status, review_at);
 `;
 
 type ForgeGlobal = { __forgeDb?: Database.Database };
@@ -218,6 +242,14 @@ function migrate(conn: Database.Database): void {
     conn.exec("ALTER TABLE tasks ADD COLUMN remind_text INTEGER DEFAULT 0");
   if (!cols.has("notified_at"))
     conn.exec("ALTER TABLE tasks ADD COLUMN notified_at TEXT");
+
+  const commitmentCols = new Set(
+    (conn.prepare("PRAGMA table_info(commitments)").all() as { name: string }[]).map(
+      (c) => c.name,
+    ),
+  );
+  if (!commitmentCols.has("confirmed"))
+    conn.exec("ALTER TABLE commitments ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0");
 }
 
 function seedDefaults(conn: Database.Database): void {

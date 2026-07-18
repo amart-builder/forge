@@ -136,7 +136,7 @@ test('calendar fetches MCP SSE, derives DST-aware bounds, and formats visible ev
     'all day — Planning day\n9:00am-9:30am — Strategy call (with one@example.com, two@example.com, three@example.com) [Meet]\ntime unknown — Malformed time',
   );
   assert.equal(initializeResponse.bodyUsed, true);
-  assert.equal(calendar.priority, 6);
+  assert.equal(calendar.priority, 7);
   const toolArguments = requests[1].params.arguments.tools[0].arguments;
   assert.equal(toolArguments.timeMin, '2026-11-01T00:00:00-07:00');
   assert.equal(toolArguments.timeMax, '2026-11-02T00:00:00-08:00');
@@ -248,7 +248,7 @@ test('CRM handles Attio value variants and formats recent and quiet contacts', a
   );
   assert.equal(crm.content.includes('fallback@example.com — last touch 4d ago'), true);
   assert.equal(crm.content.includes('Alex Martin'), false);
-  assert.equal(crm.priority, 9);
+  assert.equal(crm.priority, 10);
 });
 
 test('.env.local strips unquoted inline comments but preserves hashes inside quotes', async (t) => {
@@ -324,7 +324,7 @@ test('memory decisions prefer decision-tagged Jarvis results and bound each line
   assert.equal(lines[1].length, 402);
   assert.equal(lines.filter((line) => line.includes('Keep Forge')).length, 1);
   assert.equal(memory.content.includes('Background context'), false);
-  assert.equal(memory.priority, 10);
+  assert.equal(memory.priority, 11);
 });
 
 test('memory decisions preserve file-path mode without calling Jarvis', async (t) => {
@@ -370,6 +370,89 @@ test('memory decisions stop after the first Jarvis search fails', async (t) => {
   assert.match(memory.note, /^error:Jarvis unavailable/);
 });
 
+test('computed commitments source exposes open loops, clarification, and factual content gaps', async (t) => {
+  const { dir, options } = fixture(t);
+  disableExternalSources(t, dir);
+  const engineDir = path.join(dir, 'supernova-engine');
+  const queueDir = path.join(engineDir, 'pipeline', 'queue');
+  const postedDir = path.join(engineDir, 'pipeline', 'posted');
+  mkdirSync(queueDir, { recursive: true });
+  mkdirSync(postedDir, { recursive: true });
+  writeFileSync(path.join(queueDir, 'scheduled.md'), [
+    '---',
+    'status: scheduled',
+    'scheduled_for: 2026-07-16T15:00:00Z',
+    '---',
+  ].join('\n'));
+  writeFileSync(path.join(queueDir, 'review.md'), [
+    '---',
+    'status: review',
+    '---',
+  ].join('\n'));
+  writeFileSync(path.join(postedDir, 'posted.md'), [
+    '---',
+    'status: scheduled',
+    'posted_at: 2026-07-16T18:00:00Z',
+    '---',
+  ].join('\n'));
+  setEnv(t, {
+    FORGE_SUPERNOVA_ENGINE_DIR: engineDir,
+    FORGE_CONTENT_QUOTA_POSTS: '3',
+  });
+  const commitments = [
+    {
+      id: 'follow-1',
+      kind: 'follow_up',
+      title: 'Send Maya the proposal',
+      counterparty: 'Maya',
+      source_kind: 'brain_dump',
+      source_quote: 'I promised Maya the proposal.',
+      due_at: '2026-07-16T17:00:00-07:00',
+      review_at: null,
+      confidence: 'low',
+      confirmed: false,
+      status: 'open',
+      created_at: '2026-07-01T12:00:00.000Z',
+      updated_at: '2026-07-01T12:00:00.000Z',
+    },
+    {
+      id: 'overnight-1',
+      kind: 'overnight_request',
+      title: 'Draft the FAQ overnight',
+      source_kind: 'brain_dump',
+      source_quote: 'Draft the FAQ overnight.',
+      due_at: null,
+      review_at: '2026-07-19T09:00:00-07:00',
+      confidence: 'high',
+      confirmed: false,
+      status: 'open',
+      created_at: NOW.toISOString(),
+      updated_at: NOW.toISOString(),
+    },
+  ];
+  const fetchImpl = async (url) => {
+    if (String(url).includes('/api/forge-rest/commitments')) {
+      return new Response(JSON.stringify(commitments), { status: 200 });
+    }
+    const forge = forgeRowsResponse(url);
+    if (forge) return forge;
+    throw new Error(`unexpected network call: ${url}`);
+  };
+  const collected = await collectMorningBriefSources({ ...options, fetchImpl });
+  const source = collected.sources.find((entry) => entry.id === 'commitments');
+  assert.equal(source.label, 'OPEN_COMMITMENTS_AND_GAPS');
+  assert.equal(source.required, false);
+  assert.equal(source.maxChars, 4500);
+  assert.equal(source.priority, 5);
+  assert.equal(source.freshness, 'current');
+  assert.match(source.content, /FOLLOW_UP:\n- Send Maya the proposal \| counterparty=Maya/);
+  assert.match(source.content, /due_or_review_by_tomorrow/);
+  assert.match(source.content, /stale_open_over_7d/);
+  assert.match(source.content, /NEEDS CLARIFICATION\n- Send Maya the proposal \| confidence=low \| confirmed=false/);
+  assert.match(source.content, /scheduled=1 \| posted=1 \| awaiting_approval=1 \| quota=3 \| gap=1/);
+  assert.match(source.content, /Draft the FAQ overnight \| recorded — overnight execution not yet live/);
+});
+
 test('real source ids overwrite coverage fallbacks, while failed fetches remain missing', async (t) => {
   const { dir, options } = fixture(t);
   const tokenPath = path.join(dir, 'jarvis-token');
@@ -402,12 +485,13 @@ test('real source ids overwrite coverage fallbacks, while failed fetches remain 
       ['operator_profile', 2],
       ['leadup', 3],
       ['sprint_memo', 4],
-      ['task_snapshot', 5],
-      ['calendar', 6],
-      ['settlement_summary', 7],
-      ['email_brief', 8],
-      ['crm_last_touch', 9],
-      ['memory_decisions', 10],
+      ['commitments', 5],
+      ['task_snapshot', 6],
+      ['calendar', 7],
+      ['settlement_summary', 8],
+      ['email_brief', 9],
+      ['crm_last_touch', 10],
+      ['memory_decisions', 11],
     ],
   );
   assert.deepEqual(

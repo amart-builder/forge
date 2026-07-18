@@ -28,6 +28,11 @@ else
   BUDDY_DEEPLINKS=1
 fi
 BUDDY_APP_URL="${FORGE_BUDDY_APP_URL:-http://127.0.0.1:3200}"
+if [ "$MINI" = "1" ]; then
+  SUPERNOVA_ENGINE_DIR="/Users/alexandermartin/Desktop/Atlas/Projects/supernova-engine"
+else
+  SUPERNOVA_ENGINE_DIR="/Users/alexanderjmartin/Atlas/Projects/supernova-engine"
+fi
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="$HOME/Library/Logs"
@@ -168,6 +173,10 @@ STIGNORE_BLOCK
     <string>$ATLAS_ROOT/brain/brief-leadup.md</string>
     <key>FORGE_BRIEF_SPRINT_MEMO_PATH</key>
     <string>$ATLAS_ROOT/brain/path-to-30k-2026-07.md</string>
+    <key>FORGE_SUPERNOVA_ENGINE_DIR</key>
+    <string>$SUPERNOVA_ENGINE_DIR</string>
+    <key>FORGE_CONTENT_QUOTA_POSTS</key>
+    <string>2</string>
   </dict>
 </dict>
 </plist>
@@ -300,6 +309,10 @@ cat > "$SERVER_PLIST" <<EOF
     <string>$BUDDY_APP_URL</string>
     <key>FORGE_CLAUDE_WORKER_AVAILABLE</key>
     <string>1</string>
+    <key>FORGE_SUPERNOVA_ENGINE_DIR</key>
+    <string>$SUPERNOVA_ENGINE_DIR</string>
+    <key>FORGE_CONTENT_QUOTA_POSTS</key>
+    <string>2</string>
   </dict>
 </dict>
 </plist>
@@ -348,6 +361,10 @@ cat > "$WORKER_PLIST" <<EOF
     <string>$BUDDY_DEEPLINKS</string>
     <key>FORGE_BRIEF_WEB_BASE</key>
     <string>http://127.0.0.1:3200</string>
+    <key>FORGE_SUPERNOVA_ENGINE_DIR</key>
+    <string>$SUPERNOVA_ENGINE_DIR</string>
+    <key>FORGE_CONTENT_QUOTA_POSTS</key>
+    <string>2</string>
   </dict>
 </dict>
 </plist>

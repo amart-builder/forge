@@ -26,6 +26,7 @@ import type {
   DayPlanTaskMutation,
   DayPlanTaskMutationResult,
   DayPlanReadModel,
+  DayDump,
   DaySnapshot,
   DaySnapshotBody,
   DayPlanUnreadyItem,
@@ -189,6 +190,19 @@ type MorningBriefRow = {
   effort: string;
   budget_usd: number;
   brief_json: string | null;
+  error_code: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+type DayDumpRow = {
+  id: string;
+  target_local_date: string;
+  raw_text: string;
+  status: DayDump["status"];
+  result_json: string | null;
   error_code: string | null;
   created_at: string;
   updated_at: string;
@@ -407,6 +421,22 @@ CREATE INDEX IF NOT EXISTS day_plan_briefs_queue
   ON day_plan_briefs(status, created_at, id);
 CREATE INDEX IF NOT EXISTS day_plan_briefs_by_date
   ON day_plan_briefs(target_local_date, finished_at DESC, created_at DESC);
+CREATE TABLE IF NOT EXISTS day_dumps (
+  id TEXT PRIMARY KEY,
+  target_local_date TEXT NOT NULL,
+  raw_text TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed')),
+  result_json TEXT,
+  error_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS day_dumps_queue
+  ON day_dumps(status, created_at, id);
+CREATE INDEX IF NOT EXISTS day_dumps_by_date
+  ON day_dumps(target_local_date, created_at, id);
 CREATE TABLE IF NOT EXISTS day_plan_brief_action_states (
   brief_id TEXT NOT NULL,
   action_index INTEGER NOT NULL CHECK (action_index >= 0),
@@ -556,6 +586,21 @@ function morningBriefFromRow(row: MorningBriefRow): MorningBriefArtifact {
     budgetUsd: row.budget_usd,
     writer: morningBriefWriterFromJson(row.brief_json ?? undefined),
     briefJson: row.brief_json ?? undefined,
+    errorCode: row.error_code ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    startedAt: row.started_at ?? undefined,
+    finishedAt: row.finished_at ?? undefined,
+  };
+}
+
+function dayDumpFromRow(row: DayDumpRow): DayDump {
+  return {
+    id: row.id,
+    targetLocalDate: row.target_local_date,
+    rawText: row.raw_text,
+    status: row.status,
+    resultJson: row.result_json ?? undefined,
     errorCode: row.error_code ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -840,6 +885,11 @@ export function createDayPlanStore(options: {
 
   function getPlan(id: string): DayPlan | undefined {
     const row = selectPlan.get(id) as DayPlanRow | undefined;
+    return row ? planFromRow(row) : undefined;
+  }
+
+  function getPlanForDate(localDate: string): DayPlan | undefined {
+    const row = selectDatePlan.get(localDate) as DayPlanRow | undefined;
     return row ? planFromRow(row) : undefined;
   }
 
@@ -1662,6 +1712,86 @@ export function createDayPlanStore(options: {
         maximumBudgetUsd: workspace.maximumBudgetUsd,
       }))
       .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  // -------------------------------------------------------------------------
+  // Evening dump queue. Settlement is authoritative; parsing is asynchronous
+  // and fail-open, so rows are append-only receipts rather than plan state.
+  // -------------------------------------------------------------------------
+
+  function getDayDump(id: string): DayDump | undefined {
+    const row = db.prepare("SELECT * FROM day_dumps WHERE id = ?").get(id) as
+      | DayDumpRow
+      | undefined;
+    return row ? dayDumpFromRow(row) : undefined;
+  }
+
+  function listDayDumps(targetLocalDate?: string): DayDump[] {
+    const rows = targetLocalDate
+      ? db.prepare(
+          "SELECT * FROM day_dumps WHERE target_local_date = ? ORDER BY created_at, id",
+        ).all(targetLocalDate)
+      : db.prepare("SELECT * FROM day_dumps ORDER BY created_at, id").all();
+    return (rows as DayDumpRow[]).map(dayDumpFromRow);
+  }
+
+  function claimNextDayDump(): DayDump | undefined {
+    return immediate(() => {
+      const row = db.prepare(
+        `SELECT * FROM day_dumps
+         WHERE status = 'queued'
+           AND NOT EXISTS (SELECT 1 FROM day_dumps active WHERE active.status = 'running')
+         ORDER BY created_at, id LIMIT 1`,
+      ).get() as DayDumpRow | undefined;
+      if (!row) return undefined;
+      const startedAt = now().toISOString();
+      db.prepare(
+        `UPDATE day_dumps
+         SET status = 'running', started_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'queued'`,
+      ).run(startedAt, startedAt, row.id);
+      return getDayDump(row.id);
+    });
+  }
+
+  function completeDayDump(id: string, resultJson: string): DayDump | undefined {
+    return immediate(() => {
+      const finishedAt = now().toISOString();
+      const changed = db.prepare(
+        `UPDATE day_dumps
+         SET status = 'succeeded', result_json = ?, error_code = NULL,
+             finished_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'running'`,
+      ).run(resultJson, finishedAt, finishedAt, id).changes;
+      return changed > 0 ? getDayDump(id) : undefined;
+    });
+  }
+
+  function failDayDump(id: string, errorCode: string, resultJson?: string): void {
+    immediate(() => {
+      const finishedAt = now().toISOString();
+      db.prepare(
+        `UPDATE day_dumps
+         SET status = 'failed', result_json = COALESCE(?, result_json), error_code = ?,
+             finished_at = ?, updated_at = ?
+         WHERE id = ? AND status IN ('queued','running')`,
+      ).run(
+        resultJson ?? null,
+        errorCode.replace(/\s+/g, " ").slice(0, 200),
+        finishedAt,
+        finishedAt,
+        id,
+      );
+    });
+  }
+
+  function interruptStaleDayDumps(staleBefore: string): number {
+    const finishedAt = now().toISOString();
+    return db.prepare(
+      `UPDATE day_dumps
+       SET status = 'failed', error_code = 'worker_interrupted', finished_at = ?, updated_at = ?
+       WHERE status = 'running' AND started_at < ?`,
+    ).run(finishedAt, finishedAt, staleBefore).changes;
   }
 
   // -------------------------------------------------------------------------
@@ -2932,6 +3062,23 @@ export function createDayPlanStore(options: {
             }
           }
           plan.nextDayNote = cleanOptional(input.nextDayNote);
+          if (plan.nextDayNote) {
+            try {
+              db.prepare(
+                `INSERT INTO day_dumps
+                  (id, target_local_date, raw_text, status, created_at, updated_at)
+                 VALUES (?, ?, ?, 'queued', ?, ?)`,
+              ).run(
+                randomUUID(),
+                plan.localDate,
+                input.nextDayNote,
+                changedAt,
+                changedAt,
+              );
+            } catch (error) {
+              console.error("Day dump enqueue failed; settlement will continue.", error);
+            }
+          }
           plan.state = "settled";
           plan.settlementState = "settled";
           plan.settledAt = changedAt;
@@ -3087,11 +3234,18 @@ export function createDayPlanStore(options: {
     acknowledgeTaskMutation,
     getReadModel,
     getPlan,
+    getPlanForDate,
     getSnapshot,
     listEvents,
     listPendingReconciliations,
     listPendingTaskMutations,
     listRecentSnapshots,
+    getDayDump,
+    listDayDumps,
+    claimNextDayDump,
+    completeDayDump,
+    failDayDump,
+    interruptStaleDayDumps,
     getMorningBrief,
     listMorningBriefs,
     latestEligibleMorningBrief,

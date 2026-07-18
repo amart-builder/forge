@@ -637,6 +637,7 @@ function TodayExperience({
   const [suggestions, setSuggestions] = useState<WorkSuggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(true);
   const [surfaceError, setSurfaceError] = useState<string>();
+  const [settlementNote, setSettlementNote] = useState('');
   const [now, setNow] = useState(() => new Date());
   const [ambientPaused, setAmbientPaused] = useState(() => {
     if (typeof document === 'undefined') return false;
@@ -1074,7 +1075,8 @@ function TodayExperience({
       .map((item) => item.taskId);
     setSurfaceError(undefined);
     try {
-      const result = await dayRitual.commitSettlement(completedHumanTaskIds);
+      const result = await dayRitual.commitSettlement(completedHumanTaskIds, settlementNote);
+      setSettlementNote('');
       const reconciliations = result.pendingReconciliations ?? [];
       await reconcileDayPlanActions(reconciliations);
       const excludedTaskIds = new Set(
@@ -1096,7 +1098,7 @@ function TodayExperience({
           : "Forge couldn't finish reconciling the closed day.",
       );
     }
-  }, [candidateEvidence?.freshness, dayRitual, doneColumn?._id, notStartedColumn, reconcileDayPlanActions, tasks]);
+  }, [candidateEvidence?.freshness, dayRitual, doneColumn?._id, notStartedColumn, reconcileDayPlanActions, settlementNote, tasks]);
 
   useEffect(() => {
     if (
@@ -1902,9 +1904,9 @@ function TodayExperience({
             {visibleSurfaceError && (
               <p role="alert" className="current-surface-error">{visibleSurfaceError}</p>
             )}
-            {dayRitual.startReceipt && (
+            {(dayRitual.startReceipt || dayRitual.settlementReceipt) && (
               <p role="status" className="current-start-receipt">
-                {dayRitual.startReceipt}
+                {dayRitual.startReceipt ?? dayRitual.settlementReceipt}
               </p>
             )}
             {dayRitual.plan?.state === 'active' &&
@@ -2484,6 +2486,7 @@ function TodayExperience({
                 savingItemIds={dayRitual.savingItemIds}
                 closing={dayRitual.busy}
                 error={dayRitual.error}
+                note={settlementNote}
                 canDefer={Boolean(notStartedColumn)}
                 titleId={RITUAL_TITLE_IDS.settlement}
                 descriptionId={RITUAL_DESCRIPTION_IDS.settlement}
@@ -2495,6 +2498,7 @@ function TodayExperience({
                   return dayRitual.decideSettlement(itemId, disposition);
                 }}
                 onCancel={dayRitual.cancelSettlement}
+                onNoteChange={setSettlementNote}
                 onCloseDay={closeSettledDay}
               />
             ) : (

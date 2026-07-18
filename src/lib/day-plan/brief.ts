@@ -8,9 +8,9 @@ import type {
 
 // Version stamps participate in the composite input hash so a prompt or contract
 // change regenerates the brief even when the underlying sources are unchanged.
-// v5: the owner-authored chief-of-staff mandate, richer operator context, and
-// the Codex-first writer contract.
-export const MORNING_BRIEF_PROMPT_VERSION = 5;
+// v6: computed open commitments, clarification needs, and deterministic gap
+// detectors are available to the chief-of-staff writer.
+export const MORNING_BRIEF_PROMPT_VERSION = 6;
 export const MORNING_BRIEF_SCHEMA_VERSION = 2;
 
 export type MorningBriefStatus = "queued" | "running" | "succeeded" | "failed";

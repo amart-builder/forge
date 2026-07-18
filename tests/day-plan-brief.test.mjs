@@ -220,10 +220,10 @@ function collectedSources({ goals = 'North star: 30k a month.' } = {}) {
       { id: 'operator_profile', label: 'OPERATOR_PROFILE', required: false, maxChars: 6000, priority: 2, content: 'Alex runs three operating lanes.', asOf: CLOCK },
       { id: 'leadup', label: 'LEADUP', required: false, maxChars: 9000, priority: 3, content: 'Client delivery led the week.', asOf: CLOCK },
       { id: 'sprint_memo', label: 'SPRINT_MEMO', required: true, maxChars: 12000, priority: 4, content: 'Four setups this month.', asOf: CLOCK },
-      { id: 'task_snapshot', label: 'OPEN_TASKS', required: true, maxChars: 14000, priority: 5, content: '- [today] id=task-a "Deliver the MHA weekly block"', asOf: CLOCK },
-      { id: 'settlement_summary', label: 'RECENT_SETTLEMENTS', required: true, maxChars: 6000, priority: 7, content: 'No settlement snapshots exist yet.' },
-      { id: 'email_brief', label: 'EMAIL_BRIEF', required: false, maxChars: 3000, priority: 8 },
-      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 4000, priority: 10, note: 'not_configured' },
+      { id: 'task_snapshot', label: 'OPEN_TASKS', required: true, maxChars: 14000, priority: 6, content: '- [today] id=task-a "Deliver the MHA weekly block"', asOf: CLOCK },
+      { id: 'settlement_summary', label: 'RECENT_SETTLEMENTS', required: true, maxChars: 6000, priority: 8, content: 'No settlement snapshots exist yet.' },
+      { id: 'email_brief', label: 'EMAIL_BRIEF', required: false, maxChars: 3000, priority: 9 },
+      { id: 'memory_decisions', label: 'RECENT_DECISIONS', required: false, maxChars: 4000, priority: 11, note: 'not_configured' },
     ],
     knownTaskIds: new Set(['task-a', 'task-b', 'task-c']),
   };
@@ -978,7 +978,7 @@ test('ensure keeps at most three items from a larger deterministic pool', (t) =>
 // ---------------------------------------------------------------------------
 
 test('the brief command is the exact bounded toolless invocation', () => {
-  assert.equal(MORNING_BRIEF_PROMPT_VERSION, 5);
+  assert.equal(MORNING_BRIEF_PROMPT_VERSION, 6);
   const repoCwd = process.cwd();
   const ownerPrompt = readFileSync(path.join(repoCwd, 'prompts', 'chief-of-staff.md'), 'utf8').trimEnd();
   let command;

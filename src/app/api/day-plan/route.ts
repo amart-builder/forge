@@ -146,6 +146,13 @@ function stringValue(
   return trimmed;
 }
 
+function nextDayNoteValue(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") throw new Error("nextDayNote must be text.");
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, 8000) : undefined;
+}
+
 function isoValue(
   value: unknown,
   name: string,
@@ -475,7 +482,7 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
         "completedHumanTaskIds",
         { maxItems: 3, maxLength: 200 },
       ),
-      nextDayNote: stringValue(body.nextDayNote, "nextDayNote", { max: 1000 }),
+      nextDayNote: nextDayNoteValue(body.nextDayNote),
     },
   };
 }

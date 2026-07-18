@@ -163,6 +163,21 @@ export type DaySnapshot = {
   createdAt: string;
 };
 
+export type DayDumpStatus = "queued" | "running" | "succeeded" | "failed";
+
+export type DayDump = {
+  id: string;
+  targetLocalDate: string;
+  rawText: string;
+  status: DayDumpStatus;
+  resultJson?: string;
+  errorCode?: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+};
+
 export type DayPlanReconciliation = {
   id: string;
   dayPlanId: string;

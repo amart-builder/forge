@@ -4,17 +4,20 @@ import path from "node:path";
 import { createDayPlanStore } from "../src/lib/day-plan/store";
 import {
   drainClaudeQueues,
+  drainDayDumpQueue,
   enqueueDueMorningBrief,
+  runOneDayDump,
   runOneExecution,
   runOneMorningBrief,
   watchClaudeQueues,
+  watchDayDumpQueue,
   watchMorningBriefQueue,
 } from "../src/lib/claude-execution/worker";
 
 async function main(): Promise<number> {
   const laneIndex = process.argv.indexOf("--lane");
   const lane = laneIndex >= 0 ? process.argv[laneIndex + 1] : undefined;
-  if (!["execution", "all", "watch", "brief"].includes(lane ?? "")) return 2;
+  if (!["execution", "all", "watch", "brief", "dump"].includes(lane ?? "")) return 2;
   if (process.env.FORGE_CLAUDE_WORKER_ENABLED !== "1") return 3;
   const repoDir = process.cwd();
   const claudePath = process.env.FORGE_CLAUDE_BIN ?? path.join(homedir(), ".local", "bin", "claude");
@@ -57,7 +60,15 @@ async function main(): Promise<number> {
       heartbeat = setInterval(writeHeartbeat, 2000);
     }
     if (lane === "execution") await runOneExecution(options);
-    else if (lane === "all") await drainClaudeQueues(options);
+    else if (lane === "all") {
+      await drainClaudeQueues(options);
+      await drainDayDumpQueue(options);
+    }
+    else if (lane === "dump") {
+      while (await runOneDayDump(options)) {
+        if (shutdown.signal.aborted) break;
+      }
+    }
     else if (lane === "brief") {
       // Scheduled one-shot (the ~7:30 local run): enqueue today's brief when
       // none exists, then drain the brief lane completely. Enqueueing is
@@ -77,6 +88,7 @@ async function main(): Promise<number> {
       await Promise.all([
         watchClaudeQueues(options),
         watchMorningBriefQueue(options),
+        watchDayDumpQueue(options),
       ]);
     }
     return 0;

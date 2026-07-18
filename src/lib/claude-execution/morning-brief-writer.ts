@@ -36,20 +36,21 @@ export function resolveCodexBinary(options: {
   return undefined;
 }
 
-export type CodexMorningBriefAttempt = {
+export type CodexStructuredAttempt = {
   command: ClaudeCommand;
   outputPath: string;
   cleanup: () => void;
 };
 
-export function createCodexMorningBriefAttempt(input: {
+export function createCodexStructuredAttempt(input: {
   prompt: string;
   executable?: string;
   env?: NodeJS.ProcessEnv;
-}): CodexMorningBriefAttempt | undefined {
+  tempPrefix?: string;
+}): CodexStructuredAttempt | undefined {
   const executable = input.executable ?? resolveCodexBinary({ env: input.env });
   if (!executable) return undefined;
-  const cwd = mkdtempSync(path.join(tmpdir(), "forge-morning-brief-"));
+  const cwd = mkdtempSync(path.join(tmpdir(), input.tempPrefix ?? "forge-morning-brief-"));
   chmodSync(cwd, 0o700);
   const outputPath = path.join(cwd, "last-message.json");
   return {
@@ -76,9 +77,15 @@ export function createCodexMorningBriefAttempt(input: {
   };
 }
 
-export function readCodexMorningBriefOutput(attempt: CodexMorningBriefAttempt): string {
+export function readCodexStructuredOutput(attempt: CodexStructuredAttempt): string {
   if (statSync(attempt.outputPath).size > 1024 * 1024) {
     throw new Error("brief_output_too_large");
   }
   return readFileSync(attempt.outputPath, "utf8");
 }
+
+// Backward-compatible names keep the established Morning Brief call sites and
+// tests readable while the dump lane shares the same hardened runner.
+export type CodexMorningBriefAttempt = CodexStructuredAttempt;
+export const createCodexMorningBriefAttempt = createCodexStructuredAttempt;
+export const readCodexMorningBriefOutput = readCodexStructuredOutput;

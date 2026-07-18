@@ -1,9 +1,11 @@
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import type { Commitment, CommitmentKind } from "../data/types";
 import type { DayPlanStore } from "./store";
 import { localDateInTimezone, type BriefSourceInput } from "./brief";
 import { buildSettlementSummary, readSettlementRelay } from "./brief-relay";
+import { contentQuotaGap, followUpsDue, staleOpenItems } from "./gap-detectors";
 
 const EXTERNAL_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_BRIEF_TIMEZONE = "America/Los_Angeles";
@@ -185,14 +187,15 @@ function compactLine(value: string | undefined, maximum: number): string {
   return (value ?? "").replace(/\s+/g, " ").trim().slice(0, maximum);
 }
 
-async function fetchRows(
+export async function fetchRows(
   fetchImpl: typeof fetch,
   baseUrl: string,
   table: string,
   timeoutMs: number,
+  query = "select=*&order=position.asc",
 ): Promise<unknown[]> {
   const response = await fetchImpl(
-    `${baseUrl}/api/forge-rest/${table}?select=*&order=position.asc`,
+    `${baseUrl}/api/forge-rest/${table}?${query}`,
     { signal: AbortSignal.timeout(timeoutMs), cache: "no-store" },
   );
   if (!response.ok) throw new Error(`forge-rest ${table} ${response.status}`);
@@ -213,6 +216,158 @@ function errorNote(error: unknown, fallback: string): string {
   const reason = error instanceof Error ? error.message : fallback;
   const bounded = reason.replace(/\s+/g, " ").trim().slice(0, 160);
   return `error:${bounded || fallback}`;
+}
+
+const COMMITMENT_KIND_ORDER: CommitmentKind[] = [
+  "follow_up",
+  "promise",
+  "waiting_on",
+  "open_decision",
+  "overnight_request",
+  "idea",
+];
+
+function commitmentRow(value: unknown): Commitment | undefined {
+  const row = asRecord(value);
+  if (
+    !row ||
+    typeof row.id !== "string" ||
+    typeof row.kind !== "string" ||
+    !COMMITMENT_KIND_ORDER.includes(row.kind as CommitmentKind) ||
+    typeof row.title !== "string" ||
+    row.status !== "open"
+  ) {
+    return undefined;
+  }
+  const optionalString = (candidate: unknown) => typeof candidate === "string" ? candidate : null;
+  const confidence = row.confidence === "low" || row.confidence === "medium"
+    ? row.confidence
+    : "high";
+  return {
+    id: row.id,
+    kind: row.kind as CommitmentKind,
+    title: row.title,
+    details: optionalString(row.details),
+    counterparty: optionalString(row.counterparty),
+    contact_id: optionalString(row.contact_id),
+    source_kind: ["brain_dump", "manual", "chat", "detector", "brief"].includes(String(row.source_kind))
+      ? row.source_kind as Commitment["source_kind"]
+      : "manual",
+    source_quote: optionalString(row.source_quote),
+    source_ref: optionalString(row.source_ref),
+    due_at: optionalString(row.due_at),
+    review_at: optionalString(row.review_at),
+    confidence,
+    confirmed: row.confirmed === true || row.confirmed === 1,
+    status: "open",
+    evidence: optionalString(row.evidence),
+    created_at: optionalString(row.created_at) ?? "",
+    updated_at: optionalString(row.updated_at) ?? "",
+  };
+}
+
+function commitmentDate(commitment: Commitment): number {
+  const values = [commitment.due_at, commitment.review_at]
+    .map((value) => value ? Date.parse(value) : Number.NaN)
+    .filter(Number.isFinite);
+  return values.length > 0 ? Math.min(...values) : Number.POSITIVE_INFINITY;
+}
+
+function commitmentLine(
+  commitment: Commitment,
+  dueSoonIds: ReadonlySet<string>,
+  staleIds: ReadonlySet<string>,
+): string {
+  const parts = [`- ${compactLine(commitment.title, 120)}`];
+  if (commitment.counterparty) parts.push(`counterparty=${compactLine(commitment.counterparty, 80)}`);
+  if (commitment.due_at) parts.push(`due=${commitment.due_at}`);
+  if (commitment.review_at) parts.push(`review=${commitment.review_at}`);
+  if (dueSoonIds.has(commitment.id)) parts.push("due_or_review_by_tomorrow");
+  if (staleIds.has(commitment.id)) parts.push("stale_open_over_7d");
+  if (commitment.source_quote) parts.push(`source="${compactLine(commitment.source_quote, 180)}"`);
+  return parts.join(" | ");
+}
+
+async function commitmentsSource(input: {
+  fetchImpl: typeof fetch;
+  baseUrl: string;
+  timeoutMs: number;
+  targetLocalDate: string;
+  now: Date;
+}): Promise<BriefSourceInput> {
+  const base: BriefSourceInput = {
+    id: "commitments",
+    label: "OPEN_COMMITMENTS_AND_GAPS",
+    required: false,
+    maxChars: 4500,
+    priority: 5,
+    freshness: "current",
+  };
+  try {
+    const rows = await fetchRows(
+      input.fetchImpl,
+      input.baseUrl,
+      "commitments",
+      input.timeoutMs,
+      "select=*&status=eq.open&order=due_at.asc.nullslast",
+    );
+    const commitments = rows
+      .map(commitmentRow)
+      .filter((row): row is Commitment => Boolean(row))
+      .sort((left, right) => commitmentDate(left) - commitmentDate(right) || left.id.localeCompare(right.id));
+    const dueSoonIds = new Set(followUpsDue(commitments, input.targetLocalDate).map((item) => item.id));
+    const staleIds = new Set(staleOpenItems(commitments, input.now).map((item) => item.id));
+    const groups = COMMITMENT_KIND_ORDER.flatMap((kind) => {
+      const group = commitments.filter((commitment) => commitment.kind === kind);
+      return group.length > 0
+        ? [`${kind.toUpperCase()}:`, ...group.map((item) => commitmentLine(item, dueSoonIds, staleIds))]
+        : [];
+    });
+    const clarification = commitments.filter(
+      (commitment) => commitment.confidence === "low" && !commitment.confirmed,
+    );
+    const quotaValue = Number(process.env.FORGE_CONTENT_QUOTA_POSTS);
+    const quota = Number.isFinite(quotaValue) && quotaValue >= 0 ? quotaValue : 2;
+    const quotaGap = contentQuotaGap({
+      engineDir:
+        process.env.FORGE_SUPERNOVA_ENGINE_DIR ??
+        "/Users/alexanderjmartin/Atlas/Projects/supernova-engine",
+      targetLocalDate: input.targetLocalDate,
+      quota,
+    });
+    const overnight = commitments.filter((commitment) => commitment.kind === "overnight_request");
+    const content = [
+      "OPEN COMMITMENTS",
+      ...(groups.length > 0 ? groups : ["None."]),
+      "",
+      "NEEDS CLARIFICATION",
+      ...(clarification.length > 0
+        ? clarification.map((item) => `- ${compactLine(item.title, 120)} | confidence=low | confirmed=false`)
+        : ["None."]),
+      "",
+      "CONTENT QUOTA",
+      quotaGap
+        ? `scheduled=${quotaGap.scheduled} | posted=${quotaGap.posted} | awaiting_approval=${quotaGap.awaitingApproval} | quota=${quotaGap.quota} | gap=${quotaGap.gap}`
+        : "Unavailable: Supernova pipeline directories could not be read.",
+      "",
+      "OVERNIGHT REQUESTS",
+      ...(overnight.length > 0
+        ? overnight.map((item) => `- ${compactLine(item.title, 120)} | recorded — overnight execution not yet live`)
+        : ["None recorded. Overnight execution is not yet live."]),
+    ].join("\n");
+    const newestUpdate = commitments.reduce(
+      (newest, item) => item.updated_at > newest ? item.updated_at : newest,
+      "",
+    );
+    return {
+      ...base,
+      content,
+      asOf: newestUpdate || input.now.toISOString(),
+      note: quotaGap ? undefined : "content_engine_unavailable",
+    };
+  } catch (error) {
+    return { ...base, note: errorNote(error, "commitments_failed") };
+  }
 }
 
 function addCalendarDays(localDate: string, days: number): string {
@@ -376,7 +531,7 @@ async function calendarSource(
     label: "CALENDAR_TODAY",
     required: false,
     maxChars: 3000,
-    priority: 6,
+    priority: 7,
   } as const;
   const rawKey = process.env.FORGE_BRIEF_COMPOSIO_KEY?.trim();
   const keyPath = process.env.FORGE_BRIEF_COMPOSIO_KEY_PATH?.trim()
@@ -569,7 +724,7 @@ async function crmSource(
     label: "CRM_LAST_TOUCH",
     required: false,
     maxChars: 4000,
-    priority: 9,
+    priority: 10,
   } as const;
   const key = readEnvLocalVar("ATTIO_API_KEY") ?? readEnvLocalVar("ATTIO_TOKEN");
   if (!key) return { ...source, note: "not_configured" };
@@ -664,7 +819,7 @@ async function memoryDecisionsSource(
   const sourceOptions = {
     required: false,
     maxChars: 4000,
-    priority: 10,
+    priority: 11,
     freshnessThresholdHours: staleThresholdHours("memory_decisions", 24 * 7),
   } as const;
   if (memoryPath) {
@@ -752,6 +907,13 @@ export async function collectMorningBriefSources(
   const calendarPromise = calendarSource(fetchImpl, targetLocalDate, targetTimezone, now);
   const crmPromise = crmSource(fetchImpl, now, targetTimezone);
   const memoryPromise = memoryDecisionsSource(fetchImpl, memoryPath, now);
+  const commitmentsPromise = commitmentsSource({
+    fetchImpl,
+    baseUrl,
+    timeoutMs,
+    targetLocalDate,
+    now,
+  });
 
   const sources: BriefSourceInput[] = [
     fileSource("goals", "GOALS", options.goalsPath ?? defaultGoalsPath(), {
@@ -801,10 +963,11 @@ export async function collectMorningBriefSources(
     label: "EMAIL_BRIEF",
     required: false,
     maxChars: 3000,
-    priority: 8,
+    priority: 9,
     // Email triage runs twice a day; older than a day is stale.
     freshnessThresholdHours: staleThresholdHours("email_brief", 24),
   };
+  sources.push(await commitmentsPromise);
   try {
     const [taskRows, columnRows] = await Promise.all([
       fetchRows(fetchImpl, baseUrl, "tasks", timeoutMs),
@@ -852,7 +1015,7 @@ export async function collectMorningBriefSources(
       label: "OPEN_TASKS",
       required: true,
       maxChars: 14_000,
-      priority: 5,
+      priority: 6,
       content: lines.length > 0 ? lines.join("\n") : "The task board has no open Today, In-Flight, or Not Started work.",
       asOf: newestUpdate || undefined,
       // A board untouched for three days is a signal worth surfacing.
@@ -864,7 +1027,7 @@ export async function collectMorningBriefSources(
       label: "OPEN_TASKS",
       required: true,
       maxChars: 14_000,
-      priority: 5,
+      priority: 6,
       note: error instanceof Error ? error.message.slice(0, 200) : "task_snapshot_failed",
     });
   }
@@ -907,7 +1070,7 @@ export async function collectMorningBriefSources(
           label: "RECENT_SETTLEMENTS",
           required: true,
           maxChars: 6000,
-          priority: 7,
+          priority: 8,
           content: settlementContent,
           asOf: settlementAsOf,
           freshnessThresholdHours: settlementThreshold,
@@ -917,7 +1080,7 @@ export async function collectMorningBriefSources(
           label: "RECENT_SETTLEMENTS",
           required: true,
           maxChars: 6000,
-          priority: 7,
+          priority: 8,
           note: "settlement_summary_unavailable",
         },
   );

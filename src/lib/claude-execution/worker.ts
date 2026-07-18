@@ -3,6 +3,7 @@ import {
   spawn,
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import path from "node:path";
 import type { DayPlanStore } from "../day-plan/store";
@@ -22,6 +23,8 @@ import {
   defaultLeadupPath,
   defaultOperatorProfilePath,
   defaultSprintMemoPath,
+  defaultBriefWebBase,
+  fetchRows,
   type CollectedBriefSources,
 } from "../day-plan/brief-sources";
 import {
@@ -49,9 +52,18 @@ import {
 import {
   configuredMorningBriefWriter,
   createCodexMorningBriefAttempt,
+  createCodexStructuredAttempt,
   readCodexMorningBriefOutput,
+  readCodexStructuredOutput,
   type MorningBriefWriter,
 } from "./morning-brief-writer";
+import {
+  buildDayDumpCommand,
+  buildDayDumpPrompt,
+  parseDayDumpOutput,
+  validateDayDump,
+  type DumpExistingCommitment,
+} from "./dump-commands";
 import { markForgeOrchestratorSession } from "./orchestrator-session";
 import {
   notifyExecutionRun,
@@ -505,6 +517,276 @@ export type MorningBriefWorkerOptions = ClaudeWorkerOptions & {
   relay?: BriefRelayOptions;
 };
 
+export type DayDumpWorkerOptions = ClaudeWorkerOptions & {
+  dumpTimeoutMs?: number;
+  dumpWriter?: MorningBriefWriter;
+  codexPath?: string;
+  webBaseUrl?: string;
+  fetchImpl?: typeof fetch;
+  dumpFetchTimeoutMs?: number;
+};
+
+export function configuredDayDumpWriter(
+  env: NodeJS.ProcessEnv = process.env,
+): MorningBriefWriter {
+  return env.FORGE_DUMP_WRITER?.trim().toLowerCase() === "claude" ? "claude" : "codex";
+}
+
+const DUMP_KINDS = new Set([
+  "follow_up",
+  "promise",
+  "waiting_on",
+  "open_decision",
+  "overnight_request",
+  "idea",
+]);
+
+function dumpCommitmentRow(value: unknown): DumpExistingCommitment | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (
+    typeof row.id !== "string" ||
+    typeof row.title !== "string" ||
+    typeof row.kind !== "string" ||
+    !DUMP_KINDS.has(row.kind)
+  ) {
+    return undefined;
+  }
+  return {
+    id: row.id,
+    title: row.title,
+    kind: row.kind as DumpExistingCommitment["kind"],
+  };
+}
+
+function correctionPrompt(prompt: string, error: unknown): string {
+  const reason = (error instanceof Error ? error.message : "validation failed")
+    .replace(/\s+/g, " ")
+    .slice(0, 240);
+  return `${prompt}\n\nYour previous output failed validation: ${reason}. Emit ONLY the required JSON object.`;
+}
+
+async function forgeCsrfToken(
+  fetchImpl: typeof fetch,
+  baseUrl: string,
+  timeoutMs: number,
+): Promise<string> {
+  const response = await fetchImpl(`${baseUrl}/api/day-plan`, {
+    signal: AbortSignal.timeout(timeoutMs),
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`day_plan_token_${response.status}`);
+  const payload = await response.json() as unknown;
+  const token = payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>).csrfToken
+    : undefined;
+  if (typeof token !== "string" || !token) throw new Error("day_plan_token_missing");
+  return token;
+}
+
+export async function runOneDayDump(
+  options: DayDumpWorkerOptions,
+): Promise<boolean> {
+  const clock = options.now ?? (() => new Date());
+  const model = morningBriefModelConfig();
+  const timeoutMs = options.dumpTimeoutMs ?? model.timeoutMs;
+  const staleAfterMs = Math.max(20 * 60 * 1000, timeoutMs + 5 * 60 * 1000);
+  try {
+    options.store.interruptStaleDayDumps(cutoff(clock(), staleAfterMs));
+  } catch (error) {
+    console.error("Day dump stale sweep failed; continuing.", error);
+  }
+  const claimed = options.store.claimNextDayDump();
+  if (!claimed) return false;
+  const failDump = (code: string, receipt?: string) => {
+    try {
+      options.store.failDayDump(claimed.id, code, receipt);
+    } catch (error) {
+      console.error("Day dump failure receipt could not be saved.", error);
+    }
+  };
+
+  try {
+    const fetchImpl = options.fetchImpl ?? fetch;
+    const baseUrl = (options.webBaseUrl ?? defaultBriefWebBase()).replace(/\/$/, "");
+    const fetchTimeoutMs = options.dumpFetchTimeoutMs ?? 10_000;
+    const commitmentRows = await fetchRows(
+      fetchImpl,
+      baseUrl,
+      "commitments",
+      fetchTimeoutMs,
+      "select=*&status=eq.open&order=due_at.asc.nullslast",
+    );
+    const openCommitments = commitmentRows
+      .map(dumpCommitmentRow)
+      .filter((row): row is DumpExistingCommitment => Boolean(row));
+    const plan = options.store.getPlanForDate(claimed.targetLocalDate);
+    const planItems = (plan?.items ?? []).map((item) => ({ id: item.id, title: item.title }));
+    const originalPrompt = buildDayDumpPrompt({
+      rawDump: claimed.rawText,
+      targetLocalDate: claimed.targetLocalDate,
+      planItems,
+      openCommitments,
+    });
+    const existingCommitmentIds = new Set(openCommitments.map((item) => item.id));
+    const validateOutput = (raw: string) => validateDayDump(
+      parseDayDumpOutput(raw),
+      claimed.rawText,
+      { existingCommitmentIds },
+    );
+    let writer = options.dumpWriter ?? configuredDayDumpWriter();
+    let validated: ReturnType<typeof validateDayDump> | undefined;
+
+    if (writer === "codex") {
+      let prompt = originalPrompt;
+      for (let attemptIndex = 0; attemptIndex < 2 && !validated; attemptIndex += 1) {
+        const attempt = createCodexStructuredAttempt({
+          prompt,
+          executable: options.codexPath,
+          tempPrefix: "forge-day-dump-",
+        });
+        if (!attempt) break;
+        try {
+          const result = await spawnCommand(attempt.command, {
+            spawnImpl: options.spawnImpl ?? spawn,
+            timeoutMs,
+            maxStdoutBytes: 1024 * 1024,
+            maxStderrBytes: 64 * 1024,
+            terminationGraceMs: options.terminationGraceMs ?? 2000,
+            abortSignal: options.abortSignal,
+          });
+          if (result.terminatedBy === "shutdown") {
+            failDump("worker_interrupted");
+            return true;
+          }
+          if (result.exitCode !== 0 || result.signal || result.terminatedBy || result.overflowed) {
+            break;
+          }
+          try {
+            validated = validateOutput(readCodexStructuredOutput(attempt));
+          } catch (error) {
+            if (attemptIndex === 0) prompt = correctionPrompt(originalPrompt, error);
+          }
+        } finally {
+          attempt.cleanup();
+        }
+      }
+      if (!validated) writer = "claude";
+    }
+
+    if (!validated) {
+      let prompt = originalPrompt;
+      for (let attemptIndex = 0; attemptIndex < 2 && !validated; attemptIndex += 1) {
+        const command = buildDayDumpCommand({
+          claudePath: options.claudePath,
+          emptyMcpConfigPath: options.emptyMcpConfigPath,
+          cwd: options.fallbackCwd,
+          prompt,
+          modelAlias: model.modelAlias,
+          effort: model.effort,
+          budgetUsd: model.budgetUsd,
+        });
+        const result = await spawnCommand(command, {
+          spawnImpl: options.spawnImpl ?? spawn,
+          timeoutMs,
+          maxStdoutBytes: 1024 * 1024,
+          maxStderrBytes: 64 * 1024,
+          terminationGraceMs: options.terminationGraceMs ?? 2000,
+          abortSignal: options.abortSignal,
+        });
+        if (result.terminatedBy || result.signal) {
+          failDump(result.terminatedBy === "timeout" ? "dump_timeout" : "worker_interrupted");
+          return true;
+        }
+        if (result.exitCode !== 0 || result.overflowed) {
+          failDump(result.overflowed ? "dump_output_too_large" : "claude_failed");
+          return true;
+        }
+        try {
+          validated = validateOutput(result.stdout);
+        } catch (error) {
+          if (attemptIndex === 0) prompt = correctionPrompt(originalPrompt, error);
+          else throw error;
+        }
+      }
+    }
+
+    if (!validated) {
+      failDump("dump_validation_failed");
+      return true;
+    }
+
+    const created: Array<{ id: string; title: string }> = [];
+    const failed: Array<{ title: string; error: string }> = [];
+    if (validated.items.length > 0) {
+      let csrfToken: string | undefined;
+      try {
+        csrfToken = await forgeCsrfToken(fetchImpl, baseUrl, fetchTimeoutMs);
+      } catch (error) {
+        const reason = (error instanceof Error ? error.message : "day_plan_token_failed")
+          .replace(/\s+/g, " ")
+          .slice(0, 160);
+        failed.push(...validated.items.map((item) => ({ title: item.title, error: reason })));
+      }
+      // Accepted tradeoff: inserts survive a crash before completeDayDump, then stale sweep fails the unreclaimed row with an under-reported receipt.
+      for (const item of csrfToken ? validated.items : []) {
+        const id = randomUUID();
+        try {
+          const response = await fetchImpl(`${baseUrl}/api/forge-rest/commitments`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Forge-CSRF": csrfToken!,
+            },
+            body: JSON.stringify({
+              id,
+              ...item,
+              contact_id: null,
+              source_kind: "brain_dump",
+              source_ref: claimed.id,
+              confirmed: false,
+              evidence: null,
+            }),
+            signal: AbortSignal.timeout(fetchTimeoutMs),
+            cache: "no-store",
+          });
+          if (!response.ok) throw new Error(`forge-rest commitments ${response.status}`);
+          created.push({ id, title: item.title });
+        } catch (error) {
+          failed.push({
+            title: item.title,
+            error: (error instanceof Error ? error.message : "commitment_insert_failed")
+              .replace(/\s+/g, " ")
+              .slice(0, 160),
+          });
+        }
+      }
+    }
+
+    const receipt = JSON.stringify({
+      created,
+      skipped_duplicates: validated.skipped_duplicates,
+      failed,
+      counts: {
+        extracted: validated.items.length,
+        created: created.length,
+        skipped_duplicates: validated.skipped_duplicates.length,
+        failed: failed.length,
+      },
+      nothing_found: validated.nothing_found,
+      writer,
+    });
+    if (validated.items.length > 0 && created.length === 0) {
+      failDump("commitment_insert_failed", receipt);
+    } else {
+      options.store.completeDayDump(claimed.id, receipt);
+    }
+  } catch (error) {
+    failDump(error instanceof Error ? error.message : "dump_failed");
+  }
+  return true;
+}
+
 function isValidTimezone(zone: string | undefined): zone is string {
   if (!zone) return false;
   try {
@@ -878,6 +1160,24 @@ export async function watchMorningBriefQueue(
       }
       await waitForPoll(pollIntervalMs, options.abortSignal);
     }
+  }
+}
+
+export async function drainDayDumpQueue(options: DayDumpWorkerOptions): Promise<number> {
+  let processed = 0;
+  while (!options.abortSignal?.aborted && await runOneDayDump(options)) {
+    processed += 1;
+  }
+  return processed;
+}
+
+export async function watchDayDumpQueue(
+  options: DayDumpWorkerOptions,
+  pollIntervalMs = 2000,
+): Promise<void> {
+  while (!options.abortSignal?.aborted) {
+    const processed = await runOneDayDump(options);
+    if (!processed) await waitForPoll(pollIntervalMs, options.abortSignal);
   }
 }
 

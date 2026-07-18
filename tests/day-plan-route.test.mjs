@@ -149,6 +149,30 @@ test('requires positive expected versions and allowlisted actions', () => {
   assert.equal(reconciliation.action, 'reconciliation_applied');
 });
 
+test('settlement truncates oversized day dumps without blocking the mutation and still validates type', () => {
+  const parsed = parseDayPlanPostBody({
+    action: 'settlement_commit',
+    planId: 'plan-a',
+    mutationId: 'settlement:1',
+    expectedVersion: 1,
+    completedHumanTaskIds: [],
+    nextDayNote: `${'x'.repeat(8000)}discarded`,
+  });
+  assert.equal(parsed.input.nextDayNote.length, 8000);
+  assert.equal(parsed.input.nextDayNote, 'x'.repeat(8000));
+  assert.throws(
+    () => parseDayPlanPostBody({
+      action: 'settlement_commit',
+      planId: 'plan-a',
+      mutationId: 'settlement:2',
+      expectedVersion: 1,
+      completedHumanTaskIds: [],
+      nextDayNote: 42,
+    }),
+    /nextDayNote must be text/,
+  );
+});
+
 test('parses a complete item_add mutation and requires its bounded payload', () => {
   const parsed = parseDayPlanPostBody({
     action: 'item_add',

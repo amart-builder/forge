@@ -18,8 +18,8 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-07-17T17:42:18-0700
-- **task:** chief-of-staff vision: record product direction
+- **since:** 2026-07-17T19:40:50-0700
+- **task:** Phase 1 build: commitment ledger + brain dump + gap detectors
 <!-- END active-session -->
 
 ---
@@ -56,6 +56,14 @@ Standing rule (Alex, 2026-07-17): before saying "I can't see that" or asking him
 Explicitly rejected: always-running general agent, autonomous external sends, custom voice stack, constant day resequencing, implicit permission learning, pre-opened idle Claude sessions. Email triage stays OFF until Alex explicitly re-enables. 14-day pilot metrics gate each autonomy expansion (≥60-70% of overnight artifacts genuinely used, else Alex seeds the queue explicitly).
 
 ## Current State
+
+### 2026-07-18 Phase 1 chief of staff: commitment ledger + End My Day brain dump + gap detectors (shipped)
+
+- **Commitment ledger**: shared `commitments` table (Supabase `forge_commitments` — created live via authed supabase CLI `db query --linked`; SQLite mirror + migrate guards; one allow-list opens REST + buddy CLI). Fields: kind (follow_up/promise/waiting_on/open_decision/overnight_request/idea), source_quote (verbatim), due_at/review_at, confidence, confirmed, status, evidence.
+- **End My Day brain dump**: optional ≤8000-char textarea in DaySettlement (server truncates, never blocks settlement), enqueues `day_dumps` row (SQLite queue mirroring briefs: claim/complete/fail + stale sweep). New worker lane `dump` (also under watch/all): Sol-first read-only-sandboxed parse with Claude fallback, strict validator (verbatim-substring quotes, ISO dates, ≤20 items), one corrective retry per engine, inserts via CSRF-guarded loopback forge-rest, honest partial receipts.
+- **Gap detectors** (`gap-detectors.ts`, pure/deterministic): contentQuotaGap (PT-day bucketing of supernova-engine pipeline/queue + posted; env FORGE_SUPERNOVA_ENGINE_DIR + FORGE_CONTENT_QUOTA_POSTS=2), followUpsDue (Pacific end-of-tomorrow cutoff), staleOpenItems. New computed brief source `commitments` (OPEN_COMMITMENTS_AND_GAPS, priority 5, optional, fail-open, NOT in cross-machine checkpoint); priorities renumbered 1-11; MORNING_BRIEF_PROMPT_VERSION=6. prompts/chief-of-staff.md gained the owner-authored ledger section (weave due items into the plan, quote his words on unconfirmed items, quota numbers are facts, overnight requests recorded-not-executed).
+- Verified: 300/300 + tsc clean under the president's run; fresh Opus review SHIP with zero gating findings (8 minor, 6 fixed); held-out E2E acceptance passed — real Sol parse of a synthetic dump (5 commitments, correct kinds/verbatim quotes/date resolution incl. "next Tuesday"→Jul 21), quota detector correct against the live supernova queue (0 scheduled, 4 awaiting approval, gap 2), synthetic data cleaned after.
+- First live exercise: Alex's End My Day tonight; extractions land in the 7:30 brief as OPEN_COMMITMENTS_AND_GAPS. Overnight_request items are RECORDED only (Phase 2 executes them).
 
 ### 2026-07-17 Morning brief v5: Sol chief-of-staff writer + lean prompt + operator context (shipped)
 

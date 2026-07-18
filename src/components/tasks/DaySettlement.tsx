@@ -1,5 +1,6 @@
 'use client';
 
+import { useLayoutEffect, useRef } from 'react';
 import type { DayPlan, DayPlanItem } from '@/lib/day-plan/types';
 import {
   allSettlementDecisionsMade,
@@ -41,11 +42,13 @@ interface DaySettlementProps {
   closing?: boolean;
   canDefer?: boolean;
   error?: string;
+  note: string;
   // The hoisted DayRitualLayer owns the dialog chrome; these ids label it.
   titleId: string;
   descriptionId: string;
   onDecision: (itemId: string, decision: SettlementDecision) => void | Promise<void>;
   onCancel: () => void;
+  onNoteChange: (note: string) => void;
   onCloseDay: () => void | Promise<void>;
 }
 
@@ -59,12 +62,21 @@ export default function DaySettlement({
   closing = false,
   canDefer = true,
   error,
+  note,
   titleId,
   descriptionId,
   onDecision,
   onCancel,
+  onNoteChange,
   onCloseDay,
 }: DaySettlementProps) {
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const textarea = noteRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [note]);
   const allDecided = allSettlementDecisionsMade(
     unresolved.map((view) => view.item),
     decisions,
@@ -199,6 +211,30 @@ export default function DaySettlement({
                 <p className="mt-1 text-sm text-foreground">{proposedTomorrowTitle}</p>
               </section>
             )}
+
+            <section className="border-t pt-5" aria-labelledby={`${titleId}-day-note`}>
+              <div className="flex items-baseline justify-between gap-4">
+                <label id={`${titleId}-day-note`} htmlFor={`${titleId}-day-note-input`} className="text-sm font-semibold text-foreground">
+                  Tell me about your day
+                </label>
+                {note.length > 6000 && (
+                  <span className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
+                    {note.length.toLocaleString()} / 8,000
+                  </span>
+                )}
+              </div>
+              <textarea
+                ref={noteRef}
+                id={`${titleId}-day-note-input`}
+                value={note}
+                maxLength={8000}
+                rows={3}
+                disabled={closing}
+                onChange={(event) => onNoteChange(event.target.value)}
+                placeholder="Anything I couldn't see today — who texted you, what you decided, ideas, and anything you want me to take care of."
+                className="mt-3 min-h-24 w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 disabled:opacity-60"
+              />
+            </section>
 
             {error && <p role="alert" className="rounded-xl border border-accent-red/30 bg-accent-red/5 p-3 text-sm text-accent-red">{error}</p>}
           </div>

@@ -150,6 +150,7 @@ export default function useDayRitual({
   const [error, setError] = useState<string>();
   const [announcement, setAnnouncement] = useState('');
   const [startReceipt, setStartReceipt] = useState<string>();
+  const [settlementReceipt, setSettlementReceipt] = useState<string>();
   const [startDayApplying, setStartDayApplying] = useState(false);
   const [executionState, setExecutionState] = useState<DayPlanExecutionState>();
   const [executionLoading, setExecutionLoading] = useState(false);
@@ -1000,6 +1001,13 @@ export default function useDayRitual({
         announce: 'The day is closed.',
       },
     );
+    if (nextDayNote?.trim()) {
+      const receipt = "Got it. I'll have your notes processed into tomorrow's brief.";
+      setAnnouncement(receipt);
+      setSettlementReceipt(receipt);
+      if (receiptTimerRef.current !== undefined) window.clearTimeout(receiptTimerRef.current);
+      receiptTimerRef.current = window.setTimeout(() => setSettlementReceipt(undefined), 7000);
+    }
     setView('none');
     return result;
   }, [enqueueMutation]);
@@ -1120,6 +1128,7 @@ export default function useDayRitual({
     error,
     announcement,
     startReceipt,
+    settlementReceipt,
     startDayApplying,
     executionState,
     executionLoading,
