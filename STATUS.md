@@ -18,8 +18,8 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-07-17T11:03:28-0700
-- **task:** brief v5: Sol writer + lean prompt + new sources
+- **since:** 2026-07-17T17:42:18-0700
+- **task:** chief-of-staff vision: record product direction
 <!-- END active-session -->
 
 ---
@@ -39,6 +39,21 @@ Forge is the day's MEMORY and CONTROL TOWER; the Claude desktop app is the HANDS
 - The board columns are: Not Started, Must happen today, In Flight / Waiting, and Done.
 - Email triage should not be re-enabled without Alex confirming, because it reads real Gmail and writes Forge action cards.
 - Closed tasks require direct evidence before marking done.
+
+## Product Direction v2 (decided 2026-07-17, Alex's vision, refined by cross-model consult)
+
+Forge's next chapter: from control tower to **proactive chief of staff — a co-manager of Alex's life**, working for him around the clock. His words: "making sure no follow ups are dropped... making sure I make good progress towards my goals." The consult's reframe, which we adopted: Forge doesn't need to *be* smarter than Alex; it needs to be more continuous, more prepared, and impossible to distract — commitments never dropped, the next thing always warm, escalation only on exceptions. "24/7" is event-driven + scheduled on the Mini, never an always-running agent.
+
+Five new primitives (build order by trust-earned-per-effort):
+1. **Commitment ledger** (the keystone): every promise, follow-up, quota, and open decision as a typed record — source quote, due/review date, confidence, Alex-confirmed flag, evidence of completion. A task list tracks tasks; the ledger knows *Alex owes Brian a reply about Tuesday*.
+2. **Evening brain dump** ("End my day" box): free text/Wispr dictation parsed into follow-ups, ideas, corrections, overnight requests → ledger. Extractions keep their source quote and confidence; nothing external ever fires from a dump.
+3. **Trigger/gap engine**: deterministic detectors first (content quota vs Supernova queue, follow-ups due, meetings without prep, tasks with no next action).
+4. **Overnight lane with receipts**: picks the highest-value item from a pre-authorized portfolio (explicit overnight asks first, then gaps), one bounded inspectable artifact per night, draft-only, morning receipt (what/why/preview/approve-discard). Shadow mode first. "Nothing worth doing tonight" is a success state. Never blocks the morning brief.
+5. **Attention broker**: hard interruption budget; urgent-email interrupts only after shadow-tested precision (~95%), otherwise digests. Snoozable end-of-day nudge.
+
+Phases: P1 ledger + brain dump + gap detectors → P2 overnight lane (shadow → one artifact/night) → P3 just-in-time prep (real bounded planning run for the next priority while Alex works the current one; "Ready" packet, no activity theater) + attention broker → P4 earned autonomy, promoted per-domain by explicit ask ("12 of 13 approved unchanged — make automatic?"), never inferred.
+Standing rule (Alex, 2026-07-17): before saying "I can't see that" or asking him, GO LOOK — session transcripts, STATUS.md files, git, the board, memory are all readable. Only ask what lives in his head.
+Explicitly rejected: always-running general agent, autonomous external sends, custom voice stack, constant day resequencing, implicit permission learning, pre-opened idle Claude sessions. Email triage stays OFF until Alex explicitly re-enables. 14-day pilot metrics gate each autonomy expansion (≥60-70% of overnight artifacts genuinely used, else Alex seeds the queue explicitly).
 
 ## Current State
 
