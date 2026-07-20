@@ -16,15 +16,15 @@
 
 <!-- BEGIN active-session -->
 ## Active Session
-- **system:** cowork
-- **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-07-19T11:35:10-0400
-- **task:** Fix Phase 1.5 arrival heal and review findings
+- **system:** none
+- **device:** —
+- **since:** —
+- **task:** —
 <!-- END active-session -->
 
 ---
 
-**Last updated:** 2026-07-19 (Phase 1.5 live-repro delta complete locally; not committed)
+**Last updated:** 2026-07-20 (Buddy Claude sign-in guidance complete locally; not committed)
 **State:** The MacBook's loopback-only `com.forge.web` now serves the wide Morning Arrival with Claude-powered task creation, completion, editing, ownership, and reprioritization, plus explicit execution modes, durable background runs, and reviewable results. `com.forge.claude-worker` is installed and healthy. Autonomous execution remains disabled until an allowlisted project is deliberately configured. The 8 a.m. trigger is still not installed. Email triage remains a separate Mini service and was not changed.
 
 ## North Star Goal
@@ -56,6 +56,12 @@ Standing rule (Alex, 2026-07-17): before saying "I can't see that" or asking him
 Explicitly rejected: always-running general agent, autonomous external sends, custom voice stack, constant day resequencing, implicit permission learning, pre-opened idle Claude sessions. Email triage stays OFF until Alex explicitly re-enables. 14-day pilot metrics gate each autonomy expansion (≥60-70% of overnight artifacts genuinely used, else Alex seeds the queue explicitly).
 
 ## Current State
+
+### 2026-07-20 Buddy Claude sign-in guidance (working tree)
+
+- Failed Buddy turns now recognize Claude CLI sign-out messages and replace the raw CLI error with friendly, numbered Terminal sign-in instructions while preserving Retry behavior.
+- The guidance names the serving host and adds a remote-machine warning when Buddy deep links are disabled. The Buddy session payload now exposes that existing server setting to the panel.
+- Verified: detector tests (2/2), Buddy route tests (11/11), TypeScript, scoped ESLint, and `git diff --check` all pass. No component rendering harness exists, so no new one was introduced.
 
 ### 2026-07-19 Phase 1.5: commitment resolution + arrival/settlement self-heal (shipped)
 
