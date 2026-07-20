@@ -18,13 +18,13 @@
 ## Active Session
 - **system:** cowork
 - **device:** Alexanders-MacBook-Pro-2
-- **since:** 2026-07-17T19:40:50-0700
-- **task:** Phase 1 build: commitment ledger + brain dump + gap detectors
+- **since:** 2026-07-19T11:35:10-0400
+- **task:** Fix Phase 1.5 arrival heal and review findings
 <!-- END active-session -->
 
 ---
 
-**Last updated:** 2026-07-15 (safe-clear handoff: Mini-hosted brief relay shipped + rehearsal passed)
+**Last updated:** 2026-07-19 (Phase 1.5 live-repro delta complete locally; not committed)
 **State:** The MacBook's loopback-only `com.forge.web` now serves the wide Morning Arrival with Claude-powered task creation, completion, editing, ownership, and reprioritization, plus explicit execution modes, durable background runs, and reviewable results. `com.forge.claude-worker` is installed and healthy. Autonomous execution remains disabled until an allowlisted project is deliberately configured. The 8 a.m. trigger is still not installed. Email triage remains a separate Mini service and was not changed.
 
 ## North Star Goal
@@ -56,6 +56,13 @@ Standing rule (Alex, 2026-07-17): before saying "I can't see that" or asking him
 Explicitly rejected: always-running general agent, autonomous external sends, custom voice stack, constant day resequencing, implicit permission learning, pre-opened idle Claude sessions. Email triage stays OFF until Alex explicitly re-enables. 14-day pilot metrics gate each autonomy expansion (≥60-70% of overnight artifacts genuinely used, else Alex seeds the queue explicitly).
 
 ## Current State
+
+### 2026-07-19 Phase 1.5: commitment resolution + arrival/settlement self-heal (shipped)
+
+- Evening dumps now resolve or update existing commitments with grounded evidence (high-confidence done → status closed with quote; high update → due_at/note; medium/low → proposed_resolution the brief asks about), preserve ambiguous resolutions for morning confirmation, isolate per-commitment failures, and never touch a commitment that left open status mid-extraction. Brief source adds RESOLVED FROM YOUR NOTES + proposed/updated markers; MORNING_BRIEF_PROMPT_VERSION=7; chief-of-staff.md v7 (owner): acknowledge closures, quote-and-ask proposals, suggestions-are-suggestions, "talking points" never "beats".
+- Pristine empty Morning Arrival heals on open: one attach-only ensure repopulates candidates and attaches a succeeded brief; loopback GET now reports such a brief as `briefGeneration: succeeded` instead of idle. Heal is visibility-gated (document must be visible) — correct in real browsers; automated QA panes that report hidden must force visibilityState.
+- Settlement open reconciles canonical task completion server-side (REST/Buddy-completed tasks show under Completed without reload on the Close-My-Day click path; an auto-reopened dialog from persisted state re-reconciles on the next explicit open). Fails open on REST hiccups. Partial commitment-fetch failures render `Unavailable (fetch failed).` instead of a false `None.`. Evidence merges use a REST compare-and-swap; local SQLite `updateRows` now returns PostgREST-style RETURNING rows so the CAS works in local mode (was: every resolution threw while silently writing).
+- Build history: Sol built, independent Opus review (fix-then-ship, 3 findings), Sol died twice (network stream + dead codex refresh token — codex on the MBP needs interactive `codex login`), native Opus worker audited and finished, fixing two live-breakers Sol left (one-shot heal burned on empty candidates; the local CAS bug). Verified: 316/316 serial tests, tsc, lint; live browser acceptance passed for all three parts (real extraction with correct resolutions incl. "Tuesday at 2pm"→ISO; heal fired exactly once populating 3 items; settlement showed REST-completed work). Route loopback self-calls default to :3200 (`defaultBriefWebBase`) — non-3200 deployments must set FORGE_BRIEF_WEB_BASE or settlement completions silently fail open.
 
 ### 2026-07-18 Phase 1 chief of staff: commitment ledger + End My Day brain dump + gap detectors (shipped)
 

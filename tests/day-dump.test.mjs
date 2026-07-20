@@ -44,6 +44,25 @@ const VALID_WIRE = {
   nothing_found: false,
 };
 
+const RESOLUTION_DUMP = 'Brian confirmed Tuesday 2pm. The launch moved to Friday. Gary\'s checklist should be handled.';
+
+function resolutionWire(overrides = {}) {
+  return {
+    items: [],
+    skipped_duplicates: [],
+    nothing_found: false,
+    resolutions: [{
+      commitment_id: 'commitment-a',
+      action: 'done',
+      quote: 'Brian confirmed Tuesday 2pm.',
+      note: 'Brian confirmed the time.',
+      due_at: null,
+      confidence: 'high',
+      ...overrides,
+    }],
+  };
+}
+
 function fixture(t) {
   const dir = path.join(os.tmpdir(), `forge-day-dump-${process.pid}-${Date.now()}-${Math.random()}`);
   mkdirSync(dir, { recursive: true });
@@ -150,12 +169,15 @@ function workerOptions(dir, store, overrides = {}) {
   };
 }
 
-function fakeForgeFetch(insertStatuses = [201, 201], posts = []) {
+function fakeForgeFetch(insertStatuses = [201, 201], posts = [], options = {}) {
   let insertIndex = 0;
+  const patches = options.patches ?? [];
+  const rows = options.commitments ?? [];
   return async (url, init = {}) => {
     const value = String(url);
     if (value.includes('/api/forge-rest/commitments') && !init.method) {
-      return new Response('[]', { status: 200 });
+      const id = new URL(value).searchParams.get('id')?.replace(/^eq\./, '');
+      return new Response(JSON.stringify(id ? rows.filter((row) => row.id === id) : rows), { status: 200 });
     }
     if (value.endsWith('/api/day-plan')) {
       return new Response(JSON.stringify({ csrfToken: 'csrf-token' }), { status: 200 });
@@ -164,6 +186,20 @@ function fakeForgeFetch(insertStatuses = [201, 201], posts = []) {
       posts.push({ body: JSON.parse(init.body), headers: init.headers });
       const status = insertStatuses[insertIndex++] ?? 201;
       return new Response(status === 201 ? '[]' : 'failed', { status });
+    }
+    if (value.includes('/api/forge-rest/commitments?') && init.method === 'PATCH') {
+      const params = new URL(value).searchParams;
+      const id = params.get('id')?.replace(/^eq\./, '');
+      patches.push({
+        id,
+        status: params.get('status'),
+        evidence: params.get('evidence'),
+        body: JSON.parse(init.body),
+        headers: init.headers,
+      });
+      const status = options.patchStatuses?.[id] ?? 200;
+      const matched = options.patchMatches?.[id] ?? true;
+      return new Response(status === 200 ? JSON.stringify(matched ? [{ id }] : []) : 'failed', { status });
     }
     throw new Error(`unexpected request: ${value}`);
   };
@@ -204,7 +240,7 @@ test('dump prompt and validator enforce the bounded grounded contract', () => {
     '--model', 'opus', '--effort', 'high', '--output-format', 'json',
     '--json-schema', DAY_DUMP_JSON_SCHEMA, '--max-budget-usd', '1.5',
   ]);
-  assert.deepEqual(validateDayDump(VALID_WIRE, RAW_DUMP), VALID_WIRE);
+  assert.deepEqual(validateDayDump(VALID_WIRE, RAW_DUMP), { ...VALID_WIRE, resolutions: [] });
   assert.throws(
     () => validateDayDump({
       ...VALID_WIRE,
@@ -222,6 +258,51 @@ test('dump prompt and validator enforce the bounded grounded contract', () => {
   assert.throws(
     () => validateDayDump({ ...VALID_WIRE, items: Array.from({ length: 21 }, () => VALID_WIRE.items[0]) }, RAW_DUMP),
     /items_bounds/,
+  );
+});
+
+test('dump resolution validation rejects ungrounded, ambiguous, and oversized resolution payloads', () => {
+  const ids = new Set(['commitment-a']);
+  assert.deepEqual(
+    validateDayDump(resolutionWire(), RESOLUTION_DUMP, { existingCommitmentIds: ids }),
+    resolutionWire(),
+  );
+  assert.throws(
+    () => validateDayDump(resolutionWire({ commitment_id: 'unknown' }), RESOLUTION_DUMP, { existingCommitmentIds: ids }),
+    /resolution_0_commitment_id_unknown/,
+  );
+  assert.throws(
+    () => validateDayDump({
+      ...resolutionWire(),
+      resolutions: [resolutionWire().resolutions[0], resolutionWire().resolutions[0]],
+    }, RESOLUTION_DUMP, { existingCommitmentIds: ids }),
+    /resolution_commitment_id_repeated/,
+  );
+  assert.throws(
+    () => validateDayDump(resolutionWire({ quote: 'Brian probably replied.' }), RESOLUTION_DUMP, { existingCommitmentIds: ids }),
+    /quote_not_verbatim/,
+  );
+  assert.throws(
+    () => validateDayDump(resolutionWire({ action: 'update', note: null, due_at: null }), RESOLUTION_DUMP, { existingCommitmentIds: ids }),
+    /update_empty/,
+  );
+  assert.throws(
+    () => validateDayDump(resolutionWire({ action: 'update', due_at: 'Friday' }), RESOLUTION_DUMP, { existingCommitmentIds: ids }),
+    /due_at_iso/,
+  );
+  assert.throws(
+    () => validateDayDump({
+      ...resolutionWire(),
+      resolutions: Array.from({ length: 21 }, (_, index) => ({
+        ...resolutionWire().resolutions[0],
+        commitment_id: `commitment-${index}`,
+      })),
+    }, RESOLUTION_DUMP),
+    /resolutions_bounds/,
+  );
+  assert.throws(
+    () => validateDayDump(resolutionWire({ confidence: 'certain' }), RESOLUTION_DUMP, { existingCommitmentIds: ids }),
+    /confidence/,
   );
 });
 
@@ -248,7 +329,14 @@ test('Codex retries one invalid extraction, inserts grounded commitments, and st
     created: 2,
     skipped_duplicates: 0,
     failed: 0,
+    resolved: 0,
+    updated: 0,
+    needs_confirmation: 0,
   });
+  assert.deepEqual(receipt.resolved, []);
+  assert.deepEqual(receipt.updated, []);
+  assert.deepEqual(receipt.needs_confirmation, []);
+  assert.deepEqual(receipt.resolution_failures, []);
   assert.equal(receipt.created.length, 2);
   assert.equal(posts.length, 2);
   assert.equal(posts[0].body.source_kind, 'brain_dump');
@@ -286,7 +374,197 @@ test('partial commitment insert failures stay honest without failing the dump ro
     created: 1,
     skipped_duplicates: 0,
     failed: 1,
+    resolved: 0,
+    updated: 0,
+    needs_confirmation: 0,
   });
+});
+
+test('dump resolutions apply high-confidence changes, preserve evidence, and leave proposals non-destructive', async (t) => {
+  const { dir, store } = fixture(t);
+  settleWithDump(store, RESOLUTION_DUMP);
+  const rows = [
+    { id: 'commitment-a', kind: 'follow_up', title: 'Get the jam time', evidence: JSON.stringify({ owner: 'Alex' }), status: 'open', due_at: null },
+    { id: 'commitment-b', kind: 'promise', title: 'Ship the launch', evidence: 'legacy evidence text', status: 'open', due_at: null },
+    { id: 'commitment-c', kind: 'waiting_on', title: 'Gary checklist', evidence: null, status: 'open', due_at: null },
+  ];
+  const wire = {
+    items: [],
+    skipped_duplicates: ['commitment-a'],
+    nothing_found: false,
+    resolutions: [
+      resolutionWire().resolutions[0],
+      {
+        commitment_id: 'commitment-b',
+        action: 'update',
+        quote: 'The launch moved to Friday.',
+        note: 'The launch date moved.',
+        due_at: '2026-07-24T09:00:00-07:00',
+        confidence: 'high',
+      },
+      {
+        commitment_id: 'commitment-c',
+        action: 'done',
+        quote: "Gary's checklist should be handled.",
+        note: 'The checklist may be handled.',
+        due_at: null,
+        confidence: 'medium',
+      },
+    ],
+  };
+  const patches = [];
+  await runOneDayDump(workerOptions(dir, store, {
+    dumpWriter: 'claude',
+    claudePath: fakeClaude(dir, JSON.stringify(wire)),
+    fetchImpl: fakeForgeFetch([], [], { commitments: rows, patches }),
+  }));
+
+  assert.equal(patches.length, 3);
+  assert.equal(patches[0].id, 'commitment-a');
+  assert.equal(patches[0].status, 'eq.open');
+  assert.equal(patches[0].body.status, 'done');
+  assert.deepEqual(JSON.parse(patches[0].body.evidence).owner, 'Alex');
+  assert.equal(JSON.parse(patches[0].body.evidence).resolved_by, 'day_dump');
+  assert.equal(patches[1].body.status, undefined);
+  assert.equal(patches[1].body.due_at, '2026-07-24T09:00:00-07:00');
+  assert.equal(JSON.parse(patches[1].body.evidence).prior_evidence, 'legacy evidence text');
+  assert.equal(JSON.parse(patches[1].body.evidence).updated_by, 'day_dump');
+  assert.deepEqual(Object.keys(patches[2].body), ['evidence']);
+  assert.equal(JSON.parse(patches[2].body.evidence).proposed_resolution.confidence, 'medium');
+
+  const dump = store.listDayDumps()[0];
+  const receipt = JSON.parse(dump.resultJson);
+  assert.equal(dump.status, 'succeeded');
+  assert.deepEqual(receipt.resolved, [{ id: 'commitment-a', title: 'Get the jam time' }]);
+  assert.deepEqual(receipt.updated, [{ id: 'commitment-b', title: 'Ship the launch' }]);
+  assert.deepEqual(receipt.needs_confirmation, [{ id: 'commitment-c', title: 'Gary checklist' }]);
+  assert.deepEqual(receipt.resolution_failures, []);
+  assert.deepEqual(receipt.counts, {
+    extracted: 0,
+    created: 0,
+    skipped_duplicates: 1,
+    failed: 0,
+    resolved: 1,
+    updated: 1,
+    needs_confirmation: 1,
+  });
+});
+
+test('one failed resolution is isolated and empty evidence still applies to later resolutions', async (t) => {
+  const { dir, store } = fixture(t);
+  settleWithDump(store, 'Brian confirmed Tuesday 2pm. The launch moved to Friday.');
+  const rows = [
+    { id: 'commitment-a', kind: 'follow_up', title: 'Get the jam time', evidence: '', status: 'open' },
+    { id: 'commitment-b', kind: 'promise', title: 'Ship the launch', evidence: null, status: 'open' },
+  ];
+  const wire = {
+    items: [],
+    skipped_duplicates: [],
+    nothing_found: false,
+    resolutions: [
+      resolutionWire().resolutions[0],
+      {
+        commitment_id: 'commitment-b',
+        action: 'update',
+        quote: 'The launch moved to Friday.',
+        note: 'The launch date moved.',
+        due_at: '2026-07-24T09:00:00-07:00',
+        confidence: 'high',
+      },
+    ],
+  };
+  const patches = [];
+  await runOneDayDump(workerOptions(dir, store, {
+    dumpWriter: 'claude',
+    claudePath: fakeClaude(dir, JSON.stringify(wire)),
+    fetchImpl: fakeForgeFetch([], [], {
+      commitments: rows,
+      patches,
+      patchStatuses: { 'commitment-a': 500 },
+    }),
+  }));
+  const receipt = JSON.parse(store.listDayDumps()[0].resultJson);
+  assert.equal(patches.length, 2);
+  assert.deepEqual(receipt.updated, [{ id: 'commitment-b', title: 'Ship the launch' }]);
+  assert.equal(receipt.resolution_failures.length, 1);
+  assert.equal(receipt.resolution_failures[0].id, 'commitment-a');
+  assert.equal(JSON.parse(patches[1].body.evidence).updated_by, 'day_dump');
+});
+
+test('a commitment that closes during extraction is not overwritten and later resolutions still apply', async (t) => {
+  const { dir, store } = fixture(t);
+  settleWithDump(store, 'Brian confirmed Tuesday 2pm. The launch moved to Friday.');
+  const rows = [
+    { id: 'commitment-a', kind: 'follow_up', title: 'Get the jam time', evidence: null, status: 'open' },
+    { id: 'commitment-b', kind: 'promise', title: 'Ship the launch', evidence: null, status: 'open' },
+  ];
+  const wire = {
+    items: [],
+    skipped_duplicates: [],
+    nothing_found: false,
+    resolutions: [
+      resolutionWire().resolutions[0],
+      {
+        commitment_id: 'commitment-b',
+        action: 'update',
+        quote: 'The launch moved to Friday.',
+        note: 'The launch date moved.',
+        due_at: '2026-07-24T09:00:00-07:00',
+        confidence: 'high',
+      },
+    ],
+  };
+  const patches = [];
+  await runOneDayDump(workerOptions(dir, store, {
+    dumpWriter: 'claude',
+    claudePath: fakeClaude(dir, JSON.stringify(wire)),
+    fetchImpl: fakeForgeFetch([], [], {
+      commitments: rows,
+      patches,
+      patchMatches: { 'commitment-a': false },
+    }),
+  }));
+
+  const receipt = JSON.parse(store.listDayDumps()[0].resultJson);
+  assert.equal(patches.every((patch) => patch.status === 'eq.open'), true);
+  assert.equal(patches.every((patch) => patch.evidence === 'is.null'), true);
+  assert.deepEqual(receipt.resolved, []);
+  assert.deepEqual(receipt.updated, [{ id: 'commitment-b', title: 'Ship the launch' }]);
+  assert.deepEqual(receipt.resolution_failures, [{
+    id: 'commitment-a',
+    error: 'commitment_resolution_no_longer_open',
+  }]);
+});
+
+test('a concurrent evidence write fails the resolution compare-and-swap instead of being lost', async (t) => {
+  const { dir, store } = fixture(t);
+  settleWithDump(store, 'Brian confirmed Tuesday 2pm.');
+  const priorEvidence = JSON.stringify({ note: 'written by another flow' });
+  const patches = [];
+  await runOneDayDump(workerOptions(dir, store, {
+    dumpWriter: 'claude',
+    claudePath: fakeClaude(dir, JSON.stringify(resolutionWire())),
+    fetchImpl: fakeForgeFetch([], [], {
+      commitments: [{
+        id: 'commitment-a',
+        kind: 'follow_up',
+        title: 'Get the jam time',
+        evidence: priorEvidence,
+        status: 'open',
+      }],
+      patches,
+      patchMatches: { 'commitment-a': false },
+    }),
+  }));
+
+  assert.equal(patches.length, 1);
+  assert.equal(patches[0].evidence, `eq.${priorEvidence}`);
+  const receipt = JSON.parse(store.listDayDumps()[0].resultJson);
+  assert.deepEqual(receipt.resolved, []);
+  assert.deepEqual(receipt.resolution_failures, [{
+    id: 'commitment-a',
+    error: 'commitment_resolution_no_longer_open',
+  }]);
 });
 
 test('the dump row fails only when every extracted commitment insert fails', async (t) => {

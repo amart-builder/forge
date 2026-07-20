@@ -2232,12 +2232,9 @@ export function createDayPlanStore(options: {
         (selectDatePlan.get(input.localDate) as DayPlanRow | undefined);
       if (existingRow) {
         const existing = planFromRow(existingRow);
-        // Guarded late-attach. A brief that landed after this plan was created
-        // can still overlay a pristine, untouched arrival, but never after any
-        // interaction (the durable arrival_interacted_at marker) or once a brief
-        // is already consumed. All guards are checked inside this same immediate
-        // transaction; the whole path is fail-open — any defect returns the plan
-        // untouched via the ordinary ensure event below.
+        // Guarded arrival heal. Fresh candidates can fill a pristine plan that
+        // was created before board work existed, and a late brief can attach in
+        // the same versioned mutation. All guards live in this transaction.
         const attached = maybeLateAttachBrief(existing, input);
         if (attached) {
           return { plan: attached, snapshot: getSnapshot(attached.id), replayed: false };
@@ -2377,18 +2374,21 @@ export function createDayPlanStore(options: {
     }
   }
 
-  // Attaches today's eligible brief to an already-created, pristine arrival, or
-  // returns undefined when any guard fails (the caller then returns the plan
-  // untouched). Runs inside the caller's immediate() transaction. Fail-open: any
-  // error skips the attach rather than failing the ensure.
+  // Heals an empty pristine arrival from fresh candidates and attaches today's
+  // eligible brief when one exists. Existing non-empty behavior remains the
+  // guarded late-attach path. Runs inside the caller's immediate() transaction;
+  // any malformed candidate or brief fails open to the existing plan.
   function maybeLateAttachBrief(
     existing: DayPlan,
     input: EnsureDayPlanInput,
   ): DayPlan | undefined {
     try {
-      if (existing.briefId) return undefined;
-      if (existing.state !== "proposed") return undefined;
-      if (existing.arrivalState !== "due" && existing.arrivalState !== "opened") return undefined;
+      if (existing.state !== "draft" && existing.state !== "proposed") return undefined;
+      if (
+        existing.arrivalState !== "not_due" &&
+        existing.arrivalState !== "due" &&
+        existing.arrivalState !== "opened"
+      ) return undefined;
       // The durable no-hot-swap guard: any interaction closes the window.
       if (existing.arrivalInteractedAt) return undefined;
       if (existing.items.length > 0 && !existing.items.every((item) => item.decision === "preselected")) {
@@ -2399,9 +2399,20 @@ export function createDayPlanStore(options: {
       if (input.candidates.length === 0) return undefined;
       assertArrivalCandidates(input.candidates);
 
-      const briefArtifact = latestEligibleMorningBrief(existing.localDate);
-      const briefContent = morningBriefFromArtifact(briefArtifact);
-      if (!briefArtifact || !briefContent) return undefined;
+      let briefArtifact: MorningBriefArtifact | undefined;
+      let briefContent: ReturnType<typeof morningBriefFromArtifact>;
+      try {
+        briefArtifact = existing.briefId
+          ? getMorningBrief(existing.briefId)
+          : latestEligibleMorningBrief(existing.localDate);
+        briefContent = morningBriefFromArtifact(briefArtifact);
+      } catch {
+        briefArtifact = undefined;
+        briefContent = undefined;
+      }
+      const attachesBrief = Boolean(!existing.briefId && briefArtifact && briefContent);
+      const healsItems = existing.items.length === 0;
+      if (!healsItems && !attachesBrief) return undefined;
 
       const selection = overlayBriefOnCandidates(input.candidates, briefContent);
       const items: DayPlanItem[] = selection.map(({ candidate, brief }, position) => ({
@@ -2418,7 +2429,7 @@ export function createDayPlanStore(options: {
       const attached: DayPlan = {
         ...existing,
         items,
-        briefId: briefArtifact.id,
+        briefId: attachesBrief ? briefArtifact!.id : existing.briefId,
         version: existing.version + 1,
         lastMutationId: input.mutationId,
         updatedAt: changedAt,
@@ -2427,7 +2438,7 @@ export function createDayPlanStore(options: {
       appendEvent({
         id: input.mutationId,
         planId: attached.id,
-        eventType: "brief_attach",
+        eventType: attachesBrief ? "brief_attach" : "ensure",
         resultVersion: attached.version,
         before: existing,
         after: attached,
@@ -2910,20 +2921,54 @@ export function createDayPlanStore(options: {
           plan.settlementState = "skipped";
           break;
         case "settlement_start":
-          if (
-            plan.state !== "active" &&
-            !(plan.state === "proposed" && ["bypassed", "skipped"].includes(plan.arrivalState))
-          ) {
-            throw new DayPlanInvalidTransition("Settlement cannot start yet.");
+          {
+            const alreadyInProgress =
+              plan.state === "settling" && plan.settlementState === "in_progress";
+            if (
+              !alreadyInProgress &&
+              plan.state !== "active" &&
+              !(plan.state === "proposed" && ["bypassed", "skipped"].includes(plan.arrivalState))
+            ) {
+              throw new DayPlanInvalidTransition("Settlement cannot start yet.");
+            }
+            if (!alreadyInProgress) {
+              requireState(
+                plan.settlementState,
+                ["not_due", "offered", "skipped"],
+                "Settlement is already in progress or complete.",
+              );
+              plan.state = "settling";
+              plan.settlementState = "in_progress";
+            }
+            let completionChanged = false;
+            if (input.completedHumanTaskIds) {
+              const tracked = plan.items.filter(
+                (item) => item.decision === "accepted" || item.decision === "completed",
+              );
+              const trackedIds = new Set(tracked.map((item) => item.taskId));
+              const completedIds = new Set(input.completedHumanTaskIds);
+              if ([...completedIds].some((taskId) => !trackedIds.has(taskId))) {
+                throw new DayPlanInvalidTransition("Completed work must belong to this day plan.");
+              }
+              for (const item of tracked) {
+                const nextDecision = completedIds.has(item.taskId) ? "completed" : "accepted";
+                if (item.decision !== nextDecision) {
+                  item.decision = nextDecision;
+                  item.settlementDecision = undefined;
+                  completionChanged = true;
+                }
+              }
+            }
+            if (alreadyInProgress && !completionChanged) {
+              return {
+                plan,
+                snapshot: getSnapshot(plan.id),
+                pendingReconciliations: listPendingReconciliations(),
+                replayed: false,
+              };
+            }
+            break;
           }
-          requireState(
-            plan.settlementState,
-            ["not_due", "offered", "skipped"],
-            "Settlement is already in progress or complete.",
-          );
-          plan.state = "settling";
-          plan.settlementState = "in_progress";
-          break;
         case "settlement_decide": {
           if (plan.state !== "settling" || plan.settlementState !== "in_progress") {
             throw new DayPlanInvalidTransition("Settlement decisions require an active settlement.");
@@ -2954,13 +2999,20 @@ export function createDayPlanStore(options: {
           if (plan.state !== "settling" || plan.settlementState !== "in_progress") {
             throw new DayPlanInvalidTransition("Settlement is not ready to commit.");
           }
-          const accepted = plan.items.filter((item) => item.decision === "accepted");
-          const acceptedTaskIds = new Set(accepted.map((item) => item.taskId));
-          const completed = [...new Set(input.completedHumanTaskIds ?? [])];
-          if (completed.some((taskId) => !acceptedTaskIds.has(taskId))) {
+          const settlementItems = plan.items.filter(
+            (item) => item.decision === "accepted" || item.decision === "completed",
+          );
+          const settlementTaskIds = new Set(settlementItems.map((item) => item.taskId));
+          const completed = [...new Set(
+            input.completedHumanTaskIds ??
+              settlementItems
+                .filter((item) => item.decision === "completed")
+                .map((item) => item.taskId),
+          )];
+          if (completed.some((taskId) => !settlementTaskIds.has(taskId))) {
             throw new DayPlanInvalidTransition("Completed work must belong to this day plan.");
           }
-          const unresolved = accepted.filter((item) => !completed.includes(item.taskId));
+          const unresolved = settlementItems.filter((item) => !completed.includes(item.taskId));
           if (unresolved.some((item) => !item.settlementDecision)) {
             throw new DayPlanInvalidTransition(
               "Every unfinished accepted item needs Carry, Defer, or Drop.",

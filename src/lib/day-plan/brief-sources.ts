@@ -277,6 +277,7 @@ function commitmentLine(
   commitment: Commitment,
   dueSoonIds: ReadonlySet<string>,
   staleIds: ReadonlySet<string>,
+  updatedFromNotesIds: ReadonlySet<string>,
 ): string {
   const parts = [`- ${compactLine(commitment.title, 120)}`];
   if (commitment.counterparty) parts.push(`counterparty=${compactLine(commitment.counterparty, 80)}`);
@@ -285,7 +286,26 @@ function commitmentLine(
   if (dueSoonIds.has(commitment.id)) parts.push("due_or_review_by_tomorrow");
   if (staleIds.has(commitment.id)) parts.push("stale_open_over_7d");
   if (commitment.source_quote) parts.push(`source="${compactLine(commitment.source_quote, 180)}"`);
+  if (updatedFromNotesIds.has(commitment.id)) parts.push("updated_from_your_notes");
   return parts.join(" | ");
+}
+
+function commitmentEvidence(value: string | null | undefined): UnknownRecord | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    return asRecord(JSON.parse(value) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+function recentEvidenceTimestamp(
+  evidence: UnknownRecord | undefined,
+  key: string,
+  nowEpoch: number,
+): boolean {
+  const timestamp = typeof evidence?.[key] === "string" ? Date.parse(evidence[key]) : Number.NaN;
+  return Number.isFinite(timestamp) && timestamp <= nowEpoch && timestamp >= nowEpoch - 36 * 60 * 60 * 1000;
 }
 
 async function commitmentsSource(input: {
@@ -303,29 +323,100 @@ async function commitmentsSource(input: {
     priority: 5,
     freshness: "current",
   };
-  try {
-    const rows = await fetchRows(
+  const [openResult, resolvedResult] = await Promise.allSettled([
+    fetchRows(
       input.fetchImpl,
       input.baseUrl,
       "commitments",
       input.timeoutMs,
       "select=*&status=eq.open&order=due_at.asc.nullslast",
-    );
-    const commitments = rows
+    ),
+    fetchRows(
+      input.fetchImpl,
+      input.baseUrl,
+      "commitments",
+      input.timeoutMs,
+      "select=*&status=eq.done&order=updated_at.desc&limit=20",
+    ),
+  ]);
+  if (openResult.status === "rejected" && resolvedResult.status === "rejected") {
+    return { ...base, note: errorNote(openResult.reason, "commitments_failed") };
+  }
+  try {
+    const commitments = (openResult.status === "fulfilled" ? openResult.value : [])
       .map(commitmentRow)
       .filter((row): row is Commitment => Boolean(row))
       .sort((left, right) => commitmentDate(left) - commitmentDate(right) || left.id.localeCompare(right.id));
+    const nowEpoch = input.now.getTime();
+    const evidenceById = new Map(
+      commitments.map((commitment) => [commitment.id, commitmentEvidence(commitment.evidence)]),
+    );
     const dueSoonIds = new Set(followUpsDue(commitments, input.targetLocalDate).map((item) => item.id));
     const staleIds = new Set(staleOpenItems(commitments, input.now).map((item) => item.id));
+    const updatedFromNotesIds = new Set(
+      commitments
+        .filter((commitment) => {
+          const evidence = evidenceById.get(commitment.id);
+          return evidence?.updated_by === "day_dump" &&
+            recentEvidenceTimestamp(evidence, "updated_at", nowEpoch);
+        })
+        .map((commitment) => commitment.id),
+    );
     const groups = COMMITMENT_KIND_ORDER.flatMap((kind) => {
       const group = commitments.filter((commitment) => commitment.kind === kind);
       return group.length > 0
-        ? [`${kind.toUpperCase()}:`, ...group.map((item) => commitmentLine(item, dueSoonIds, staleIds))]
+        ? [
+            `${kind.toUpperCase()}:`,
+            ...group.map((item) => commitmentLine(item, dueSoonIds, staleIds, updatedFromNotesIds)),
+          ]
         : [];
     });
-    const clarification = commitments.filter(
-      (commitment) => commitment.confidence === "low" && !commitment.confirmed,
-    );
+    const proposedIds = new Set<string>();
+    const proposedClarifications = commitments.flatMap((commitment) => {
+      const proposal = asRecord(evidenceById.get(commitment.id)?.proposed_resolution);
+      if (
+        !proposal ||
+        (proposal.action !== "done" && proposal.action !== "update") ||
+        typeof proposal.quote !== "string" ||
+        !proposal.quote.trim()
+      ) {
+        return [];
+      }
+      proposedIds.add(commitment.id);
+      return [
+        `- ${compactLine(commitment.title, 120)}` +
+          ` | you said: "${compactLine(proposal.quote, 140)}"` +
+          ` | proposed: ${proposal.action === "done" ? "close" : "update"}`,
+      ];
+    });
+    const lowConfidenceClarifications = commitments
+      .filter(
+        (commitment) =>
+          commitment.confidence === "low" &&
+          !commitment.confirmed &&
+          !proposedIds.has(commitment.id),
+      )
+      .map((item) => `- ${compactLine(item.title, 120)} | confidence=low | confirmed=false`);
+    const clarificationLines = [...lowConfidenceClarifications, ...proposedClarifications];
+    const resolvedFromNotes = (resolvedResult.status === "fulfilled" ? resolvedResult.value : [])
+      .flatMap((value) => {
+        const row = asRecord(value);
+        const evidence = commitmentEvidence(typeof row?.evidence === "string" ? row.evidence : null);
+        if (
+          !row ||
+          row.status !== "done" ||
+          typeof row.title !== "string" ||
+          evidence?.resolved_by !== "day_dump" ||
+          typeof evidence.quote !== "string" ||
+          !recentEvidenceTimestamp(evidence, "resolved_at", nowEpoch)
+        ) {
+          return [];
+        }
+        return [{
+          line: `- ${compactLine(row.title, 120)} | you said: "${compactLine(evidence.quote, 140)}"`,
+          updatedAt: typeof row.updated_at === "string" ? row.updated_at : "",
+        }];
+      });
     const quotaValue = Number(process.env.FORGE_CONTENT_QUOTA_POSTS);
     const quota = Number.isFinite(quotaValue) && quotaValue >= 0 ? quotaValue : 2;
     const quotaGap = contentQuotaGap({
@@ -338,12 +429,21 @@ async function commitmentsSource(input: {
     const overnight = commitments.filter((commitment) => commitment.kind === "overnight_request");
     const content = [
       "OPEN COMMITMENTS",
-      ...(groups.length > 0 ? groups : ["None."]),
+      ...(openResult.status === "rejected"
+        ? ["Unavailable (fetch failed)."]
+        : groups.length > 0
+          ? groups
+          : ["None."]),
       "",
       "NEEDS CLARIFICATION",
-      ...(clarification.length > 0
-        ? clarification.map((item) => `- ${compactLine(item.title, 120)} | confidence=low | confirmed=false`)
-        : ["None."]),
+      ...(clarificationLines.length > 0 ? clarificationLines : ["None."]),
+      ...(resolvedFromNotes.length > 0
+        ? [
+            "",
+            "RESOLVED FROM YOUR NOTES",
+            ...resolvedFromNotes.map((item) => item.line),
+          ]
+        : []),
       "",
       "CONTENT QUOTA",
       quotaGap
@@ -357,13 +457,21 @@ async function commitmentsSource(input: {
     ].join("\n");
     const newestUpdate = commitments.reduce(
       (newest, item) => item.updated_at > newest ? item.updated_at : newest,
-      "",
+      resolvedFromNotes.reduce(
+        (newest, item) => item.updatedAt > newest ? item.updatedAt : newest,
+        "",
+      ),
     );
+    const notes = [
+      openResult.status === "rejected" ? errorNote(openResult.reason, "open_commitments_failed") : undefined,
+      resolvedResult.status === "rejected" ? errorNote(resolvedResult.reason, "resolved_commitments_failed") : undefined,
+      quotaGap ? undefined : "content_engine_unavailable",
+    ].filter((note): note is string => Boolean(note));
     return {
       ...base,
       content,
       asOf: newestUpdate || input.now.toISOString(),
-      note: quotaGap ? undefined : "content_engine_unavailable",
+      note: notes.length > 0 ? notes.join(";") : undefined,
     };
   } catch (error) {
     return { ...base, note: errorNote(error, "commitments_failed") };

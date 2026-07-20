@@ -20,6 +20,7 @@ import type {
   RecommendationCandidate,
   RecommendationSourceRef,
   SettlementDisposition,
+  DayPlan,
 } from "@/lib/day-plan/types";
 import { isClaudeWorkerAvailable } from "@/lib/claude-execution/trigger";
 import {
@@ -44,6 +45,8 @@ import {
   defaultLeadupPath,
   defaultOperatorProfilePath,
   defaultSprintMemoPath,
+  defaultBriefWebBase,
+  fetchRows,
 } from "@/lib/day-plan/brief-sources";
 import {
   publicDayPlan,
@@ -518,10 +521,10 @@ function readModelMorningBrief(
   }
 }
 
-// The in-flight brief generation state for the plan's target date. Loopback-only,
-// gated exactly like brief content: a remote session must not learn whether a
-// brief is being written. Fail-open — any error yields no field and the arrival
-// stays quiet. Carries no brief_json, only lifecycle state (and startedAt).
+// The brief generation/availability state for the plan's target date.
+// Loopback-only, gated exactly like brief content: a remote session must not
+// learn whether a brief exists or is being written. Fail-open: any error yields
+// no field and the arrival stays quiet. Carries no brief_json.
 function readModelBriefGeneration(
   store: DayPlanStore,
   plan: { localDate?: string } | undefined,
@@ -542,6 +545,61 @@ function readModelBriefGeneration(
   } catch {
     return undefined;
   }
+}
+
+const DONE_COLUMN_NAMES = new Set(["Done", "Completed"]);
+
+async function completedPlanTaskIds(
+  plan: DayPlan,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string[]> {
+  const baseUrl = defaultBriefWebBase().replace(/\/$/, "");
+  const [taskRows, columnRows] = await Promise.all([
+    fetchRows(
+      fetchImpl,
+      baseUrl,
+      "tasks",
+      10_000,
+      "select=id,column_id,status,updated_at",
+    ),
+    fetchRows(
+      fetchImpl,
+      baseUrl,
+      "task_columns",
+      10_000,
+      "select=id,name&order=position.asc",
+    ),
+  ]);
+  const doneColumnIds = new Set(
+    columnRows.flatMap((value) => {
+      const row = value && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : undefined;
+      return row && typeof row.id === "string" &&
+        typeof row.name === "string" && DONE_COLUMN_NAMES.has(row.name)
+        ? [row.id]
+        : [];
+    }),
+  );
+  const completedIds = new Set(
+    taskRows.flatMap((value) => {
+      const row = value && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : undefined;
+      return row && typeof row.id === "string" &&
+        (row.status === "done" ||
+          (typeof row.column_id === "string" && doneColumnIds.has(row.column_id)))
+        ? [row.id]
+        : [];
+    }),
+  );
+  return plan.items
+    .filter(
+      (item) =>
+        (item.decision === "accepted" || item.decision === "completed") &&
+        completedIds.has(item.taskId),
+    )
+    .map((item) => item.taskId);
 }
 
 export async function GET(request: NextRequest) {
@@ -629,6 +687,20 @@ export async function POST(request: NextRequest) {
     // Fail-open and only meaningful on loopback (the surface Alex uses).
     if (parsed.action === "ensure" && currentDayPlanAccessMode() === "loopback") {
       scanAndImportBriefRelay({ store, targetLocalDate: parsed.input.localDate });
+    }
+    if (parsed.action === "settlement_start") {
+      const plan = store.getPlan(parsed.input.planId);
+      if (!plan) throw new DayPlanNotFound();
+      // Settlement completion is reconciled from canonical Forge REST state at
+      // open time. The returned versioned plan, not the browser's cached board,
+      // owns the Completed/Unresolved split. Fail open on a transient REST
+      // failure: omitting the optional ids preserves the plan's last-known
+      // decisions and still lets the Settlement dialog open.
+      try {
+        parsed.input.completedHumanTaskIds = await completedPlanTaskIds(plan);
+      } catch {
+        parsed.input.completedHumanTaskIds = undefined;
+      }
     }
     const result = parsed.action === "ensure"
       ? store.ensureDayPlan(parsed.input)

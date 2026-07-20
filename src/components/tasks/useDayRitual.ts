@@ -454,17 +454,19 @@ export default function useDayRitual({
     };
   }, [executionState, refreshExecution]);
 
-  // One poll step. When the arrival still has no brief, it re-ensures with a
-  // fresh mutation id: the route imports any just-synced relay artifact and the
-  // store runs the guarded late-attach, so the brief actually lands on the plan
-  // (a plain GET could only ever re-deliver the same artifact). The re-ensure
-  // returns the same plan id, so acceptPlan keeps the untouched flag and the
-  // existing morningBriefSyncDecision governs the swap. Falls back to a GET
-  // refresh when candidates are not fresh enough to re-ensure.
+  // One poll/heal step. When the arrival has no brief or no items, it re-ensures
+  // with fresh candidates: the store can attach a synced brief and/or rebuild
+  // the empty proposal. A plain GET could only re-deliver the same artifact.
+  // Falls back to a GET refresh when candidates are not fresh enough.
   const pollForLateBrief = useCallback(async () => {
     const current = planRef.current;
     const candidates = candidatesRef.current;
-    if (current && !current.briefId && candidatesReady && candidates.length > 0) {
+    const hasFreshCandidates = candidatesReady && candidates.length > 0;
+    if (
+      current &&
+      (!current.briefId || current.items.length === 0) &&
+      hasFreshCandidates
+    ) {
       try {
         const ensured = await ensureDayPlan({
           localDate: current.localDate,
@@ -532,13 +534,10 @@ export default function useDayRitual({
     };
   }, [enabled, view, arrivalInteracted, briefGeneration?.state, plan?.briefId, pollForLateBrief]);
 
-  // One-shot late-attach for the relay's primary case: a brief that finished
-  // while the app was closed leaves plan.briefId null with NO queued/running
-  // generation, so the interval poll above never engages. On initialization
-  // (and again when the document regains visibility), a pristine arrival sends
-  // a single attach-only ensure: the server imports any synced artifact and
-  // runs its guarded late-attach, or answers with a silent no-op. Interval
-  // polling stays gated on an active generation (unchanged).
+  // One-shot arrival heal. On initialization (and again when the document
+  // regains visibility), a pristine arrival sends one attach-only ensure when
+  // either its brief is missing or its item list is empty. The server can attach
+  // a synced brief and/or rebuild candidates in one versioned mutation.
   useEffect(() => {
     if (!enabled) return;
     const attempt = () => {
@@ -553,6 +552,8 @@ export default function useDayRitual({
           typeof document === 'undefined' || document.visibilityState === 'visible',
         candidatesReady,
         candidateCount: candidatesRef.current.length,
+        generationState: briefGeneration?.state,
+        itemCount: current?.items.length,
         alreadyAttempted: lateAttachAttemptedRef.current,
       });
       if (!open) return;
@@ -573,10 +574,14 @@ export default function useDayRitual({
   }, [
     enabled,
     plan?.id,
+    plan?.state,
     plan?.briefId,
     plan?.arrivalState,
     plan?.arrivalInteractedAt,
+    plan?.items.length,
     candidatesReady,
+    candidates.length,
+    briefGeneration?.state,
     pollForLateBrief,
   ]);
 
@@ -958,10 +963,6 @@ export default function useDayRitual({
   const openSettlement = useCallback(async () => {
     const current = planRef.current;
     if (!current) throw new Error('There is no day plan to settle.');
-    if (current.state === 'settling' && current.settlementState === 'in_progress') {
-      setView('settlement');
-      return;
-    }
     if (current.state === 'settled') throw new Error('Today is already closed.');
     await enqueueMutation('settlement_start', {}, {
       mutationId: stableMutationId('settlement-start', current),

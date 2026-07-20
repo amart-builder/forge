@@ -63,6 +63,7 @@ import {
   parseDayDumpOutput,
   validateDayDump,
   type DumpExistingCommitment,
+  type DumpResolution,
 } from "./dump-commands";
 import { markForgeOrchestratorSession } from "./orchestrator-session";
 import {
@@ -556,6 +557,7 @@ function dumpCommitmentRow(value: unknown): DumpExistingCommitment | undefined {
     id: row.id,
     title: row.title,
     kind: row.kind as DumpExistingCommitment["kind"],
+    source_quote: typeof row.source_quote === "string" ? row.source_quote : null,
   };
 }
 
@@ -582,6 +584,55 @@ async function forgeCsrfToken(
     : undefined;
   if (typeof token !== "string" || !token) throw new Error("day_plan_token_missing");
   return token;
+}
+
+function dumpEvidenceObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== "string" || !value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Preserve legacy free text below.
+  }
+  return { prior_evidence: value.slice(0, 500) };
+}
+
+function dumpResolutionEvidence(
+  resolution: DumpResolution,
+  dumpId: string,
+  timestamp: string,
+): Record<string, unknown> {
+  if (resolution.confidence !== "high") {
+    return {
+      proposed_resolution: {
+        action: resolution.action,
+        quote: resolution.quote,
+        note: resolution.note,
+        due_at: resolution.due_at,
+        confidence: resolution.confidence,
+        dump_id: dumpId,
+        proposed_at: timestamp,
+      },
+    };
+  }
+  if (resolution.action === "done") {
+    return {
+      resolved_by: "day_dump",
+      dump_id: dumpId,
+      quote: resolution.quote,
+      note: resolution.note,
+      resolved_at: timestamp,
+    };
+  }
+  return {
+    updated_by: "day_dump",
+    dump_id: dumpId,
+    quote: resolution.quote,
+    note: resolution.note,
+    updated_at: timestamp,
+  };
 }
 
 export async function runOneDayDump(
@@ -718,8 +769,12 @@ export async function runOneDayDump(
 
     const created: Array<{ id: string; title: string }> = [];
     const failed: Array<{ title: string; error: string }> = [];
-    if (validated.items.length > 0) {
-      let csrfToken: string | undefined;
+    const resolved: Array<{ id: string; title: string }> = [];
+    const updated: Array<{ id: string; title: string }> = [];
+    const needsConfirmation: Array<{ id: string; title: string }> = [];
+    const resolutionFailures: Array<{ id: string; error: string }> = [];
+    let csrfToken: string | undefined;
+    if (validated.items.length > 0 || validated.resolutions.length > 0) {
       try {
         csrfToken = await forgeCsrfToken(fetchImpl, baseUrl, fetchTimeoutMs);
       } catch (error) {
@@ -727,7 +782,13 @@ export async function runOneDayDump(
           .replace(/\s+/g, " ")
           .slice(0, 160);
         failed.push(...validated.items.map((item) => ({ title: item.title, error: reason })));
+        resolutionFailures.push(...validated.resolutions.map((item) => ({
+          id: item.commitment_id,
+          error: reason,
+        })));
       }
+    }
+    if (validated.items.length > 0) {
       // Accepted tradeoff: inserts survive a crash before completeDayDump, then stale sweep fails the unreclaimed row with an under-reported receipt.
       for (const item of csrfToken ? validated.items : []) {
         const id = randomUUID();
@@ -763,15 +824,102 @@ export async function runOneDayDump(
       }
     }
 
+    const openById = new Map(openCommitments.map((item) => [item.id, item]));
+    for (const resolution of csrfToken ? validated.resolutions : []) {
+      const id = resolution.commitment_id;
+      try {
+        const rows = await fetchRows(
+          fetchImpl,
+          baseUrl,
+          "commitments",
+          fetchTimeoutMs,
+          `select=id,title,evidence,status,due_at&id=eq.${encodeURIComponent(id)}`,
+        );
+        if (rows.length !== 1 || !rows[0] || typeof rows[0] !== "object" || Array.isArray(rows[0])) {
+          throw new Error("commitment_resolution_row_missing");
+        }
+        const row = rows[0] as Record<string, unknown>;
+        if (row.status !== "open") {
+          throw new Error("commitment_resolution_not_open");
+        }
+        const title = typeof row.title === "string"
+          ? row.title
+          : openById.get(id)?.title ?? id;
+        const evidence = {
+          ...dumpEvidenceObject(row.evidence),
+          ...dumpResolutionEvidence(resolution, claimed.id, clock().toISOString()),
+        };
+        const patch: Record<string, unknown> = { evidence: JSON.stringify(evidence) };
+        if (resolution.confidence === "high" && resolution.action === "done") {
+          patch.status = "done";
+        } else if (
+          resolution.confidence === "high" &&
+          resolution.action === "update" &&
+          resolution.due_at
+        ) {
+          patch.due_at = resolution.due_at;
+        }
+        const response = await fetchImpl(
+          `${baseUrl}/api/forge-rest/commitments` +
+            `?id=eq.${encodeURIComponent(id)}&status=eq.open&` +
+            (row.evidence === null || row.evidence === undefined
+              ? "evidence=is.null"
+              : `evidence=eq.${encodeURIComponent(String(row.evidence))}`),
+          {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Forge-CSRF": csrfToken!,
+            },
+            body: JSON.stringify(patch),
+            signal: AbortSignal.timeout(fetchTimeoutMs),
+            cache: "no-store",
+          },
+        );
+        if (!response.ok) throw new Error(`forge-rest commitments ${response.status}`);
+        const patchedRows = await response.json() as unknown;
+        if (
+          !Array.isArray(patchedRows) ||
+          patchedRows.length !== 1 ||
+          !patchedRows[0] ||
+          typeof patchedRows[0] !== "object" ||
+          Array.isArray(patchedRows[0])
+        ) {
+          throw new Error("commitment_resolution_no_longer_open");
+        }
+        if (resolution.confidence !== "high") {
+          needsConfirmation.push({ id, title });
+        } else if (resolution.action === "done") {
+          resolved.push({ id, title });
+        } else {
+          updated.push({ id, title });
+        }
+      } catch (error) {
+        resolutionFailures.push({
+          id,
+          error: (error instanceof Error ? error.message : "commitment_resolution_failed")
+            .replace(/\s+/g, " ")
+            .slice(0, 160),
+        });
+      }
+    }
+
     const receipt = JSON.stringify({
       created,
       skipped_duplicates: validated.skipped_duplicates,
       failed,
+      resolved,
+      updated,
+      needs_confirmation: needsConfirmation,
+      resolution_failures: resolutionFailures,
       counts: {
         extracted: validated.items.length,
         created: created.length,
         skipped_duplicates: validated.skipped_duplicates.length,
         failed: failed.length,
+        resolved: resolved.length,
+        updated: updated.length,
+        needs_confirmation: needsConfirmation.length,
       },
       nothing_found: validated.nothing_found,
       writer,

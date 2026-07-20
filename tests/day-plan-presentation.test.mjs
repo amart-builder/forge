@@ -20,6 +20,7 @@ import {
   selectEssentialItems,
   selectRecommendedHumanFocus,
   shouldShowNeedsSetupToStart,
+  shouldAttemptLateBriefAttach,
   shortArrivalSummary,
   shouldPollBriefGeneration,
   staleSettlementNotice,
@@ -315,6 +316,53 @@ test('brief-generation poll runs only on a visible, untouched arrival while writ
   assert.equal(shouldPollBriefGeneration({ ...base, generationState: 'failed' }), false);
   assert.equal(shouldPollBriefGeneration({ ...base, generationState: 'idle' }), false);
   assert.equal(shouldPollBriefGeneration({ ...base, generationState: undefined }), false);
+});
+
+test('client arrival-heal gate accepts the exact pristine route payload with omitted optional fields', () => {
+  const response = {
+    currentPlan: {
+      id: 'bb572818-repro',
+      localDate: '2026-07-19',
+      timezone: 'America/Detroit',
+      state: 'proposed',
+      arrivalState: 'opened',
+      settlementState: 'not_due',
+      version: 2,
+      lastMutationId: 'arrival-open:repro',
+      items: [],
+      createdAt: '2026-07-19T12:00:00.000Z',
+      updatedAt: '2026-07-19T12:00:00.000Z',
+    },
+    briefGeneration: { state: 'succeeded' },
+  };
+  const plan = response.currentPlan;
+  const input = {
+    planState: plan.state,
+    arrivalState: plan.arrivalState,
+    hasConsumedBrief: Boolean(plan.briefId),
+    arrivalInteractedAt: plan.arrivalInteractedAt,
+    interacted: false,
+    documentVisible: true,
+    candidatesReady: true,
+    candidateCount: 3,
+    generationState: response.briefGeneration.state,
+    itemCount: plan.items.length,
+    alreadyAttempted: false,
+  };
+  assert.equal('briefId' in plan, false);
+  assert.equal('arrivalInteractedAt' in plan, false);
+  assert.equal(shouldAttemptLateBriefAttach(input), true);
+  assert.equal(shouldAttemptLateBriefAttach({ ...input, alreadyAttempted: true }), false);
+  assert.equal(
+    shouldAttemptLateBriefAttach({ ...input, candidatesReady: false, candidateCount: 0 }),
+    false,
+    'a completed brief alone must NOT open the gate: an empty-candidate ensure is a server no-op that would burn the one-shot and starve the real heal once candidates arrive',
+  );
+  assert.equal(
+    shouldAttemptLateBriefAttach({ ...input, candidatesReady: true, candidateCount: 0 }),
+    false,
+    'candidatesReady without any candidate still cannot rebuild the arrival',
+  );
 });
 
 test('claude resume deep link encodes the session id', () => {

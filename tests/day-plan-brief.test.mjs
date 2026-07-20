@@ -786,6 +786,27 @@ test('brief generation state: an active row wins, running over queued, and carri
   );
 });
 
+test('brief generation state surfaces an eligible succeeded artifact instead of idle', () => {
+  const now = new Date('2026-07-14T14:00:00.000Z');
+  assert.deepEqual(
+    selectMorningBriefGeneration(
+      [genArtifact({ status: 'succeeded', briefJson: '{}', finishedAt: '2026-07-14T13:30:00.000Z' })],
+      '2026-07-14',
+      now,
+    ),
+    { state: 'succeeded' },
+  );
+  assert.deepEqual(
+    selectMorningBriefGeneration(
+      [genArtifact({ status: 'succeeded', promptVersion: 6, briefJson: '{}', finishedAt: '2026-07-14T13:30:00.000Z' })],
+      '2026-07-14',
+      now,
+    ),
+    { state: 'idle' },
+    'an obsolete artifact must not advertise itself as attachable',
+  );
+});
+
 test('brief generation state: a failure only shows inside the window, else idle', () => {
   const now = new Date('2026-07-14T14:00:00.000Z');
   // 1h ago, inside the 6h window.
@@ -978,7 +999,7 @@ test('ensure keeps at most three items from a larger deterministic pool', (t) =>
 // ---------------------------------------------------------------------------
 
 test('the brief command is the exact bounded toolless invocation', () => {
-  assert.equal(MORNING_BRIEF_PROMPT_VERSION, 6);
+  assert.equal(MORNING_BRIEF_PROMPT_VERSION, 7);
   const repoCwd = process.cwd();
   const ownerPrompt = readFileSync(path.join(repoCwd, 'prompts', 'chief-of-staff.md'), 'utf8').trimEnd();
   let command;
@@ -1172,7 +1193,7 @@ test('the brief worker validates, filters unknown tasks, and stores the artifact
     '-p', '--no-session-persistence', '--permission-mode', 'plan', '--tools', '',
     '--strict-mcp-config', '--mcp-config',
   ]);
-  assert.match(captured.input, /^# The morning brief: chief of staff mandate \(v5\)/);
+  assert.match(captured.input, /^# The morning brief: chief of staff mandate \(v7\)/);
   assert.match(captured.input, /\n\/forge-morning-brief\n/);
   // Empty queue afterwards.
   assert.equal(

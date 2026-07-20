@@ -453,6 +453,39 @@ test('settlement saves decisions immediately and writes one factual snapshot', (
   assert.equal(replay.snapshot.id, committed.snapshot.id);
 });
 
+test('settlement start reconciles canonical completion evidence and repeated refreshes are idempotent', (t) => {
+  const { store } = isolatedStore(t);
+  let plan = ensure(store).plan;
+  plan = mutate(store, plan, 'arrival_open').plan;
+  plan = mutate(store, plan, 'start_day').plan;
+
+  plan = mutate(store, plan, 'settlement_start', {
+    completedHumanTaskIds: ['task-a'],
+  }).plan;
+  assert.equal(plan.items.find((item) => item.taskId === 'task-a').decision, 'completed');
+  assert.equal(plan.items.find((item) => item.taskId === 'task-b').decision, 'accepted');
+  const version = plan.version;
+  const eventCount = store.listEvents(plan.id).length;
+
+  const repeated = mutate(store, plan, 'settlement_start', {
+    completedHumanTaskIds: ['task-a'],
+  }).plan;
+  assert.equal(repeated.version, version);
+  assert.equal(store.listEvents(plan.id).length, eventCount);
+
+  plan = mutate(store, repeated, 'settlement_start', {
+    completedHumanTaskIds: ['task-a', 'task-b'],
+  }).plan;
+  assert.equal(plan.version, version + 1);
+  assert.equal(plan.items.every((item) => item.decision === 'completed'), true);
+
+  const committed = mutate(store, plan, 'settlement_commit', {
+    completedHumanTaskIds: ['task-a', 'task-b'],
+  });
+  assert.equal(committed.plan.state, 'settled');
+  assert.deepEqual(committed.snapshot.body.completedHumanTaskIds, ['task-a', 'task-b']);
+});
+
 test('settlement writes a durable task reconciliation ledger before external task updates', (t) => {
   const { store, setClock } = isolatedStore(t);
   let plan = ensure(store).plan;

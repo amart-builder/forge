@@ -27,7 +27,7 @@ export type DayPlanApiSnapshot = DayPlanReadModel & {
   // Present only on loopback requests, and only for the brief the current plan
   // consumed at ensure time.
   morningBrief?: PublicMorningBrief;
-  // In-flight brief generation for the current plan's date. Loopback-only,
+  // Brief generation/availability for the current plan's date. Loopback-only,
   // like morningBrief; absent on non-loopback and when there is no plan.
   briefGeneration?: MorningBriefGeneration;
 };

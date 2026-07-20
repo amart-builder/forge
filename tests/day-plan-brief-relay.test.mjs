@@ -493,6 +493,170 @@ test('late-attach fails open on a corrupt stored brief', (t) => {
   void dir;
 });
 
+test('arrival open heals an empty pristine plan from fresh candidates exactly once', (t) => {
+  const { store } = fixture(t);
+  const empty = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'ensure:empty',
+    candidates: [],
+  }).plan;
+  const baselineEvents = store.listEvents(empty.id).length;
+  const healed = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'arrival-heal:1',
+    candidates: candidatePool(),
+    attachOnly: true,
+  }).plan;
+  assert.equal(healed.items.length, 3);
+  assert.equal(healed.items.every((item) => item.decision === 'preselected'), true);
+  assert.equal(healed.version, empty.version + 1);
+  const events = store.listEvents(empty.id);
+  assert.equal(events.length, baselineEvents + 1);
+  assert.equal(events.at(-1).eventType, 'ensure');
+
+  const repeat = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'arrival-heal:2',
+    candidates: candidatePool(),
+    attachOnly: true,
+  }).plan;
+  assert.equal(repeat.version, healed.version);
+  assert.deepEqual(
+    repeat.items.map((item) => [item.id, item.taskId, item.position, item.decision]),
+    healed.items.map((item) => [item.id, item.taskId, item.position, item.decision]),
+  );
+  assert.equal(store.listEvents(empty.id).length, events.length);
+});
+
+test('arrival open heals an empty plan and attaches a succeeded brief in the existing late-attach mutation', (t) => {
+  const { store } = fixture(t);
+  const empty = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'ensure:empty',
+    candidates: [],
+  }).plan;
+  const artifact = succeededArtifact(store, briefJson());
+  const healed = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'arrival-heal:brief',
+    candidates: candidatePool(),
+    attachOnly: true,
+  }).plan;
+  assert.equal(healed.briefId, artifact.id);
+  assert.equal(healed.items.length, 3);
+  assert.equal(healed.version, empty.version + 1);
+  assert.equal(
+    store.listEvents(empty.id).find((event) => event.id === 'arrival-heal:brief').eventType,
+    'brief_attach',
+  );
+});
+
+test('arrival open heals a brief-backed plan that was originally created with zero candidates', (t) => {
+  const { store } = fixture(t);
+  const artifact = succeededArtifact(store, briefJson());
+  const empty = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'ensure:brief-backed-empty',
+    candidates: [],
+  }).plan;
+  assert.equal(empty.briefId, artifact.id);
+  assert.equal(empty.items.length, 0);
+  assert.equal(shouldAttemptLateBriefAttach({
+    planState: empty.state,
+    arrivalState: empty.arrivalState,
+    hasConsumedBrief: true,
+    itemCount: 0,
+    arrivalInteractedAt: empty.arrivalInteractedAt,
+    interacted: false,
+    documentVisible: true,
+    candidatesReady: true,
+    candidateCount: candidatePool().length,
+    alreadyAttempted: false,
+  }), true);
+
+  const healed = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'arrival-heal:brief-backed',
+    candidates: candidatePool(),
+    attachOnly: true,
+  }).plan;
+  assert.equal(healed.briefId, artifact.id);
+  assert.equal(healed.items.length, 3);
+  assert.equal(healed.version, empty.version + 1);
+});
+
+test('arrival heal leaves non-empty, active, and settled plans untouched', (t) => {
+  const { store } = fixture(t);
+  const nonEmpty = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'ensure:non-empty',
+    candidates: candidatePool(),
+  }).plan;
+  const originalItems = store.getPlan(nonEmpty.id).items;
+  const untouched = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'heal:non-empty',
+    candidates: candidatePool().slice().reverse(),
+    attachOnly: true,
+  }).plan;
+  assert.equal(untouched.version, nonEmpty.version);
+  assert.deepEqual(untouched.items, originalItems);
+
+  let plan = store.mutateDayPlan({
+    planId: nonEmpty.id,
+    mutationId: 'open:guard',
+    expectedVersion: nonEmpty.version,
+    action: 'arrival_open',
+  }).plan;
+  plan = store.mutateDayPlan({
+    planId: plan.id,
+    mutationId: 'start:guard',
+    expectedVersion: plan.version,
+    action: 'start_day',
+  }).plan;
+  const active = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'heal:active',
+    candidates: candidatePool(),
+    attachOnly: true,
+  }).plan;
+  assert.equal(active.state, 'active');
+  assert.equal(active.version, plan.version);
+
+  plan = store.mutateDayPlan({
+    planId: active.id,
+    mutationId: 'settlement-start:guard',
+    expectedVersion: active.version,
+    action: 'settlement_start',
+  }).plan;
+  plan = store.mutateDayPlan({
+    planId: plan.id,
+    mutationId: 'settlement-commit:guard',
+    expectedVersion: plan.version,
+    action: 'settlement_commit',
+    completedHumanTaskIds: plan.items.map((item) => item.taskId),
+  }).plan;
+  const settled = store.ensureDayPlan({
+    localDate: DATE,
+    timezone: TZ,
+    mutationId: 'heal:settled',
+    candidates: candidatePool(),
+    attachOnly: true,
+  }).plan;
+  assert.equal(settled.state, 'settled');
+  assert.equal(settled.version, plan.version);
+});
+
 // ---------------------------------------------------------------------------
 // Review finding 5: strict relay validation — UUID ids, strict ISO ordering,
 // required finish time, bounded future skew, filename/envelope identity.

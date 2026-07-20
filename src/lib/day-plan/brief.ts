@@ -10,7 +10,8 @@ import type {
 // change regenerates the brief even when the underlying sources are unchanged.
 // v6: computed open commitments, clarification needs, and deterministic gap
 // detectors are available to the chief-of-staff writer.
-export const MORNING_BRIEF_PROMPT_VERSION = 6;
+// v7: day-dump commitment resolutions and updates are visible to the writer.
+export const MORNING_BRIEF_PROMPT_VERSION = 7;
 export const MORNING_BRIEF_SCHEMA_VERSION = 2;
 
 export type MorningBriefStatus = "queued" | "running" | "succeeded" | "failed";
@@ -682,10 +683,15 @@ export function selectEligibleMorningBrief(
     )[0];
 }
 
-export type MorningBriefGenerationState = "idle" | "queued" | "running" | "failed";
+export type MorningBriefGenerationState =
+  | "idle"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed";
 
-// The in-flight generation state the arrival needs, with the start time when a
-// row has actually begun. This carries no brief content: only the coarse
+// The generation/availability state the arrival needs, with the start time when
+// a row has actually begun. This carries no brief content: only the coarse
 // lifecycle and, at most, a timestamp.
 export type MorningBriefGeneration = {
   state: MorningBriefGenerationState;
@@ -699,8 +705,9 @@ export const MORNING_BRIEF_FAILED_WINDOW_HOURS = 6;
 
 // Derives the generation state for a target date from its brief rows (pure; the
 // caller supplies now). An active queued/running row wins, running first since
-// it carries a real start time; otherwise the most recent failure inside the
-// window; otherwise idle. Never surfaces brief_json — only lifecycle + startedAt.
+// it carries a real start time; otherwise an eligible succeeded artifact is
+// surfaced so a pristine arrival can attach it, then the most recent failure
+// inside the window, otherwise idle. Never surfaces brief_json.
 export function selectMorningBriefGeneration(
   artifacts: readonly MorningBriefArtifact[],
   targetLocalDate: string,
@@ -732,6 +739,21 @@ export function selectMorningBriefGeneration(
   if (queued) {
     return { state: "queued", ...(queued.startedAt ? { startedAt: queued.startedAt } : {}) };
   }
+
+  const succeeded = forDate
+    .filter(
+      (artifact) =>
+        artifact.status === "succeeded" &&
+        artifact.promptVersion === MORNING_BRIEF_PROMPT_VERSION &&
+        artifact.schemaVersion === MORNING_BRIEF_SCHEMA_VERSION &&
+        Boolean(artifact.briefJson),
+    )
+    .sort((left, right) =>
+      (right.finishedAt ?? right.createdAt).localeCompare(left.finishedAt ?? left.createdAt) ||
+      right.createdAt.localeCompare(left.createdAt) ||
+      right.id.localeCompare(left.id),
+    )[0];
+  if (succeeded) return { state: "succeeded" };
 
   const windowHours = options.failedWindowHours ?? MORNING_BRIEF_FAILED_WINDOW_HOURS;
   const cutoff = now.getTime() - windowHours * 60 * 60 * 1000;

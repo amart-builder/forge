@@ -5,6 +5,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { NextRequest } from 'next/server';
 import { buildDayPlanCandidates } from '../src/lib/day-plan/candidates.ts';
+import {
+  MORNING_BRIEF_PROMPT_VERSION,
+  MORNING_BRIEF_SCHEMA_VERSION,
+} from '../src/lib/day-plan/brief.ts';
 import { createDayPlanStore } from '../src/lib/day-plan/store.ts';
 import {
   GET,
@@ -262,7 +266,10 @@ test('GET exposes briefGeneration on loopback and strips it for a remote session
     mutationId: 'ensure:2026-07-10',
     candidates: [candidate()],
   });
-  store.enqueueMorningBrief('2026-07-10', { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 });
+  const queued = store.enqueueMorningBrief(
+    '2026-07-10',
+    { modelAlias: 'opus', effort: 'high', budgetUsd: 1.5 },
+  ).brief;
 
   process.env.FORGE_DAY_PLAN_ACCESS_MODE = 'loopback';
   const loopback = await GET(
@@ -275,8 +282,27 @@ test('GET exposes briefGeneration on loopback and strips it for a remote session
   assert.equal(loopbackBody.briefGeneration.state, 'queued');
   assert.ok(loopbackBody.currentPlan);
 
+  store.claimNextMorningBrief();
+  store.recordMorningBriefInputs(queued.id, {
+    inputHash: 'route-succeeded-brief',
+    sourceManifest: { sources: [], coverage: {}, trims: [], totalChars: 0 },
+    promptVersion: MORNING_BRIEF_PROMPT_VERSION,
+    schemaVersion: MORNING_BRIEF_SCHEMA_VERSION,
+  });
+  store.completeMorningBrief(queued.id, '{}');
+  const completed = await GET(
+    new NextRequest('http://localhost:3200/api/day-plan', {
+      headers: { host: 'localhost:3200', 'x-forwarded-for': '127.0.0.1' },
+    }),
+  );
+  assert.equal(completed.status, 200);
+  const completedBody = await completed.json();
+  assert.equal(completedBody.briefGeneration.state, 'succeeded');
+  assert.equal('briefId' in completedBody.currentPlan, false);
+  assert.equal('arrivalInteractedAt' in completedBody.currentPlan, false);
+
   // The same store over a remote session strips briefGeneration exactly like
-  // brief content: a remote caller never learns a brief is being written.
+  // brief content: a remote caller never learns a brief exists or is being written.
   process.env.FORGE_DAY_PLAN_ACCESS_MODE = 'session';
   process.env.FORGE_DAY_PLAN_REMOTE_TOKEN = 'secret-value';
   process.env.FORGE_ALLOWED_HOSTS = 'forge.example.test';
@@ -294,6 +320,119 @@ test('GET exposes briefGeneration on loopback and strips it for a remote session
   assert.equal(remoteBody.briefGeneration, undefined);
   assert.ok(remoteBody.currentPlan);
   assert.equal(remoteBody.currentPlan.briefId, undefined);
+});
+
+test('settlement opens with last-known state on a REST hiccup, then reconciles on reopen', async (t) => {
+  const dir = path.join(os.tmpdir(), `forge-route-settlement-${process.pid}-${Date.now()}`);
+  mkdirSync(dir, { recursive: true });
+  const store = createDayPlanStore({ dbPath: path.join(dir, 'forge.db') });
+  const globalRef = globalThis;
+  const previousStore = globalRef.__forgeDayPlanStore;
+  const previousFetch = globalRef.fetch;
+  const previousAccess = process.env.FORGE_DAY_PLAN_ACCESS_MODE;
+  const previousWebUrl = process.env.FORGE_BRIEF_WEB_BASE;
+  globalRef.__forgeDayPlanStore = store;
+  process.env.FORGE_DAY_PLAN_ACCESS_MODE = 'loopback';
+  process.env.FORGE_BRIEF_WEB_BASE = 'http://forge.test';
+  t.after(() => {
+    if (previousStore === undefined) delete globalRef.__forgeDayPlanStore;
+    else globalRef.__forgeDayPlanStore = previousStore;
+    globalRef.fetch = previousFetch;
+    if (previousAccess === undefined) delete process.env.FORGE_DAY_PLAN_ACCESS_MODE;
+    else process.env.FORGE_DAY_PLAN_ACCESS_MODE = previousAccess;
+    if (previousWebUrl === undefined) delete process.env.FORGE_BRIEF_WEB_BASE;
+    else process.env.FORGE_BRIEF_WEB_BASE = previousWebUrl;
+    store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  let plan = store.ensureDayPlan({
+    localDate: '2026-07-10',
+    timezone: 'America/Los_Angeles',
+    mutationId: 'ensure:settlement',
+    candidates: [candidate()],
+  }).plan;
+  plan = store.mutateDayPlan({
+    planId: plan.id,
+    mutationId: 'open:settlement',
+    expectedVersion: plan.version,
+    action: 'arrival_open',
+  }).plan;
+  plan = store.mutateDayPlan({
+    planId: plan.id,
+    mutationId: 'start:settlement',
+    expectedVersion: plan.version,
+    action: 'start_day',
+  }).plan;
+  assert.equal(plan.items[0].decision, 'accepted');
+
+  const internalCalls = [];
+  let restAvailable = false;
+  globalRef.fetch = async (url) => {
+    internalCalls.push(String(url));
+    if (!restAvailable) return new Response('temporary failure', { status: 503 });
+    if (String(url).includes('/api/forge-rest/tasks')) {
+      return new Response(JSON.stringify([{
+        id: 'task-a',
+        title: 'Finish the proposal',
+        status: 'done',
+        column_id: 'done-column',
+        updated_at: '2026-07-10T23:00:00.000Z',
+      }]), { status: 200 });
+    }
+    if (String(url).includes('/api/forge-rest/task_columns')) {
+      return new Response(JSON.stringify([{ id: 'done-column', name: 'Done' }]), { status: 200 });
+    }
+    throw new Error(`unexpected internal fetch: ${url}`);
+  };
+
+  const tokenResponse = await GET(new NextRequest('http://localhost:3200/api/day-plan', {
+    headers: { host: 'localhost:3200', 'x-forwarded-for': '127.0.0.1' },
+  }));
+  const token = (await tokenResponse.json()).csrfToken;
+  const response = await POST(new NextRequest('http://localhost:3200/api/day-plan', {
+    method: 'POST',
+    headers: {
+      host: 'localhost:3200',
+      origin: 'http://localhost:3200',
+      'content-type': 'application/json',
+      'x-forge-csrf': token,
+    },
+    body: JSON.stringify({
+      action: 'settlement_start',
+      planId: plan.id,
+      mutationId: `settlement-start:${plan.id}:${plan.version}`,
+      expectedVersion: plan.version,
+    }),
+  }));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.plan.state, 'settling');
+  assert.equal(body.plan.items[0].decision, 'accepted');
+  assert.equal(internalCalls.some((url) => url.includes('/api/forge-rest/tasks')), true);
+  assert.equal(internalCalls.some((url) => url.includes('/api/forge-rest/task_columns')), true);
+
+  restAvailable = true;
+  internalCalls.length = 0;
+  const reopened = await POST(new NextRequest('http://localhost:3200/api/day-plan', {
+    method: 'POST',
+    headers: {
+      host: 'localhost:3200',
+      origin: 'http://localhost:3200',
+      'content-type': 'application/json',
+      'x-forge-csrf': token,
+    },
+    body: JSON.stringify({
+      action: 'settlement_start',
+      planId: body.plan.id,
+      mutationId: `settlement-reopen:${body.plan.id}:${body.plan.version}`,
+      expectedVersion: body.plan.version,
+    }),
+  }));
+  assert.equal(reopened.status, 200);
+  const reopenedBody = await reopened.json();
+  assert.equal(reopenedBody.plan.state, 'settling');
+  assert.equal(reopenedBody.plan.items[0].decision, 'completed');
 });
 
 test('non-loopback day-plan access requires the separate remote session secret', () => {

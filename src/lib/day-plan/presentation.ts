@@ -410,7 +410,7 @@ export function shouldPollBriefGeneration(input: {
   documentVisible: boolean;
   interacted: boolean;
   hasConsumedBrief: boolean;
-  generationState?: 'idle' | 'queued' | 'running' | 'failed';
+  generationState?: 'idle' | 'queued' | 'running' | 'succeeded' | 'failed';
 }): boolean {
   if (input.view !== 'arrival') return false;
   if (!input.documentVisible) return false;
@@ -419,14 +419,9 @@ export function shouldPollBriefGeneration(input: {
   return input.generationState === 'queued' || input.generationState === 'running';
 }
 
-// Pure gate for the ONE-SHOT attach-only ensure fired at initialization and on
-// regaining document visibility. It covers the relay's primary case, which the
-// generation poll above cannot: a brief that finished while the app was closed
-// leaves the plan without a brief and NO queued/running generation, so nothing
-// would ever ask the server to run its guarded late-attach. Fires only for a
-// pristine, proposed, due/opened arrival with fresh candidates, at most once
-// per page load or visibility regain (alreadyAttempted); the durable
-// arrival_interacted_at marker or any local interaction closes it for good.
+// Pure gate for the ONE-SHOT attach/heal ensure fired at initialization and on
+// regaining document visibility. It covers both a brief that finished while the
+// app was closed and an empty plan created before board candidates existed.
 export function shouldAttemptLateBriefAttach(input: {
   planState?: string;
   arrivalState?: string;
@@ -436,16 +431,29 @@ export function shouldAttemptLateBriefAttach(input: {
   documentVisible: boolean;
   candidatesReady: boolean;
   candidateCount: number;
+  generationState?: 'idle' | 'queued' | 'running' | 'succeeded' | 'failed';
+  itemCount?: number;
   alreadyAttempted: boolean;
 }): boolean {
   if (input.alreadyAttempted) return false;
   if (!input.documentVisible) return false;
-  if (input.planState !== 'proposed') return false;
-  if (input.arrivalState !== 'due' && input.arrivalState !== 'opened') return false;
-  if (input.hasConsumedBrief) return false;
+  if (input.planState !== 'draft' && input.planState !== 'proposed') return false;
+  if (
+    input.arrivalState !== 'not_due' &&
+    input.arrivalState !== 'due' &&
+    input.arrivalState !== 'opened'
+  ) return false;
+  if (input.hasConsumedBrief && input.itemCount !== 0) return false;
   if (input.arrivalInteractedAt) return false;
   if (input.interacted) return false;
-  // Never ask the server to overlay onto missing/stale evidence.
+  // The heal always needs fresh board candidates. The server rebuilds the
+  // arrival's items from them and overlays any eligible brief in the same
+  // mutation, so an empty candidate list can neither populate items nor attach a
+  // brief (attach-only + no candidates is a silent server no-op). A completed
+  // brief on its own must NOT open this gate: firing without candidates would
+  // burn the one-shot on a guaranteed no-op and starve the real heal that lands
+  // once candidates arrive. The brief still gets attached — the effect re-runs
+  // when candidates become ready and this gate opens then.
   return input.candidatesReady && input.candidateCount > 0;
 }
 

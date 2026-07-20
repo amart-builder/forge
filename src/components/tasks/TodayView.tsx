@@ -1067,11 +1067,7 @@ function TodayExperience({
       return;
     }
     const completedHumanTaskIds = currentPlan.items
-      .filter((item) => {
-        if (item.decision !== 'accepted') return false;
-        const task = tasks.find((candidate) => candidate._id === item.taskId);
-        return Boolean(task && (task.status === 'done' || task.columnId === doneColumn?._id));
-      })
+      .filter((item) => item.decision === 'completed')
       .map((item) => item.taskId);
     setSurfaceError(undefined);
     try {
@@ -1098,7 +1094,7 @@ function TodayExperience({
           : "Forge couldn't finish reconciling the closed day.",
       );
     }
-  }, [candidateEvidence?.freshness, dayRitual, doneColumn?._id, notStartedColumn, reconcileDayPlanActions, settlementNote, tasks]);
+  }, [candidateEvidence?.freshness, dayRitual, notStartedColumn, reconcileDayPlanActions, settlementNote]);
 
   useEffect(() => {
     if (
@@ -1745,34 +1741,25 @@ function TodayExperience({
     ].filter(Boolean);
     return parts.length > 0 ? `${parts.join('. ')}.` : undefined;
   }, [dayRitual.latestSnapshot]);
-  const planTaskIds = useMemo(
-    () => new Set(
-      orderedPlanItems
-        .filter((item) => item.decision === 'accepted')
-        .map((item) => item.taskId),
-    ),
-    [orderedPlanItems],
-  );
-  const completedForSettlement = tasks
-    .filter(
-      (task) =>
-        planTaskIds.has(task._id) &&
-        (task.status === 'done' || task.columnId === doneColumn?._id),
-    )
-    .map((task) => ({
-      id: task._id,
-      title: task.title,
-      detail: task.updatedAt > 0
-        ? `Completed ${new Date(task.updatedAt).toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            timeZone: dayRitual.plan?.timezone,
-          })}`
-        : 'Marked complete',
-    }));
-  const completedPlanTaskIds = new Set(completedForSettlement.map((item) => item.id));
+  const completedForSettlement = orderedPlanItems
+    .filter((item) => item.decision === 'completed')
+    .map((item) => {
+      const task = tasks.find((candidate) => candidate._id === item.taskId);
+      return {
+        id: item.taskId,
+        title: item.title,
+        detail: task && task.updatedAt > 0 &&
+          (task.status === 'done' || task.columnId === doneColumn?._id)
+          ? `Completed ${new Date(task.updatedAt).toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              timeZone: dayRitual.plan?.timezone,
+            })}`
+          : 'Marked complete',
+      };
+    });
   const unresolvedForSettlement = orderedPlanItems
-    .filter((item) => item.decision === 'accepted' && !completedPlanTaskIds.has(item.taskId))
+    .filter((item) => item.decision === 'accepted')
     .map((item) => ({ item, title: item.title, outcome: item.outcome }));
   const settlementDecisions = Object.fromEntries(
     orderedPlanItems.map((item) => [item.id, item.settlementDecision?.disposition]),

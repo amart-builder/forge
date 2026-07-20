@@ -451,6 +451,18 @@ function updateRows(
     return { status: 400, body: "Refusing to update without a filter." };
   }
 
+  // Capture the matched primary keys before mutating so the returned
+  // representation is the rows this update actually changed, even when the
+  // update rewrites a column the filter tested (PostgREST RETURNING semantics).
+  // Re-selecting with the same clause after the update would drop exactly those
+  // rows, which breaks compare-and-swap callers that filter on the value they
+  // are about to overwrite.
+  const matchedIds = (
+    db.prepare(`SELECT id FROM "${table}"${clause}`).all(...args) as {
+      id: unknown;
+    }[]
+  ).map((r) => r.id);
+
   const row = encodeRow(table, { ...(payload as Record<string, unknown>) });
   delete row.id; // never reassign the primary key
   row.updated_at = nowIso();
@@ -465,9 +477,11 @@ function updateRows(
     );
   }
 
+  if (matchedIds.length === 0) return { status: 200, body: [] };
+  const placeholders = matchedIds.map(() => "?").join(", ");
   const rows = db
-    .prepare(`SELECT * FROM "${table}"${clause}`)
-    .all(...args) as Record<string, unknown>[];
+    .prepare(`SELECT * FROM "${table}" WHERE id IN (${placeholders})`)
+    .all(...matchedIds) as Record<string, unknown>[];
   return { status: 200, body: rows.map((r) => decodeRow(table, r)) };
 }
 

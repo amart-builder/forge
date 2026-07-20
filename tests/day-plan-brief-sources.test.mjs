@@ -453,6 +453,173 @@ test('computed commitments source exposes open loops, clarification, and factual
   assert.match(source.content, /Draft the FAQ overnight \| recorded — overnight execution not yet live/);
 });
 
+test('commitments source surfaces recent note resolutions and updates in the required section order', async (t) => {
+  const { dir, options } = fixture(t);
+  disableExternalSources(t, dir);
+  const recent = new Date(NOW.getTime() - 35 * 60 * 60 * 1000).toISOString();
+  const expired = new Date(NOW.getTime() - 37 * 60 * 60 * 1000).toISOString();
+  const open = [
+    {
+      id: 'updated-1',
+      kind: 'promise',
+      title: 'Meet Brian',
+      source_kind: 'brain_dump',
+      source_quote: 'Get the meeting time.',
+      confidence: 'high',
+      confirmed: true,
+      status: 'open',
+      evidence: JSON.stringify({
+        updated_by: 'day_dump',
+        updated_at: recent,
+        quote: 'Brian confirmed Tuesday 2pm.',
+      }),
+      created_at: recent,
+      updated_at: recent,
+    },
+    {
+      id: 'proposed-1',
+      kind: 'follow_up',
+      title: 'Gary checklist',
+      source_kind: 'brain_dump',
+      source_quote: 'Check on Gary.',
+      confidence: 'medium',
+      confirmed: false,
+      status: 'open',
+      evidence: JSON.stringify({
+        proposed_resolution: {
+          action: 'done',
+          quote: "Gary's checklist should be handled.",
+          confidence: 'medium',
+        },
+      }),
+      created_at: recent,
+      updated_at: recent,
+    },
+  ];
+  const done = [
+    {
+      id: 'resolved-1',
+      title: 'Get the Boomer AI jam time',
+      status: 'done',
+      evidence: JSON.stringify({
+        resolved_by: 'day_dump',
+        resolved_at: recent,
+        quote: `Brian confirmed Tuesday 2pm ${'x'.repeat(180)}`,
+      }),
+      updated_at: recent,
+    },
+    {
+      id: 'resolved-old',
+      title: 'Old resolution',
+      status: 'done',
+      evidence: JSON.stringify({
+        resolved_by: 'day_dump',
+        resolved_at: expired,
+        quote: 'This is outside the cutoff.',
+      }),
+      updated_at: expired,
+    },
+  ];
+  const collected = await collectMorningBriefSources({
+    ...options,
+    fetchImpl: async (url) => {
+      const value = String(url);
+      if (value.includes('/api/forge-rest/commitments')) {
+        return new Response(JSON.stringify(value.includes('status=eq.done') ? done : open), { status: 200 });
+      }
+      return forgeRowsResponse(url);
+    },
+  });
+  const content = collected.sources.find((entry) => entry.id === 'commitments').content;
+  assert.match(content, /Meet Brian.*updated_from_your_notes/);
+  assert.match(content, /Gary checklist \| you said: "Gary's checklist should be handled\." \| proposed: close/);
+  assert.match(content, /RESOLVED FROM YOUR NOTES\n- Get the Boomer AI jam time \| you said: "Brian confirmed Tuesday 2pm x+/);
+  assert.equal(content.includes('Old resolution'), false);
+  assert.equal(content.match(/Brian confirmed Tuesday 2pm x+/)[0].length < 180, true);
+  const headings = [
+    'OPEN COMMITMENTS',
+    'NEEDS CLARIFICATION',
+    'RESOLVED FROM YOUR NOTES',
+    'CONTENT QUOTA',
+    'OVERNIGHT REQUESTS',
+  ];
+  assert.deepEqual([...headings].sort((left, right) => content.indexOf(left) - content.indexOf(right)), headings);
+
+  const empty = await collectMorningBriefSources({
+    ...options,
+    fetchImpl: async (url) => {
+      if (String(url).includes('/api/forge-rest/')) {
+        return new Response('[]', { status: 200 });
+      }
+      return forgeRowsResponse(url);
+    },
+  });
+  assert.equal(
+    empty.sources.find((entry) => entry.id === 'commitments').content.includes('RESOLVED FROM YOUR NOTES'),
+    false,
+  );
+});
+
+test('commitments source marks either partial fetch failure without asserting false emptiness', async (t) => {
+  const { dir, options } = fixture(t);
+  disableExternalSources(t, dir);
+  setEnv(t, { FORGE_SUPERNOVA_ENGINE_DIR: path.join(dir, 'missing-engine') });
+  const recent = new Date(NOW.getTime() - 60_000).toISOString();
+  const open = [{
+    id: 'open-1',
+    kind: 'follow_up',
+    title: 'Send the follow-up',
+    source_kind: 'manual',
+    source_quote: 'Send the follow-up.',
+    confidence: 'high',
+    confirmed: true,
+    status: 'open',
+    created_at: recent,
+    updated_at: recent,
+  }];
+  const done = [{
+    id: 'done-1',
+    title: 'Confirm the meeting time',
+    status: 'done',
+    evidence: JSON.stringify({
+      resolved_by: 'day_dump',
+      resolved_at: recent,
+      quote: 'The meeting time is confirmed.',
+    }),
+    updated_at: recent,
+  }];
+  const collect = (failedStatus) => collectMorningBriefSources({
+    ...options,
+    fetchImpl: async (url) => {
+      const value = String(url);
+      if (value.includes('/api/forge-rest/commitments')) {
+        const status = value.includes('status=eq.done') ? 'done' : 'open';
+        if (status === failedStatus) throw new Error(`${status} commitments unavailable`);
+        return new Response(JSON.stringify(status === 'done' ? done : open), { status: 200 });
+      }
+      return forgeRowsResponse(url);
+    },
+  });
+
+  const openFailed = (await collect('open')).sources.find((entry) => entry.id === 'commitments');
+  assert.match(openFailed.content, /^OPEN COMMITMENTS\nUnavailable \(fetch failed\)\./);
+  assert.equal(openFailed.content.includes('OPEN COMMITMENTS\nNone.'), false);
+  assert.match(openFailed.content, /RESOLVED FROM YOUR NOTES\n- Confirm the meeting time/);
+  assert.equal(
+    openFailed.note,
+    'error:open commitments unavailable;content_engine_unavailable',
+    'the partial fetch note composes with the independent quota-source note',
+  );
+
+  const doneFailed = (await collect('done')).sources.find((entry) => entry.id === 'commitments');
+  assert.match(doneFailed.content, /OPEN COMMITMENTS\nFOLLOW_UP:\n- Send the follow-up/);
+  assert.equal(doneFailed.content.includes('RESOLVED FROM YOUR NOTES'), false);
+  assert.equal(
+    doneFailed.note,
+    'error:done commitments unavailable;content_engine_unavailable',
+  );
+});
+
 test('real source ids overwrite coverage fallbacks, while failed fetches remain missing', async (t) => {
   const { dir, options } = fixture(t);
   const tokenPath = path.join(dir, 'jarvis-token');
