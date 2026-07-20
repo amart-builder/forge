@@ -6,6 +6,12 @@ import { minimalChildEnvironment, signalProcessGroup } from "../claude-execution
 
 type SpawnImpl = typeof spawn;
 
+const BUDDY_SEED_SYSTEM_PROMPT = [
+  "This session was started from Forge. Do not read files, use tools, edit anything, or begin the work. Reply with at most 2-3 short bullets outlining how you would approach the request, then STOP. The request below is context for the future desktop session.",
+  "",
+  "If a human resumes this session interactively, invoke the Skill tool with skill: orchestrator before continuing the task.",
+].join("\n");
+
 export function buildBuddySeedCommand(input: {
   sessionId: string;
   dir: string;
@@ -22,11 +28,12 @@ export function buildBuddySeedCommand(input: {
       "--effort", "high",
       "--output-format", "json",
       "--name", input.title,
+      "--append-system-prompt", BUDDY_SEED_SYSTEM_PROMPT,
       "--max-budget-usd", "1.00",
       "--disable-slash-commands",
     ],
     cwd: input.dir,
-    stdin: `# ${input.title.replace(/\s+/g, " ").trim()}\n\nThis session was started from Forge. Do not read files, use tools, edit anything, or begin the work. Reply with at most 2-3 short bullets outlining how you would approach the request, then STOP. The request below is context for the future desktop session.\n\nUSER_REQUEST:\n${input.prompt}\n\nIf a human resumes this session interactively, invoke the Skill tool with skill: orchestrator before continuing the task.`,
+    stdin: `# ${input.title.replace(/\s+/g, " ").trim()}\n\n${input.prompt}`,
   };
 }
 

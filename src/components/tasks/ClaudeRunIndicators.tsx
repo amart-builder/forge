@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { DayPlanExecutionRunStatus } from '@/lib/day-plan/types';
+import type { DayPlanExecutionMode, DayPlanExecutionRunStatus } from '@/lib/day-plan/types';
 import { claudeResumeUrl, executionRunStatusLabel } from '@/lib/day-plan/presentation';
 
 // Non-interactive status pill. Rendered as a <span> so it can live inside a <button>
@@ -36,12 +36,14 @@ export function RunStatusChip({
 // the app opened.
 export function OpenInClaudeCode({
   sessionId,
+  mode,
   title,
   label = 'Open in Claude Code',
   resumeCommand,
   className = '',
 }: {
   sessionId: string;
+  mode?: DayPlanExecutionMode;
   title?: string;
   label?: string;
   resumeCommand?: string;
@@ -74,6 +76,11 @@ export function OpenInClaudeCode({
       >
         {label}
       </button>
+      {mode === 'plan_review' && (
+        <span className="max-w-72 text-left text-[10px] leading-relaxed text-muted-foreground">
+          Opens in the app&apos;s default mode. Switch the mode picker to Plan to review changes before they happen.
+        </span>
+      )}
       {showCopyFallback && resumeCommand && (
         <button
           type="button"

@@ -24,7 +24,7 @@
 
 ---
 
-**Last updated:** 2026-07-20 (plan-run grounding and degenerate-output validation complete locally; not committed)
+**Last updated:** 2026-07-20 (task-first Claude seeds and plan-resume mode hint complete locally; not committed)
 **State:** The MacBook's loopback-only `com.forge.web` now serves the wide Morning Arrival with Claude-powered task creation, completion, editing, ownership, and reprioritization, plus explicit execution modes, durable background runs, and reviewable results. `com.forge.claude-worker` is installed and healthy. Autonomous execution remains disabled until an allowlisted project is deliberately configured. The 8 a.m. trigger is still not installed. Email triage remains a separate Mini service and was not changed.
 
 ## North Star Goal
@@ -57,9 +57,17 @@ Explicitly rejected: always-running general agent, autonomous external sends, cu
 
 ## Current State
 
+### 2026-07-20 Task-first Claude seeds and plan-resume mode hint (working tree)
+
+- Execution and Buddy seed commands now put Forge role/setup instructions in `--append-system-prompt`; stdin starts with `# <task title>` and immediately carries the task fields or user request so Claude Desktop can derive a useful session title instead of “General Coding Session.” Existing safety, deliverable, and orchestrator-resume instructions were preserved.
+- Every day-plan `Open in Claude Code` affordance receives the run mode. Plan-review runs show a muted warning that the app opens in its default mode and Alex must switch the picker to Plan; autonomous and generic Buddy session links do not show it.
+- Preserved the separately added uncommitted $3.00 default budget for plan-review and autonomous execution seeds.
+- Verified: TypeScript, scoped ESLint, `git diff --check`, and 34 focused worker, Buddy spawn, day-plan execution, and mode-hint render tests. No live Claude session or app handoff was started. No commit was created.
+- Next gate: after intentional deployment, start one real Forge plan and one Buddy session to confirm their desktop sidebar titles use the task title, then verify the Plan-mode caption is legible on the live card.
+
 ### 2026-07-20 Plan-run grounding and degenerate-output validation (working tree)
 
-- Plan-review execution seeds now receive read-only `Read,Glob,Grep` tools in permission mode `plan`; their default budget is $2.00, explicit run budgets still win, and autonomous tools plus its $3.00 default are unchanged.
+- Plan-review execution seeds now receive read-only `Read,Glob,Grep` tools in permission mode `plan`; their default budget is $3.00, explicit run budgets still win, and autonomous tools plus its $3.00 default are unchanged.
 - The plan prompt requires real tool reads and real path citations, and tells the model to stop honestly if tools are unavailable instead of simulating tool output.
 - Exit-zero plan results now fail with `plan_degenerate` when their substantive text is under 200 characters or the captured Claude `stream-json` output contains zero real `tool_use` events. The zero-tool gate is intentionally unconditional: a genuine no-file strategy plan may cost one Retry, accepted because every Forge run cwd has readable context and a fabricated 1,681-character plan passed the substance check. The store also refuses an exit-zero plan transition with missing or short result text, so failed runs use the existing board failure path instead of `plan_ready` or `ready_to_join`.
 - Validation passed: TypeScript, scoped ESLint, `git diff --check`, and 32 focused worker/execution tests. The exact stalled Supernova one-liner and a substantive multi-paragraph plan with zero tool use both persist as failed with exit code 0 and `plan_degenerate`, expose no session handle, and never open a session; a grounded three-paragraph plan with a real `Read` event passes. No live Claude run was started.

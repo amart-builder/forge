@@ -332,6 +332,7 @@ export default function ExecutionConfigPanel({
         <div className="panel-pop-in mt-2 flex justify-end">
           <OpenInClaudeCode
             sessionId={openableRun.claudeSessionId}
+            mode={openableRun.mode}
             title={ariaTitle}
             label="Review plan"
             resumeCommand={openableRun.resumeCommand}

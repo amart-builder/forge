@@ -2015,6 +2015,7 @@ function TodayExperience({
                     focusedBoardExecution.run?.claudeSessionId ? (
                     <OpenInClaudeCode
                       sessionId={focusedBoardExecution.run.claudeSessionId}
+                      mode={focusedBoardExecution.run.mode}
                       title={focusedTask.title}
                       label="Review plan"
                       resumeCommand={focusedBoardExecution.run.resumeCommand}
@@ -2168,6 +2169,7 @@ function TodayExperience({
                       ) : execution.run && execution.presentation.reviewable && execution.run.claudeSessionId ? (
                         <OpenInClaudeCode
                           sessionId={execution.run.claudeSessionId}
+                          mode={execution.run.mode}
                           title={task.title}
                           label={execution.presentation.statusLabel}
                           resumeCommand={execution.run.resumeCommand}
