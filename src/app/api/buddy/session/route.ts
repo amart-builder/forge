@@ -22,6 +22,7 @@ function sessionPayload() {
     totalCostUsd: state.totalCostUsd,
     createdAt: state.createdAt,
     hostname: os.hostname(),
+    deepLinksEnabled: process.env.FORGE_BUDDY_DEEPLINKS !== "0",
   };
 }
 

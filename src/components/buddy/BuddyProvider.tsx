@@ -36,6 +36,7 @@ type SessionInfo = {
   totalCostUsd: number;
   createdAt: string;
   hostname: string;
+  deepLinksEnabled: boolean;
 };
 
 type BuddyContextValue = {

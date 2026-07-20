@@ -183,6 +183,8 @@ export default function BuddyPanel() {
             <BuddyMessage
               turn={turn}
               thinking={turn.id === streamingTurn?.id && thinking}
+              hostname={sessionInfo?.hostname}
+              deepLinksEnabled={sessionInfo?.deepLinksEnabled}
               onRetry={(text) => void submitText(text)}
             />
           </Fragment>
