@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { resolveProjectDirectory } from "../atlas-projects";
+import { hasPlanExecutionResultSubstance } from "../claude-execution/commands";
 import type {
   DayPlan,
   DayPlanAssistantProposal,
@@ -1651,11 +1652,16 @@ export function createDayPlanStore(options: {
             text: input.resultSummary.text.trim().slice(0, 8000),
           }
         : undefined;
+      const planDegenerate = row.mode === "plan_review" && input.exitCode === 0 && (
+        input.errorCode === "plan_degenerate" ||
+        !hasPlanExecutionResultSubstance(resultSummary?.text)
+      );
+      const errorCode = planDegenerate ? "plan_degenerate" : input.errorCode;
       const status: DayPlanExecutionRun["status"] = row.status === "cancelling"
         ? "cancelled"
         : input.interrupted
         ? "interrupted"
-        : input.exitCode === 0
+        : input.exitCode === 0 && !errorCode
           ? row.mode === "autonomous"
             ? "awaiting_review"
             : row.owner === "together"
@@ -1676,7 +1682,7 @@ export function createDayPlanStore(options: {
         input.exitCode ?? null,
         row.status === "cancelling"
           ? "user_cancelled"
-          : input.errorCode?.slice(0, 120) ?? null,
+          : errorCode?.slice(0, 120) ?? null,
         resultSummary ? JSON.stringify(resultSummary) : null,
         input.runId,
       );

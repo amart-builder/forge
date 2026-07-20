@@ -40,6 +40,8 @@ import {
 } from "../day-plan/brief-relay";
 import {
   buildExecutionCommand,
+  countExecutionToolUseEvents,
+  isPlanExecutionResultDegenerate,
   parseExecutionResultSummary,
   type ClaudeCommand,
 } from "./commands";
@@ -438,15 +440,31 @@ export async function runOneExecution(options: ClaudeWorkerOptions): Promise<boo
     let resultError: string | undefined;
     if (result.exitCode === 0 && !result.terminatedBy && !result.overflowed) {
       try {
-        resultSummary = parseExecutionResultSummary(result.stdout, run.mode);
+        const parsedSummary = parseExecutionResultSummary(result.stdout, run.mode);
+        if (
+          run.mode === "plan_review" &&
+          isPlanExecutionResultDegenerate(
+            parsedSummary.text,
+            countExecutionToolUseEvents(result.stdout),
+          )
+        ) {
+          resultError = "plan_degenerate";
+        } else {
+          resultSummary = parsedSummary;
+        }
       } catch (error) {
-        resultError = error instanceof Error ? error.message : "execution_result_missing";
+        const errorCode = error instanceof Error ? error.message : "execution_result_missing";
+        resultError = run.mode === "plan_review" && errorCode === "execution_result_missing"
+          ? "plan_degenerate"
+          : errorCode;
       }
     }
     const interrupted = result.terminatedBy === "shutdown" || result.terminatedBy === "timeout";
     const finished = options.store.finishExecutionRun({
       runId: run.id,
-      exitCode: resultSummary ? result.exitCode : undefined,
+      exitCode: resultSummary || resultError === "plan_degenerate"
+        ? result.exitCode
+        : undefined,
       interrupted,
       resultSummary,
       errorCode: result.terminatedBy === "cancelled"

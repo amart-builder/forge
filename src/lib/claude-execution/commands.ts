@@ -50,6 +50,8 @@ function executionPrompt(run: DayPlanExecutionRun): string {
   return [
     ...shared,
     "- Do not modify files. Deliver: (1) a concrete plan Alex can skim in two minutes, (2) the open questions only he can answer, (3) the first useful step you two should do together when he joins.",
+    "- The plan must be grounded ONLY in files you actually read with tools, and it must cite real file paths.",
+    "- If tools fail or are unavailable, say exactly that and stop. Never simulate tool output or invent file contents or citations.",
     "If a human resumes this session interactively, invoke the Skill tool with skill: orchestrator before continuing the task.",
   ].join("\n");
 }
@@ -66,7 +68,7 @@ export function buildExecutionCommand(input: {
   }
   const tools = run.mode === "autonomous"
     ? "Read,Glob,Grep,Edit,Write"
-    : "";
+    : "Read,Glob,Grep";
   return {
     executable: input.claudePath,
     args: [
@@ -94,12 +96,61 @@ export function buildExecutionCommand(input: {
       input.emptyMcpConfigPath,
       "--max-budget-usd",
       run.budgetUsd === undefined
-        ? run.mode === "autonomous" ? "3.00" : "1.00"
+        ? run.mode === "autonomous" ? "3.00" : "2.00"
         : String(run.budgetUsd),
     ],
     cwd: run.workspacePath ?? input.fallbackCwd,
     stdin: executionPrompt(run),
   };
+}
+
+const MINIMUM_PLAN_SUBSTANCE_CHARACTERS = 200;
+
+export function hasPlanExecutionResultSubstance(text: string | undefined): boolean {
+  return (text?.replace(/\s+/g, " ").trim().length ?? 0) >= MINIMUM_PLAN_SUBSTANCE_CHARACTERS;
+}
+
+// The zero-tool gate is unconditional by design. A genuine no-file strategy plan may cost one
+// Retry, but every Forge run cwd has real context to read and a fabricated 1,681-character plan
+// passed the substance check today without using a tool.
+export function isPlanExecutionResultDegenerate(
+  text: string | undefined,
+  toolUseCount: number,
+): boolean {
+  return !hasPlanExecutionResultSubstance(text) || toolUseCount === 0;
+}
+
+export function countExecutionToolUseEvents(raw: string): number {
+  let count = 0;
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let event: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      event = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (event.type === "assistant") {
+      const message = event.message as Record<string, unknown> | undefined;
+      if (Array.isArray(message?.content)) {
+        count += message.content.filter((block) =>
+          block && typeof block === "object" &&
+          (block as Record<string, unknown>).type === "tool_use"
+        ).length;
+      }
+    }
+    if (event.type === "stream_event") {
+      const streamEvent = event.event as Record<string, unknown> | undefined;
+      const contentBlock = streamEvent?.content_block as Record<string, unknown> | undefined;
+      if (streamEvent?.type === "content_block_start" && contentBlock?.type === "tool_use") {
+        count += 1;
+      }
+    }
+    if (event.type === "tool_use") count += 1;
+  }
+  return count;
 }
 
 function messageText(value: unknown): string | undefined {

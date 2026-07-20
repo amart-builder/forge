@@ -24,7 +24,7 @@
 
 ---
 
-**Last updated:** 2026-07-20 (Buddy Claude sign-in guidance complete locally; not committed)
+**Last updated:** 2026-07-20 (plan-run grounding and degenerate-output validation complete locally; not committed)
 **State:** The MacBook's loopback-only `com.forge.web` now serves the wide Morning Arrival with Claude-powered task creation, completion, editing, ownership, and reprioritization, plus explicit execution modes, durable background runs, and reviewable results. `com.forge.claude-worker` is installed and healthy. Autonomous execution remains disabled until an allowlisted project is deliberately configured. The 8 a.m. trigger is still not installed. Email triage remains a separate Mini service and was not changed.
 
 ## North Star Goal
@@ -56,6 +56,14 @@ Standing rule (Alex, 2026-07-17): before saying "I can't see that" or asking him
 Explicitly rejected: always-running general agent, autonomous external sends, custom voice stack, constant day resequencing, implicit permission learning, pre-opened idle Claude sessions. Email triage stays OFF until Alex explicitly re-enables. 14-day pilot metrics gate each autonomy expansion (≥60-70% of overnight artifacts genuinely used, else Alex seeds the queue explicitly).
 
 ## Current State
+
+### 2026-07-20 Plan-run grounding and degenerate-output validation (working tree)
+
+- Plan-review execution seeds now receive read-only `Read,Glob,Grep` tools in permission mode `plan`; their default budget is $2.00, explicit run budgets still win, and autonomous tools plus its $3.00 default are unchanged.
+- The plan prompt requires real tool reads and real path citations, and tells the model to stop honestly if tools are unavailable instead of simulating tool output.
+- Exit-zero plan results now fail with `plan_degenerate` when their substantive text is under 200 characters or the captured Claude `stream-json` output contains zero real `tool_use` events. The zero-tool gate is intentionally unconditional: a genuine no-file strategy plan may cost one Retry, accepted because every Forge run cwd has readable context and a fabricated 1,681-character plan passed the substance check. The store also refuses an exit-zero plan transition with missing or short result text, so failed runs use the existing board failure path instead of `plan_ready` or `ready_to_join`.
+- Validation passed: TypeScript, scoped ESLint, `git diff --check`, and 32 focused worker/execution tests. The exact stalled Supernova one-liner and a substantive multi-paragraph plan with zero tool use both persist as failed with exit code 0 and `plan_degenerate`, expose no session handle, and never open a session; a grounded three-paragraph plan with a real `Read` event passes. No live Claude run was started.
+- Next gate: restart the supervised worker when this working tree is intentionally deployed, then run one real Plan kickoff and confirm the plan cites files it actually read. No commit was created.
 
 ### 2026-07-20 Project-aware Forge-launched Claude sessions (working tree)
 
