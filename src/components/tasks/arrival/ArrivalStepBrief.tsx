@@ -12,8 +12,8 @@ export default function ArrivalStepBrief({
   briefWriting: boolean;
 }) {
   return (
-    <section className="mx-auto w-full max-w-[60rem] space-y-8 px-6 py-8 sm:px-10" aria-label="The brief">
-      <div className="mx-auto max-w-[70ch] space-y-6">
+    <section className="mx-auto w-full max-w-[85rem] space-y-8 px-6 py-8 sm:px-10" aria-label="The brief">
+      <div className="space-y-6">
         <div>
           <h2 className="text-sm font-semibold text-foreground">Your morning brief</h2>
           {recap && (
