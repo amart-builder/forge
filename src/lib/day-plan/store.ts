@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { resolveProjectDirectory } from "../atlas-projects";
 import type {
   DayPlan,
   DayPlanAssistantProposal,
@@ -677,6 +678,7 @@ export function createDayPlanStore(options: {
   dbPath: string;
   now?: Clock;
   executionEnvironment?: ForgeExecutionEnvironment | (() => ForgeExecutionEnvironment);
+  resolveProjectDirectory?: (hint: string) => string | null;
 }) {
   mkdirSync(path.dirname(options.dbPath), { recursive: true });
   const db = new Database(options.dbPath);
@@ -685,6 +687,7 @@ export function createDayPlanStore(options: {
     typeof options.executionEnvironment === "function"
       ? options.executionEnvironment()
       : options.executionEnvironment ?? loadForgeExecutionEnvironment();
+  const projectDirectoryResolver = options.resolveProjectDirectory ?? resolveProjectDirectory;
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.pragma("busy_timeout = 5000");
@@ -1000,6 +1003,14 @@ export function createDayPlanStore(options: {
     });
   }
 
+  function resolvePlanReviewWorkspacePath(item: DayPlanItem): string | undefined {
+    const projectPath = item.project?.trim()
+      ? projectDirectoryResolver(item.project)
+      : null;
+    if (projectPath) return projectPath;
+    return item.title.trim() ? projectDirectoryResolver(item.title) ?? undefined : undefined;
+  }
+
   function executionPromptSnapshot(item: DayPlanItem): DayPlanExecutionRun["promptSnapshot"] {
     return {
       title: item.title,
@@ -1080,7 +1091,9 @@ export function createDayPlanStore(options: {
       authorizationHash: input.config.authorizationHash,
       promptSnapshot: executionPromptSnapshot(input.item),
       workspaceId: input.config.workspaceId,
-      workspacePath: input.readiness.workspacePath,
+      workspacePath: input.config.mode === "plan_review"
+        ? resolvePlanReviewWorkspacePath(input.item)
+        : input.readiness.workspacePath,
       budgetUsd: input.config.budgetUsd,
       readiness: input.readiness,
       createdAt: input.createdAt,
@@ -1253,7 +1266,7 @@ export function createDayPlanStore(options: {
           mode: provisional.mode,
           modelAlias: provisional.modelAlias,
           workspaceId: provisional.workspaceId,
-          workspacePath: readiness.workspacePath,
+          workspacePath: provisional.mode === "autonomous" ? readiness.workspacePath : undefined,
           budgetUsd: provisional.budgetUsd,
         }),
       };
@@ -1528,7 +1541,7 @@ export function createDayPlanStore(options: {
               mode: config.mode,
               modelAlias: config.modelAlias,
               workspaceId: config.workspaceId,
-              workspacePath: readiness.workspacePath,
+              workspacePath: config.mode === "autonomous" ? readiness.workspacePath : undefined,
               budgetUsd: config.budgetUsd,
             })
           : undefined;
@@ -1540,7 +1553,8 @@ export function createDayPlanStore(options: {
           row.mode === config.mode &&
           row.model_alias === config.modelAlias &&
           (row.workspace_id ?? undefined) === config.workspaceId &&
-          (row.workspace_path ?? undefined) === readiness?.workspacePath &&
+          (config.mode !== "autonomous" ||
+            (row.workspace_path ?? undefined) === readiness?.workspacePath) &&
           (row.budget_usd ?? undefined) === config.budgetUsd,
         );
         if (
@@ -2839,7 +2853,9 @@ export function createDayPlanStore(options: {
                 mode: provisional.mode,
                 modelAlias: provisional.modelAlias,
                 workspaceId: provisional.workspaceId,
-                workspacePath: provisionalReadiness.workspacePath,
+                workspacePath: provisional.mode === "autonomous"
+                  ? provisionalReadiness.workspacePath
+                  : undefined,
                 budgetUsd: provisional.budgetUsd,
               }),
             };

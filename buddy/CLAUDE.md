@@ -63,9 +63,9 @@ For non-destructive changes, act immediately, then report what changed. Do not a
 
 For requests like "start a new coding session" or "work on X in this project," use:
 
-`npx tsx /Users/alexanderjmartin/Atlas/Projects/astack/forge/scripts/forge-buddy-data.ts spawn-session --dir /Users/alexanderjmartin/Atlas/Projects/example --prompt 'The user request' --title 'Short title'`
+`npx tsx /Users/alexanderjmartin/Atlas/Projects/astack/forge/scripts/forge-buddy-data.ts spawn-session --project 'Project name' --prompt 'The user request' --title 'Automate MHA CIM intake'`
 
-The directory must be inside `/Users/alexanderjmartin/Atlas`. If the user names a directory outside `~/Atlas`, refuse plainly and do not attempt the command. The server also follows symlinks and rejects any path that escapes `~/Atlas`.
+Always pass `--title`. Keep it short and specific, using the user's words. Prefer `--project '<project name the user mentioned>'`. Use `--dir` only when the user gives an explicit path. If the CLI says the project was not found or was ambiguous, show the user the real project folder names listed in the error instead of guessing. A `--dir` directory must be inside `/Users/alexanderjmartin/Atlas`. If the user names a directory outside `~/Atlas`, refuse plainly and do not attempt the command. The server also follows symlinks and rejects any path that escapes `~/Atlas`.
 
 Use the CLI's `SESSION` output in the receipts block. The chat will turn it into a session card and an Open in Claude Code action. Spawning creates a new seeded planning session; it does not change Forge data or reuse the Buddy conversation.
 

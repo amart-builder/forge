@@ -7,6 +7,7 @@ import test from 'node:test';
 import Database from 'better-sqlite3';
 import { buildDayPlanCandidates } from '../src/lib/day-plan/candidates.ts';
 import { createDayPlanStore, DayPlanInvalidTransition } from '../src/lib/day-plan/store.ts';
+import { buildExecutionCommand } from '../src/lib/claude-execution/commands.ts';
 import {
   includesClaudeSessionId,
   publicExecutionReadiness,
@@ -101,6 +102,70 @@ test('Start My Day queues Together plan review without a workspace', (t) => {
     mutationId: 'start-day:together',
     action: 'start_day',
   }).replayed, true);
+});
+
+test('plan-review runs persist the resolved project directory for execution and resume', (t) => {
+  const file = path.join(os.tmpdir(), `forge-execution-project-${process.pid}-${Date.now()}.db`);
+  const projectDir = '/private/tmp/atlas-projects/supernova-engine';
+  const hints = [];
+  let resolvedProjectDir = projectDir;
+  const store = createDayPlanStore({
+    dbPath: file,
+    now: () => new Date('2026-07-10T16:00:00.000Z'),
+    executionEnvironment: { autonomousEnabled: false, workspaces: new Map() },
+    resolveProjectDirectory: (hint) => {
+      hints.push(hint);
+      return hint === 'Supernova Engine' ? resolvedProjectDir : null;
+    },
+  });
+  t.after(() => {
+    store.close();
+    rmSync(file, { force: true });
+    rmSync(`${file}-wal`, { force: true });
+    rmSync(`${file}-shm`, { force: true });
+  });
+  let plan = store.ensureDayPlan({
+    localDate: '2026-07-10',
+    timezone: 'America/Los_Angeles',
+    mutationId: 'ensure:project-resolution',
+    candidates: buildDayPlanCandidates({
+      localDate: '2026-07-10',
+      timezone: 'America/Los_Angeles',
+      tasks: [{
+        id: 'task-project', title: 'Draft the launch plan', description: 'Plan it',
+        priority: 'high', position: 0, column: 'today', status: 'open',
+        project: 'Supernova Engine',
+        updatedAt: '2026-07-10T15:00:00.000Z', refreshedAt: '2026-07-10T16:00:00.000Z',
+      }],
+    }),
+  }).plan;
+  plan = mutate(store, plan, 'arrival_open');
+  plan = mutate(store, plan, 'item_owner', { itemId: plan.items[0].id, owner: 'together' });
+  const [run] = store.mutateDayPlan({
+    planId: plan.id,
+    expectedVersion: plan.version,
+    mutationId: 'start-day:project-resolution',
+    action: 'start_day',
+  }).executionRuns;
+
+  assert.equal(hints[0], 'Supernova Engine');
+  assert.equal(run.workspacePath, projectDir);
+  assert.equal(store.getExecutionRun(run.id).workspacePath, projectDir);
+  assert.equal(buildExecutionCommand({
+    claudePath: '/fake/claude',
+    emptyMcpConfigPath: '/tmp/empty-mcp.json',
+    fallbackCwd: '/forge',
+    run,
+  }).cwd, projectDir);
+  assert.match(
+    publicExecutionRun(run, 'loopback').resumeCommand,
+    /^cd '\/private\/tmp\/atlas-projects\/supernova-engine' && claude --resume /,
+  );
+  resolvedProjectDir = '/private/tmp/atlas-projects/renamed-after-enqueue';
+  const claimed = store.claimNextExecutionRun();
+  assert.equal(claimed.status, 'starting');
+  assert.equal(claimed.workspacePath, projectDir);
+  assert.deepEqual(hints, ['Supernova Engine']);
 });
 
 test('Together can never be configured for autonomous execution', (t) => {

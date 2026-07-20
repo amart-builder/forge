@@ -40,7 +40,7 @@ test('spawn-session route gates requests and confines real directories to ~/Atla
   });
 
   const token = getQuietCurrentCsrfToken();
-  const request = (dir, headers = {}) => new NextRequest('http://127.0.0.1:3200/api/buddy/spawn-session', {
+  const requestBody = (body, headers = {}) => new NextRequest('http://127.0.0.1:3200/api/buddy/spawn-session', {
     method: 'POST',
     headers: {
       host: '127.0.0.1:3200',
@@ -48,8 +48,9 @@ test('spawn-session route gates requests and confines real directories to ~/Atla
       'x-forge-csrf': token,
       ...headers,
     },
-    body: JSON.stringify({ dir, prompt: 'Plan the work', title: 'Plan it' }),
+    body: JSON.stringify({ prompt: 'Plan the work', title: 'Plan it', ...body }),
   });
+  const request = (dir, headers = {}) => requestBody({ dir }, headers);
   const baseDeps = {
     store,
     homeDir: home,
@@ -89,7 +90,7 @@ test('spawn-session route gates requests and confines real directories to ~/Atla
     }),
   });
   assert.equal(valid.status, 200);
-  assert.deepEqual(await valid.json(), { sessionId: 'session-1', state: 'seeding' });
+  assert.deepEqual(await valid.json(), { sessionId: 'session-1', state: 'seeding', dir: validDir });
   assert.equal(store.getSpawnedSession('session-1').state, 'started');
   assert.deepEqual(marked, ['session-1']);
   assert.equal(isBuddySpawnedSessionOpenable(store.getSpawnedSession('session-1').state), true);
@@ -101,6 +102,7 @@ test('spawn-session route gates requests and confines real directories to ~/Atla
   assert.equal(spawnCall.args[spawnCall.args.indexOf('--effort') + 1], 'high');
   assert.equal(spawnCall.args[spawnCall.args.indexOf('--max-budget-usd') + 1], '1.00');
   const seedPrompt = child.stdin.read()?.toString() ?? '';
+  assert.ok(seedPrompt.startsWith('# Plan it\n\n'));
   assert.match(seedPrompt, /Do not read files, use tools, edit anything, or begin the work/);
   assert.match(seedPrompt, /at most 2-3 short bullets/);
   assert.match(seedPrompt, /then STOP/);
@@ -167,4 +169,30 @@ test('spawn-session route gates requests and confines real directories to ~/Atla
   });
   assert.equal(fileResponse.status, 400);
   assert.match((await fileResponse.json()).error, /must be a directory/);
+
+  let resolvedHint;
+  let seededProjectDir;
+  const projectResponse = await handleSpawnSessionPost(requestBody({ project: 'Supernova' }), {
+    ...baseDeps,
+    realpath: (value) => value,
+    resolveProject: (hint) => {
+      resolvedHint = hint;
+      return `${home}/Atlas/Projects/supernova-engine`;
+    },
+    randomId: () => 'session-project',
+    seed: ({ dir }) => { seededProjectDir = dir; },
+  });
+  assert.equal(projectResponse.status, 200);
+  assert.equal(resolvedHint, 'Supernova');
+  assert.equal(seededProjectDir, `${home}/Atlas/Projects/supernova-engine`);
+  assert.equal((await projectResponse.json()).dir, seededProjectDir);
+
+  const missingProject = await handleSpawnSessionPost(requestBody({ project: 'Jarvis' }), {
+    ...baseDeps,
+    resolveProject: () => null,
+    listProjects: () => ['Jarvis Memory', 'Jarvis Pro', 'Supernova Engine'],
+    seed: () => assert.fail('seed must not run for an unresolved project'),
+  });
+  assert.equal(missingProject.status, 400);
+  assert.match((await missingProject.json()).error, /Available projects: Jarvis Memory, Jarvis Pro, Supernova Engine/);
 });

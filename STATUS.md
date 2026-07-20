@@ -57,6 +57,14 @@ Explicitly rejected: always-running general agent, autonomous external sends, cu
 
 ## Current State
 
+### 2026-07-20 Project-aware Forge-launched Claude sessions (working tree)
+
+- Buddy session spawning now accepts either an explicit Atlas path or an immediate Atlas project-folder hint. Project matching is normalized, ambiguity-safe, and protected by the shared realpath-inside-Atlas guard; resolution failures return the actual folder-name list.
+- Buddy and execution seed conversations now begin with the task title so Claude Desktop can generate relevant sidebar titles. CLI `--name` behavior remains in place.
+- Plan-review runs resolve the day-plan item's project (the task's first tag), then title as fallback, and persist the resolved directory in the existing run workspace path used by both execution and resume commands. Autonomous workspace selection is unchanged.
+- Independent review fix: plan-review cwd is now resolved once when the run is enqueued and is excluded from execution authorization and claim-time workspace equality. Folder drift cannot cancel the queued plan run; autonomous workspace authorization remains strict. Short project-folder names require exact matches, and outside-Atlas directory symlinks are rejected by the realpath guard.
+- Verified: 62 focused tests (including day-plan store and execution suites), TypeScript, scoped ESLint, and `git diff --check` pass. No live Claude session was spawned. Not committed.
+
 ### 2026-07-20 Buddy Claude sign-in guidance (working tree)
 
 - Failed Buddy turns now recognize Claude CLI sign-out messages and replace the raw CLI error with friendly, numbered Terminal sign-in instructions while preserving Retry behavior.

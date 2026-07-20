@@ -26,7 +26,7 @@ export function buildBuddySeedCommand(input: {
       "--disable-slash-commands",
     ],
     cwd: input.dir,
-    stdin: `This session was started from Forge. Do not read files, use tools, edit anything, or begin the work. Reply with at most 2-3 short bullets outlining how you would approach the request, then STOP. The request below is context for the future desktop session.\n\nUSER_REQUEST:\n${input.prompt}\n\nIf a human resumes this session interactively, invoke the Skill tool with skill: orchestrator before continuing the task.`,
+    stdin: `# ${input.title.replace(/\s+/g, " ").trim()}\n\nThis session was started from Forge. Do not read files, use tools, edit anything, or begin the work. Reply with at most 2-3 short bullets outlining how you would approach the request, then STOP. The request below is context for the future desktop session.\n\nUSER_REQUEST:\n${input.prompt}\n\nIf a human resumes this session interactively, invoke the Skill tool with skill: orchestrator before continuing the task.`,
   };
 }
 

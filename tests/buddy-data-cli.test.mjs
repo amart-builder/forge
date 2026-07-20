@@ -51,6 +51,47 @@ test('buddy data CLI parses and submits a spawned-session request', async () => 
   assert.deepEqual(JSON.parse(lines[0].slice('SESSION '.length)), {
     sessionId: 'session-1', dir: '/Users/alex/Atlas/demo', title: 'Demo',
   });
+
+  assert.deepEqual(parseBuddyDataArgs([
+    'spawn-session', '--project', 'Supernova Engine', '--prompt', 'Plan this', '--title', 'Demo',
+  ]), {
+    action: 'spawn-session', project: 'Supernova Engine', prompt: 'Plan this', title: 'Demo',
+  });
+  assert.throws(
+    () => parseBuddyDataArgs(['spawn-session', '--prompt', 'Plan this']),
+    /exactly one of --dir or --project/,
+  );
+  assert.throws(
+    () => parseBuddyDataArgs([
+      'spawn-session', '--dir', '/tmp/example', '--project', 'Example', '--prompt', 'Plan this',
+    ]),
+    /exactly one of --dir or --project/,
+  );
+});
+
+test('buddy data CLI submits --project and reports the resolved directory', async () => {
+  const command = parseBuddyDataArgs([
+    'spawn-session', '--project', 'Supernova', '--prompt', 'Plan this', '--title', 'Launch plan',
+  ]);
+  const calls = [];
+  const lines = [];
+  await runBuddyDataCommand(command, {
+    fetch: async (url, init) => {
+      calls.push({ url: String(url), init });
+      return calls.length === 1
+        ? new Response('{"csrfToken":"token"}')
+        : new Response('{"sessionId":"session-project","state":"seeding","dir":"/Users/alex/Atlas/Projects/supernova-engine"}');
+    },
+    write: (line) => lines.push(line),
+  });
+  assert.deepEqual(JSON.parse(calls[1].init.body), {
+    project: 'Supernova', prompt: 'Plan this', title: 'Launch plan',
+  });
+  assert.deepEqual(JSON.parse(lines[0].slice('SESSION '.length)), {
+    sessionId: 'session-project',
+    dir: '/Users/alex/Atlas/Projects/supernova-engine',
+    title: 'Launch plan',
+  });
 });
 
 test('buddy data CLI surfaces a rejected spawned-session request as ERROR', async () => {

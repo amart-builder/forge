@@ -20,6 +20,8 @@ function executionPrompt(run: DayPlanExecutionRun): string {
   const value = (input: string | undefined) => JSON.stringify(input ?? "");
   const dueDate = run.promptSnapshot.dueAt?.match(/^\d{4}-\d{2}-\d{2}/)?.[0];
   const shared = [
+    `# ${run.promptSnapshot.title.replace(/\s+/g, " ").trim()}`,
+    "",
     "You are Claude Code, opened from Forge, Alex's day-planning board. Alex picked this task during his morning planning and handed it to you to plan. He will join you here to review.",
     "",
     `TASK=${value(run.promptSnapshot.title)}`,

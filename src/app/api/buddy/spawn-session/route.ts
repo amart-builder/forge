@@ -1,8 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
+import { readdirSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  AtlasDirectoryError,
+  listAtlasProjectFolderNames,
+  resolveAtlasDirectory,
+  resolveProjectDirectory,
+} from "@/lib/atlas-projects";
 import { getBuddyStore, type BuddyStore } from "@/lib/buddy/store";
 import { seedBuddySession } from "@/lib/buddy/spawn-session";
 import { getQuietCurrentCsrfToken } from "@/lib/quiet-current/store";
@@ -19,6 +24,9 @@ type SpawnRouteDependencies = {
   randomId?: () => string;
   realpath?: typeof realpathSync;
   stat?: typeof statSync;
+  readdir?: typeof readdirSync;
+  resolveProject?: (hint: string) => string | null;
+  listProjects?: () => string[];
   seed?: typeof seedBuddySession;
   markSession?: typeof markForgeOrchestratorSession;
 };
@@ -33,29 +41,12 @@ function requiredText(value: unknown, name: string, maximum: number): string {
 }
 
 export function resolveBuddySpawnDirectory(rawDir: string, dependencies: SpawnRouteDependencies = {}): string {
-  const home = dependencies.homeDir ?? os.homedir();
-  const expanded = rawDir === "~"
-    ? home
-    : rawDir.startsWith(`~${path.sep}`) ? path.join(home, rawDir.slice(2)) : rawDir;
-  const resolved = path.resolve(expanded);
-  let real: string;
   try {
-    real = (dependencies.realpath ?? realpathSync)(resolved);
-  } catch {
-    throw new SpawnRequestError("Project directory does not exist.");
+    return resolveAtlasDirectory(rawDir, dependencies);
+  } catch (error) {
+    if (error instanceof AtlasDirectoryError) throw new SpawnRequestError(error.message);
+    throw error;
   }
-  let directory: boolean;
-  try {
-    directory = (dependencies.stat ?? statSync)(real).isDirectory();
-  } catch {
-    throw new SpawnRequestError("Project directory does not exist.");
-  }
-  if (!directory) throw new SpawnRequestError("Project path must be a directory.");
-  const atlasRoot = path.join(home, "Atlas");
-  if (real !== atlasRoot && !real.startsWith(`${atlasRoot}${path.sep}`)) {
-    throw new SpawnRequestError("Project directory must be inside ~/Atlas.");
-  }
-  return real;
 }
 
 function denied(request: NextRequest, csrf: boolean): NextResponse | undefined {
@@ -101,12 +92,33 @@ export async function handleSpawnSessionPost(
       throw new SpawnRequestError("Spawn request is invalid.");
     }
     const body = parsed as Record<string, unknown>;
-    const rawDir = requiredText(body.dir, "dir", 2_000);
+    const rawDir = body.dir === undefined ? undefined : requiredText(body.dir, "dir", 2_000);
+    const project = body.project === undefined
+      ? undefined
+      : requiredText(body.project, "project", 120);
+    if (Boolean(rawDir) === Boolean(project)) {
+      throw new SpawnRequestError("Provide exactly one of dir or project.");
+    }
     const prompt = requiredText(body.prompt, "prompt", 8_000);
     const title = body.title === undefined
       ? "Buddy session"
       : requiredText(body.title, "title", 120);
-    const dir = resolveBuddySpawnDirectory(rawDir, dependencies);
+    let dir: string;
+    if (rawDir) {
+      dir = resolveBuddySpawnDirectory(rawDir, dependencies);
+    } else {
+      const resolver = dependencies.resolveProject ?? ((hint: string) =>
+        resolveProjectDirectory(hint, dependencies));
+      const resolved = resolver(project!);
+      if (!resolved) {
+        const names = (dependencies.listProjects ?? (() =>
+          listAtlasProjectFolderNames(dependencies)))();
+        throw new SpawnRequestError(
+          `Project '${project}' did not match exactly one project folder. Available projects: ${names.join(", ") || "(none)"}.`,
+        );
+      }
+      dir = resolveBuddySpawnDirectory(resolved, dependencies);
+    }
     const sessionId = (dependencies.randomId ?? randomUUID)();
     const store = dependencies.store ?? getBuddyStore();
     store.createSpawnedSession({ sessionId, dir, title });
@@ -115,7 +127,7 @@ export async function handleSpawnSessionPost(
     if (seededState && ["started", "ready", "incomplete"].includes(seededState)) {
       (dependencies.markSession ?? markForgeOrchestratorSession)(sessionId);
     }
-    return NextResponse.json({ sessionId, state: "seeding" });
+    return NextResponse.json({ sessionId, state: "seeding", dir });
   } catch (error) {
     if (!(error instanceof SpawnRequestError)) {
       console.error("Buddy session spawn failed.", error);

@@ -22,10 +22,9 @@ type DayPlanCommand = {
 };
 type SpawnSessionCommand = {
   action: "spawn-session";
-  dir: string;
   prompt: string;
   title?: string;
-};
+} & ({ dir: string; project?: never } | { dir?: never; project: string });
 export type BuddyDataCommand = TableCommand | DayPlanCommand | SpawnSessionCommand;
 
 function fail(message: string): never {
@@ -43,11 +42,19 @@ function option(args: string[], name: string): string | undefined {
 export function parseBuddyDataArgs(args: string[]): BuddyDataCommand {
   if (args[0] === "spawn-session") {
     const dir = option(args, "--dir");
+    const project = option(args, "--project");
     const prompt = option(args, "--prompt");
-    if (!dir) fail("spawn-session requires --dir");
+    if (Boolean(dir) === Boolean(project)) {
+      fail("spawn-session requires exactly one of --dir or --project");
+    }
     if (!prompt) fail("spawn-session requires --prompt");
     const title = option(args, "--title");
-    return { action: "spawn-session", dir, prompt, ...(title ? { title } : {}) };
+    return {
+      action: "spawn-session",
+      ...(dir ? { dir } : { project: project! }),
+      prompt,
+      ...(title ? { title } : {}),
+    };
   }
   if (args[0] === "day-plan") {
     if (args[1] === "get") return { action: "day-plan-get" };
@@ -145,7 +152,7 @@ export async function runBuddyDataCommand(
         "X-Forge-CSRF": (state as Record<string, unknown>).csrfToken as string,
       },
       body: JSON.stringify({
-        dir: command.dir,
+        ...(command.dir ? { dir: command.dir } : { project: command.project }),
         prompt: command.prompt,
         ...(command.title ? { title: command.title } : {}),
       }),
@@ -154,9 +161,13 @@ export async function runBuddyDataCommand(
       typeof (created as Record<string, unknown>).sessionId !== "string") {
       fail("spawn-session response is invalid");
     }
+    const resolvedDir = typeof (created as Record<string, unknown>).dir === "string"
+      ? (created as Record<string, unknown>).dir as string
+      : command.dir;
+    if (!resolvedDir) fail("spawn-session response is missing the resolved directory");
     write(`SESSION ${JSON.stringify({
       sessionId: (created as Record<string, unknown>).sessionId,
-      dir: command.dir,
+      dir: resolvedDir,
       title: command.title ?? "Buddy session",
     })}`);
     return 0;
