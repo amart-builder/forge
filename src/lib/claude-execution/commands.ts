@@ -72,7 +72,7 @@ export function buildExecutionCommand(input: {
   }
   const tools = run.mode === "autonomous"
     ? "Read,Glob,Grep,Edit,Write"
-    : "Read,Glob,Grep";
+    : "Read,Glob,Grep,Task,Skill,AskUserQuestion,Write,ExitPlanMode,WebFetch,WebSearch";
   return {
     executable: input.claudePath,
     args: [

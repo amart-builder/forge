@@ -178,7 +178,10 @@ test('plan-review worker uses a resumable safe session and stops at plan_ready',
   const captured = JSON.parse(readFileSync(fake.capture, 'utf8'));
   assert.equal(captured.args[captured.args.indexOf('--session-id') + 1], queued.claudeSessionId);
   assert.equal(captured.args[captured.args.indexOf('--permission-mode') + 1], 'plan');
-  assert.equal(captured.args[captured.args.indexOf('--tools') + 1], 'Read,Glob,Grep');
+  assert.equal(
+    captured.args[captured.args.indexOf('--tools') + 1],
+    'Read,Glob,Grep,Task,Skill,AskUserQuestion,Write,ExitPlanMode,WebFetch,WebSearch',
+  );
   assert.equal(captured.args[captured.args.indexOf('--model') + 1], 'claude-fable-5');
   assert.equal(captured.args[captured.args.indexOf('--effort') + 1], 'high');
   assert.equal(captured.args[captured.args.indexOf('--max-budget-usd') + 1], '3.00');
