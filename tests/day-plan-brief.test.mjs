@@ -999,9 +999,12 @@ test('ensure keeps at most three items from a larger deterministic pool', (t) =>
 // ---------------------------------------------------------------------------
 
 test('the brief command is the exact bounded toolless invocation', () => {
-  assert.equal(MORNING_BRIEF_PROMPT_VERSION, 7);
+  assert.equal(MORNING_BRIEF_PROMPT_VERSION, 8);
   const repoCwd = process.cwd();
   const ownerPrompt = readFileSync(path.join(repoCwd, 'prompts', 'chief-of-staff.md'), 'utf8').trimEnd();
+  assert.ok(ownerPrompt.includes(
+    "Work he resolved as Progress last night is momentum, not failure. Lead with it: say where it stands in his own words from the note, and make its recorded next step the obvious first move of the day. Work he resolved as Carry did not move. If the same item has been carried two or more days running, say that plainly and ask whether it still belongs in today's top three or should be deferred.",
+  ));
   let command;
   process.chdir(os.tmpdir());
   try {
@@ -1193,7 +1196,7 @@ test('the brief worker validates, filters unknown tasks, and stores the artifact
     '-p', '--no-session-persistence', '--permission-mode', 'plan', '--tools', '',
     '--strict-mcp-config', '--mcp-config',
   ]);
-  assert.match(captured.input, /^# The morning brief: chief of staff mandate \(v7\)/);
+  assert.match(captured.input, /^# The morning brief: chief of staff mandate \(v8\)/);
   assert.match(captured.input, /\n\/forge-morning-brief\n/);
   // Empty queue afterwards.
   assert.equal(

@@ -978,11 +978,17 @@ export default function useDayRitual({
   const decideSettlement = useCallback(async (
     itemId: string,
     disposition: SettlementDisposition,
+    progress?: { progressNote?: string; nextStep?: string },
   ) => {
     const deferUntil = disposition === 'defer'
       ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
       : undefined;
-    await enqueueMutation('settlement_decide', { itemId, disposition, deferUntil }, {
+    await enqueueMutation('settlement_decide', {
+      itemId,
+      disposition,
+      deferUntil,
+      ...(disposition === 'progress' ? progress : {}),
+    }, {
       itemId,
       announce: `Settlement decision saved: ${disposition}.`,
     });

@@ -35,7 +35,7 @@ export type DayPlanItemDecision =
   | "completed"
   | "later"
   | "dismissed";
-export type SettlementDisposition = "carry" | "defer" | "drop";
+export type SettlementDisposition = "progress" | "carry" | "defer" | "drop";
 
 export type RecommendationSourceType =
   | "task"
@@ -99,8 +99,12 @@ export type DayPlanItem = RecommendationCandidate & {
   settlementDecision?: {
     disposition: SettlementDisposition;
     deferUntil?: string;
+    progressNote?: string;
+    nextStep?: string;
     decidedAt: string;
   };
+  // Server-projected settlement evidence. It is never persisted in items_json.
+  workedToday?: boolean;
 };
 
 export type DayPlan = {
@@ -138,6 +142,8 @@ export type DaySnapshotItem = {
   owner: DayPlanOwner;
   disposition: SettlementDisposition;
   deferUntil?: string;
+  progressNote?: string;
+  nextStep?: string;
 };
 
 export type DaySnapshotBody = {
@@ -256,6 +262,8 @@ export type DayPlanMutationInput = {
   snoozedUntil?: string;
   disposition?: SettlementDisposition;
   deferUntil?: string;
+  progressNote?: string;
+  nextStep?: string;
   completedHumanTaskIds?: string[];
   nextDayNote?: string;
 };
@@ -444,6 +452,8 @@ export type DayPlanExecutionRun = {
     whyToday: string;
     project?: string;
     dueAt?: string;
+    progressNote?: string;
+    nextStep?: string;
   };
   workspaceId?: string;
   workspacePath?: string;

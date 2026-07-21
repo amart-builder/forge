@@ -1151,7 +1151,7 @@ export async function collectMorningBriefSources(
   let settlementContent: string | undefined;
   let settlementAsOf: string | undefined;
   try {
-    const snapshots = options.store.listRecentSnapshots(3);
+    const snapshots = options.store.listRecentSnapshots(7);
     if (snapshots.length > 0) {
       const summary = buildSettlementSummary(snapshots);
       settlementContent = summary.content;

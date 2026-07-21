@@ -11,7 +11,8 @@ import type {
 // v6: computed open commitments, clarification needs, and deterministic gap
 // detectors are available to the chief-of-staff writer.
 // v7: day-dump commitment resolutions and updates are visible to the writer.
-export const MORNING_BRIEF_PROMPT_VERSION = 7;
+// v8: settlement progress, explicit next steps, and carried streaks guide continuity.
+export const MORNING_BRIEF_PROMPT_VERSION = 8;
 export const MORNING_BRIEF_SCHEMA_VERSION = 2;
 
 export type MorningBriefStatus = "queued" | "running" | "succeeded" | "failed";

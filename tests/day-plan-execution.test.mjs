@@ -104,6 +104,67 @@ test('Start My Day queues Together plan review without a workspace', (t) => {
   }).replayed, true);
 });
 
+test('enqueued runs use the latest progress snapshot for the task within 14 days', (t) => {
+  const { store, plan: original, file } = setup(t);
+  const db = new Database(file);
+  for (const [date, note, nextStep] of [
+    ['2026-07-08', 'Outlined the first section.', 'Draft the examples.'],
+    ['2026-07-09', 'Drafted the full argument.', 'Review the pricing section.'],
+  ]) {
+    db.prepare(
+      `INSERT INTO day_plans
+        (id, local_date, timezone, open_slot, plan_state, arrival_state, settlement_state,
+         version, items_json, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, 'settled', 'confirmed', 'settled', 1, '[]', ?, ?)`,
+    ).run(`plan-${date}`, date, 'America/Los_Angeles', `${date}T16:00:00.000Z`, `${date}T23:00:00.000Z`);
+    db.prepare(
+      `INSERT INTO day_snapshots
+        (id, day_plan_id, local_date, timezone, version, body_json, created_at)
+       VALUES (?, ?, ?, ?, 1, ?, ?)`,
+    ).run(
+      `snapshot-${date}`,
+      `plan-${date}`,
+      date,
+      'America/Los_Angeles',
+      JSON.stringify({
+        completedHumanTaskIds: [],
+        returnedAgentWork: [],
+        unresolvedItems: [{
+          dayPlanItemId: `item-${date}`,
+          taskId: 'task-a',
+          title: 'Task a',
+          owner: 'together',
+          disposition: 'progress',
+          progressNote: note,
+          nextStep,
+        }],
+        humanDecisionEventIds: [],
+        overnightQueue: [],
+      }),
+      `${date}T23:00:00.000Z`,
+    );
+  }
+  db.close();
+
+  const plan = mutate(store, original, 'item_owner', {
+    itemId: original.items[0].id,
+    owner: 'together',
+  });
+  const started = store.mutateDayPlan({
+    planId: plan.id,
+    expectedVersion: plan.version,
+    mutationId: 'start-day:progress-context',
+    action: 'start_day',
+  });
+  const run = started.executionRuns.find((candidate) => candidate.taskId === 'task-a');
+  assert.equal(run.promptSnapshot.progressNote, 'Drafted the full argument.');
+  assert.equal(run.promptSnapshot.nextStep, 'Review the pricing section.');
+  assert.equal(
+    store.getExecutionRun(run.id).promptSnapshot.progressNote,
+    'Drafted the full argument.',
+  );
+});
+
 test('plan-review runs persist the resolved project directory for execution and resume', (t) => {
   const file = path.join(os.tmpdir(), `forge-execution-project-${process.pid}-${Date.now()}.db`);
   const projectDir = '/private/tmp/atlas-projects/supernova-engine';

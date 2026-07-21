@@ -205,11 +205,12 @@ export function selectRecommendedHumanFocus<T extends DayPlanItem>(
   return items.find((item) => item.owner !== 'claude') ?? preferred ?? items[0];
 }
 
-export function firstCarriedItem<T extends DayPlanItem>(
+export function firstContinuingItem<T extends DayPlanItem>(
   items: readonly T[],
   decisions: Readonly<Record<string, SettlementDecision | undefined>>,
 ): T | undefined {
-  return items.find((item) => decisions[item.id] === 'carry');
+  return items.find((item) => decisions[item.id] === 'progress') ??
+    items.find((item) => decisions[item.id] === 'carry');
 }
 
 export function allSettlementDecisionsMade<T extends DayPlanItem>(
@@ -217,6 +218,14 @@ export function allSettlementDecisionsMade<T extends DayPlanItem>(
   decisions: Readonly<Record<string, SettlementDecision | undefined>>,
 ): boolean {
   return items.every((item) => Boolean(decisions[item.id]));
+}
+
+export function shouldAutoPostProgress(input: {
+  workedToday: boolean;
+  hasDecision: boolean;
+  attempts: number;
+}): boolean {
+  return input.workedToday && !input.hasDecision && input.attempts < 2;
 }
 
 export function combineSurfaceErrors(...errors: Array<string | undefined>): string | undefined {

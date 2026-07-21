@@ -1,11 +1,12 @@
 'use client';
 
-import { useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DayPlan, DayPlanItem } from '@/lib/day-plan/types';
 import {
   allSettlementDecisionsMade,
   ownerDescription,
   ownerLabel,
+  shouldAutoPostProgress,
   staleSettlementNotice,
   type SettlementDecision,
 } from '@/lib/day-plan/presentation';
@@ -15,10 +16,13 @@ const DECISIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { value: 'carry', label: 'Carry', description: 'Keep this commitment for tomorrow.' },
+  { value: 'progress', label: 'Progress', description: 'You moved this forward today. It stays priority and continues tomorrow.' },
+  { value: 'carry', label: 'Carry', description: 'Did not get to it. Keep the commitment for tomorrow.' },
   { value: 'defer', label: 'Defer', description: 'Move it to Not Started and bring it back in seven days.' },
   { value: 'drop', label: 'Drop', description: 'Archive the underlying task without deleting its history.' },
 ];
+
+type ProgressFields = { progressNote?: string; nextStep?: string };
 
 export type SettlementCompletedItem = {
   id: string;
@@ -46,7 +50,11 @@ interface DaySettlementProps {
   // The hoisted DayRitualLayer owns the dialog chrome; these ids label it.
   titleId: string;
   descriptionId: string;
-  onDecision: (itemId: string, decision: SettlementDecision) => void | Promise<void>;
+  onDecision: (
+    itemId: string,
+    decision: SettlementDecision,
+    progress?: ProgressFields,
+  ) => void | Promise<void>;
   onCancel: () => void;
   onNoteChange: (note: string) => void;
   onCloseDay: () => void | Promise<void>;
@@ -71,6 +79,14 @@ export default function DaySettlement({
   onCloseDay,
 }: DaySettlementProps) {
   const noteRef = useRef<HTMLTextAreaElement>(null);
+  const autoAttemptsRef = useRef(new Map<string, number>());
+  const autoPostedPlanIdRef = useRef(plan.id);
+  const [progressDrafts, setProgressDrafts] = useState<Record<string, ProgressFields>>(() =>
+    Object.fromEntries(unresolved.map(({ item }) => [item.id, {
+      progressNote: item.settlementDecision?.progressNote ?? '',
+      nextStep: item.settlementDecision?.nextStep ?? '',
+    }])),
+  );
   useLayoutEffect(() => {
     const textarea = noteRef.current;
     if (!textarea) return;
@@ -82,6 +98,44 @@ export default function DaySettlement({
     decisions,
   );
   const anyDecisionSaving = savingItemIds.size > 0;
+  useEffect(() => {
+    setProgressDrafts((current) => {
+      const next = { ...current };
+      for (const { item } of unresolved) {
+        if (next[item.id]) continue;
+        next[item.id] = {
+          progressNote: item.settlementDecision?.progressNote ?? '',
+          nextStep: item.settlementDecision?.nextStep ?? '',
+        };
+      }
+      return next;
+    });
+  }, [unresolved]);
+  useEffect(() => {
+    if (autoPostedPlanIdRef.current !== plan.id) {
+      autoAttemptsRef.current.clear();
+      autoPostedPlanIdRef.current = plan.id;
+    }
+    if (closing || anyDecisionSaving) return;
+    const candidate = unresolved.find(({ item }) => shouldAutoPostProgress({
+      workedToday: item.workedToday === true,
+      hasDecision: Boolean(decisions[item.id]),
+      attempts: autoAttemptsRef.current.get(item.id) ?? 0,
+    }));
+    if (!candidate) return;
+    const itemId = candidate.item.id;
+    autoAttemptsRef.current.set(itemId, (autoAttemptsRef.current.get(itemId) ?? 0) + 1);
+    void Promise.resolve(onDecision(itemId, 'progress')).catch(() => undefined);
+  }, [anyDecisionSaving, closing, decisions, onDecision, plan.id, unresolved]);
+
+  const chooseDecision = (itemId: string, decision: SettlementDecision) => {
+    const progress = decision === 'progress' ? progressDrafts[itemId] : undefined;
+    return onDecision(itemId, decision, progress);
+  };
+  const saveProgress = (itemId: string) => {
+    if (decisions[itemId] !== 'progress') return;
+    return onDecision(itemId, 'progress', progressDrafts[itemId]);
+  };
   const planDateLabel = new Intl.DateTimeFormat('en-US', {
     month: 'long',
     day: 'numeric',
@@ -161,10 +215,13 @@ export default function DaySettlement({
                           {view.item.owner === 'claude' && (
                             <p className="mt-2 text-xs text-muted-foreground">{ownerDescription('claude')}</p>
                           )}
+                          {view.item.workedToday === true && (
+                            <p className="mt-2 text-xs text-muted-foreground">Claude worked on this today.</p>
+                          )}
 
                           <fieldset className="mt-4" disabled={anyDecisionSaving || closing}>
                             <legend className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">What happens next?</legend>
-                            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                            <div className="mt-2 grid gap-2 sm:grid-cols-2">
                               {DECISIONS.map((decision) => (
                                 <label
                                   key={decision.value}
@@ -180,7 +237,7 @@ export default function DaySettlement({
                                     value={decision.value}
                                     checked={decisions[view.item.id] === decision.value}
                                     disabled={decision.value === 'defer' && !canDefer}
-                                    onChange={() => void onDecision(view.item.id, decision.value)}
+                                    onChange={() => void chooseDecision(view.item.id, decision.value)}
                                     className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent-blue)]"
                                   />
                                   <span>
@@ -194,6 +251,42 @@ export default function DaySettlement({
                                 </label>
                               ))}
                             </div>
+                            {decisions[view.item.id] === 'progress' && (
+                              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                <input
+                                  type="text"
+                                  value={progressDrafts[view.item.id]?.progressNote ?? ''}
+                                  maxLength={500}
+                                  aria-label={`Progress note for ${view.title}`}
+                                  placeholder="What moved today?"
+                                  onChange={(event) => setProgressDrafts((current) => ({
+                                    ...current,
+                                    [view.item.id]: {
+                                      ...current[view.item.id],
+                                      progressNote: event.target.value,
+                                    },
+                                  }))}
+                                  onBlur={() => void saveProgress(view.item.id)}
+                                  className="min-h-11 rounded-xl border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-accent-blue/40"
+                                />
+                                <input
+                                  type="text"
+                                  value={progressDrafts[view.item.id]?.nextStep ?? ''}
+                                  maxLength={200}
+                                  aria-label={`Next step for ${view.title}`}
+                                  placeholder="First thing to do next"
+                                  onChange={(event) => setProgressDrafts((current) => ({
+                                    ...current,
+                                    [view.item.id]: {
+                                      ...current[view.item.id],
+                                      nextStep: event.target.value,
+                                    },
+                                  }))}
+                                  onBlur={() => void saveProgress(view.item.id)}
+                                  className="min-h-11 rounded-xl border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-accent-blue/40"
+                                />
+                              </div>
+                            )}
                           </fieldset>
                         </article>
                       </li>
@@ -249,7 +342,7 @@ export default function DaySettlement({
               Not yet
             </button>
             {!allDecided && unresolved.length > 0 && (
-              <p role="status" className="text-xs text-muted-foreground">Choose Carry, Defer, or Drop for each open item.</p>
+              <p role="status" className="text-xs text-muted-foreground">Choose Progress, Carry, Defer, or Drop for each open item.</p>
             )}
             <button
               type="button"

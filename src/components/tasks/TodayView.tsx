@@ -31,7 +31,7 @@ import { realTimeLabel } from '@/lib/quiet-current/presentation';
 import { buildDayPlanCandidates } from '@/lib/day-plan/candidates';
 import {
   combineSurfaceErrors,
-  firstCarriedItem,
+  firstContinuingItem,
   helpfulProjectLabel,
   reorderDayPlanItems,
   selectBoardExecutionPresentation,
@@ -1063,7 +1063,7 @@ function TodayExperience({
       !notStartedColumn &&
       currentPlan.items.some((item) => item.settlementDecision?.disposition === 'defer')
     ) {
-      setSurfaceError('Forge needs a Not Started or To Do list before it can defer work. Choose Carry or Drop instead.');
+      setSurfaceError('Forge needs a Not Started or To Do list before it can defer work. Choose Progress, Carry, or Drop instead.');
       return;
     }
     const completedHumanTaskIds = currentPlan.items
@@ -1732,11 +1732,15 @@ function TodayExperience({
     const snapshot = dayRitual.latestSnapshot;
     if (!snapshot) return undefined;
     const completed = snapshot.body.completedHumanTaskIds.length;
+    const progressed = snapshot.body.unresolvedItems.filter(
+      (item) => item.disposition === 'progress',
+    ).length;
     const carried = snapshot.body.unresolvedItems.filter(
       (item) => item.disposition === 'carry',
     ).length;
     const parts = [
       completed > 0 ? `${completed} essential ${completed === 1 ? 'outcome was' : 'outcomes were'} completed` : undefined,
+      progressed > 0 ? `${progressed} ${progressed === 1 ? 'commitment moved' : 'commitments moved'} forward` : undefined,
       carried > 0 ? `${carried} ${carried === 1 ? 'commitment carries' : 'commitments carry'} forward` : undefined,
     ].filter(Boolean);
     return parts.length > 0 ? `${parts.join('. ')}.` : undefined;
@@ -1764,7 +1768,7 @@ function TodayExperience({
   const settlementDecisions = Object.fromEntries(
     orderedPlanItems.map((item) => [item.id, item.settlementDecision?.disposition]),
   );
-  const proposedTomorrow = firstCarriedItem(orderedPlanItems, settlementDecisions);
+  const proposedTomorrow = firstContinuingItem(orderedPlanItems, settlementDecisions);
   const visibleSurfaceError = combineSurfaceErrors(
     dayRitual.ritualOpen ? undefined : dayRitual.error,
     dayRitual.ritualOpen ? undefined : dayRitual.executionError,
@@ -2479,12 +2483,12 @@ function TodayExperience({
                 canDefer={Boolean(notStartedColumn)}
                 titleId={RITUAL_TITLE_IDS.settlement}
                 descriptionId={RITUAL_DESCRIPTION_IDS.settlement}
-                onDecision={(itemId, disposition) => {
+                onDecision={(itemId, disposition, progress) => {
                   if (disposition === 'defer' && !notStartedColumn) {
                     setSurfaceError('Forge needs a Not Started or To Do list before it can defer work.');
                     return;
                   }
-                  return dayRitual.decideSettlement(itemId, disposition);
+                  return dayRitual.decideSettlement(itemId, disposition, progress);
                 }}
                 onCancel={dayRitual.cancelSettlement}
                 onNoteChange={setSettlementNote}

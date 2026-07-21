@@ -453,6 +453,119 @@ test('settlement saves decisions immediately and writes one factual snapshot', (
   assert.equal(replay.snapshot.id, committed.snapshot.id);
 });
 
+test('progress stores bounded continuity details, seeds before carry, and writes no reconciliation', (t) => {
+  const { store } = isolatedStore(t);
+  let plan = ensure(store).plan;
+  plan = mutate(store, plan, 'arrival_open').plan;
+  plan = mutate(store, plan, 'start_day').plan;
+  plan = mutate(store, plan, 'settlement_start').plan;
+  plan = mutate(store, plan, 'settlement_decide', {
+    itemId: plan.items[0].id,
+    disposition: 'carry',
+  }).plan;
+  plan = mutate(store, plan, 'settlement_decide', {
+    itemId: plan.items[1].id,
+    disposition: 'progress',
+    progressNote: '  Finished the first draft.  ',
+    nextStep: '  Review the pricing section.  ',
+  }).plan;
+
+  assert.deepEqual(
+    {
+      disposition: plan.items[1].settlementDecision.disposition,
+      progressNote: plan.items[1].settlementDecision.progressNote,
+      nextStep: plan.items[1].settlementDecision.nextStep,
+    },
+    {
+      disposition: 'progress',
+      progressNote: 'Finished the first draft.',
+      nextStep: 'Review the pricing section.',
+    },
+  );
+  const committed = mutate(store, plan, 'settlement_commit', {
+    completedHumanTaskIds: [],
+  });
+  const progress = committed.snapshot.body.unresolvedItems.find(
+    (item) => item.disposition === 'progress',
+  );
+  assert.equal(progress.progressNote, 'Finished the first draft.');
+  assert.equal(progress.nextStep, 'Review the pricing section.');
+  assert.equal(committed.snapshot.body.nextDayRecommendationSeed.taskId, 'task-b');
+  assert.deepEqual(committed.pendingReconciliations, []);
+});
+
+test('settlement rejects progress details on carry and preserves the exact completion gate copy', (t) => {
+  const { store } = isolatedStore(t);
+  let plan = ensure(store).plan;
+  plan = mutate(store, plan, 'arrival_open').plan;
+  plan = mutate(store, plan, 'start_day').plan;
+  plan = mutate(store, plan, 'settlement_start').plan;
+
+  assert.throws(
+    () => mutate(store, plan, 'settlement_decide', {
+      itemId: plan.items[0].id,
+      disposition: 'carry',
+      progressNote: 'This does not belong on Carry.',
+    }),
+    (error) =>
+      error instanceof DayPlanInvalidTransition &&
+      error.message === 'Progress details are only valid for a Progress decision.',
+  );
+  assert.throws(
+    () => mutate(store, plan, 'settlement_commit', { completedHumanTaskIds: [] }),
+    (error) =>
+      error instanceof DayPlanInvalidTransition &&
+      error.message === 'Every unfinished accepted item needs Progress, Carry, Defer, or Drop.',
+  );
+});
+
+test('settlement evidence marks only same-local-date execution rows as worked today', (t) => {
+  const { store } = isolatedStore(t);
+  let plan = ensure(store).plan;
+  plan = mutate(store, plan, 'arrival_open').plan;
+  plan = mutate(store, plan, 'item_owner', {
+    itemId: plan.items[0].id,
+    owner: 'claude',
+  }).plan;
+  plan = mutate(store, plan, 'start_day').plan;
+  plan = mutate(store, plan, 'settlement_start').plan;
+
+  const settlement = store.withSettlementEvidence(plan);
+  assert.equal(settlement.items[0].workedToday, true);
+  assert.equal(settlement.items[1].workedToday, false);
+  assert.equal(store.getPlan(plan.id).items[0].workedToday, undefined);
+});
+
+test('old snapshot bodies without progress fields still parse', (t) => {
+  const { file, store } = isolatedStore(t);
+  const plan = ensure(store).plan;
+  const body = {
+    completedHumanTaskIds: [],
+    returnedAgentWork: [],
+    unresolvedItems: [{
+      dayPlanItemId: plan.items[0].id,
+      taskId: plan.items[0].taskId,
+      title: plan.items[0].title,
+      owner: 'me',
+      disposition: 'carry',
+    }],
+    humanDecisionEventIds: [],
+    overnightQueue: [],
+  };
+  const db = new Database(file);
+  db.prepare(
+    `INSERT INTO day_snapshots
+      (id, day_plan_id, local_date, timezone, version, body_json, created_at)
+     VALUES (?, ?, ?, ?, 1, ?, ?)`,
+  ).run('legacy-snapshot', plan.id, plan.localDate, plan.timezone, JSON.stringify(body), plan.createdAt);
+  db.close();
+
+  const [snapshot] = store.listRecentSnapshots(1);
+  assert.equal(snapshot.body.unresolvedItems[0].disposition, 'carry');
+  assert.equal(snapshot.body.unresolvedItems[0].progressNote, undefined);
+  assert.equal(snapshot.body.unresolvedItems[0].nextStep, undefined);
+});
+
 test('settlement start reconciles canonical completion evidence and repeated refreshes are idempotent', (t) => {
   const { store } = isolatedStore(t);
   let plan = ensure(store).plan;

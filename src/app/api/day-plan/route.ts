@@ -80,7 +80,7 @@ const ACTIONS = new Set<DayPlanMutationAction>([
   "settlement_commit",
 ]);
 const OWNERS = new Set<DayPlanOwner>(["me", "claude", "together"]);
-const DISPOSITIONS = new Set<SettlementDisposition>(["carry", "defer", "drop"]);
+const DISPOSITIONS = new Set<SettlementDisposition>(["progress", "carry", "defer", "drop"]);
 const PRIORITIES = new Set(["low", "medium", "high"]);
 const SOURCE_TYPES = new Set(["task", "suggestion", "snapshot", "email", "crm", "decision"]);
 const SUPPORTS = new Set([
@@ -457,6 +457,14 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
   if (disposition && !DISPOSITIONS.has(disposition as SettlementDisposition)) {
     throw new Error("Unknown settlement disposition.");
   }
+  const progressNote = stringValue(body.progressNote, "progressNote", { max: 500 });
+  const nextStep = stringValue(body.nextStep, "nextStep", { max: 200 });
+  if (
+    (progressNote || nextStep) &&
+    (action !== "settlement_decide" || disposition !== "progress")
+  ) {
+    throw new Error("Progress details must belong to a Progress settlement decision.");
+  }
   const position = body.position;
   if (position !== undefined && !Number.isInteger(position)) {
     throw new Error("position must be an integer.");
@@ -480,6 +488,8 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
       snoozedUntil: isoValue(body.snoozedUntil, "snoozedUntil"),
       disposition: disposition as SettlementDisposition | undefined,
       deferUntil: isoValue(body.deferUntil, "deferUntil"),
+      progressNote,
+      nextStep,
       completedHumanTaskIds: stringArray(
         body.completedHumanTaskIds,
         "completedHumanTaskIds",
@@ -488,6 +498,14 @@ export function parseDayPlanPostBody(value: unknown): ParsedPost {
       nextDayNote: nextDayNoteValue(body.nextDayNote),
     },
   };
+}
+
+function publicPlan(
+  store: DayPlanStore,
+  plan: DayPlan,
+  accessMode: DayPlanAccessMode | undefined,
+): DayPlan {
+  return publicDayPlan(store.withSettlementEvidence(plan), accessMode);
 }
 
 // The consumed Morning Brief, projected for the read model. Content is only
@@ -621,7 +639,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       ...readModel,
       currentPlan: readModel.currentPlan
-        ? publicDayPlan(readModel.currentPlan, accessMode)
+        ? publicPlan(store, readModel.currentPlan, accessMode)
         : undefined,
       ...(morningBrief ? { morningBrief } : {}),
       ...(briefGeneration ? { briefGeneration } : {}),
@@ -678,7 +696,7 @@ export async function POST(request: NextRequest) {
       // brief attach. Idempotent on the mutation id; never bumps the version.
       const marked = store.markArrivalInteraction(parsed.planId, parsed.mutationId);
       return NextResponse.json({
-        plan: publicDayPlan(marked.plan, currentDayPlanAccessMode()),
+        plan: publicPlan(store, marked.plan, currentDayPlanAccessMode()),
         replayed: marked.replayed,
       });
     }
@@ -743,7 +761,7 @@ export async function POST(request: NextRequest) {
     const publicResult = "plan" in result
       ? {
           ...result,
-          plan: publicDayPlan(result.plan, accessMode),
+          plan: publicPlan(store, result.plan, accessMode),
           executionRuns: result.executionRuns?.map((run) =>
             publicExecutionRun(run, accessMode),
           ),
@@ -767,7 +785,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error: "version_conflict",
-          currentPlan: publicDayPlan(error.currentPlan, currentDayPlanAccessMode()),
+          currentPlan: publicPlan(
+            getDayPlanStore(),
+            error.currentPlan,
+            currentDayPlanAccessMode(),
+          ),
         },
         { status: 409 },
       );
@@ -778,7 +800,10 @@ export async function POST(request: NextRequest) {
     if (error instanceof DayPlanInvalidTransition || error instanceof SyntaxError) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
-    if (error instanceof Error && /required|invalid|unknown|must|supports|candidate/i.test(error.message)) {
+    if (
+      error instanceof Error &&
+      /required|invalid|unknown|must|supports|candidate|too long/i.test(error.message)
+    ) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     return NextResponse.json(

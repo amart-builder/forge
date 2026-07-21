@@ -4,7 +4,7 @@ import {
   allSettlementDecisionsMade,
   claudeResumeUrl,
   combineSurfaceErrors,
-  firstCarriedItem,
+  firstContinuingItem,
   executionReadinessMessage,
   executionRestartLabel,
   executionRunStatusLabel,
@@ -20,6 +20,7 @@ import {
   selectEssentialItems,
   selectRecommendedHumanFocus,
   shouldShowNeedsSetupToStart,
+  shouldAutoPostProgress,
   shouldAttemptLateBriefAttach,
   shortArrivalSummary,
   shouldPollBriefGeneration,
@@ -98,12 +99,21 @@ test('an all-Claude plan still yields one deterministic handoff-preparation focu
   assert.equal(ownerDescription('together'), 'You and Claude will work through this together.');
 });
 
-test('settlement derives tomorrow from the first carried item', () => {
+test('settlement derives tomorrow from progress before carry', () => {
   const items = [item('a'), item('b'), item('c')];
-  const decisions = { a: 'defer', b: 'carry', c: 'drop' };
-  assert.equal(firstCarriedItem(items, decisions)?.id, 'b');
+  const decisions = { a: 'carry', b: 'progress', c: 'drop' };
+  assert.equal(firstContinuingItem(items, decisions)?.id, 'b');
+  assert.equal(firstContinuingItem(items, { a: 'defer', b: 'carry', c: 'drop' })?.id, 'b');
   assert.equal(allSettlementDecisionsMade(items, decisions), true);
   assert.equal(allSettlementDecisionsMade(items, { a: 'carry' }), false);
+});
+
+test('automatic Progress preselection stops after two attempts per item', () => {
+  assert.equal(shouldAutoPostProgress({ workedToday: true, hasDecision: false, attempts: 0 }), true);
+  assert.equal(shouldAutoPostProgress({ workedToday: true, hasDecision: false, attempts: 1 }), true);
+  assert.equal(shouldAutoPostProgress({ workedToday: true, hasDecision: false, attempts: 2 }), false);
+  assert.equal(shouldAutoPostProgress({ workedToday: true, hasDecision: true, attempts: 0 }), false);
+  assert.equal(shouldAutoPostProgress({ workedToday: false, hasDecision: false, attempts: 0 }), false);
 });
 
 test('arrival summaries stay genuinely short while preserving the stored description elsewhere', () => {

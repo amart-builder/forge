@@ -735,26 +735,69 @@ export type SettlementSummary = {
 export function buildSettlementSummary(
   snapshots: readonly DaySnapshot[],
 ): SettlementSummary {
+  const newestDate = snapshots[0]
+    ? new Date(`${snapshots[0].localDate}T12:00:00.000Z`)
+    : undefined;
+  const cutoff = newestDate && !Number.isNaN(newestDate.getTime())
+    ? new Date(newestDate.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    : undefined;
+  const recentSnapshots = cutoff
+    ? snapshots.filter((snapshot) => snapshot.localDate >= cutoff)
+    : snapshots;
+  const carryStreak = (snapshotIndex: number, taskId: string): number => {
+    let count = 0;
+    const expectedDate = new Date(
+      `${recentSnapshots[snapshotIndex].localDate}T12:00:00.000Z`,
+    );
+    for (let index = snapshotIndex; index < recentSnapshots.length; index += 1) {
+      if (recentSnapshots[index].localDate !== expectedDate.toISOString().slice(0, 10)) break;
+      const match = recentSnapshots[index].body.unresolvedItems.find(
+        (item) => item.taskId === taskId,
+      );
+      if (match?.disposition !== "carry") break;
+      count += 1;
+      expectedDate.setUTCDate(expectedDate.getUTCDate() - 1);
+    }
+    return count;
+  };
   return {
     content:
-      snapshots.length > 0
-        ? snapshots
-            .map(
-              (snapshot) =>
-                `- ${snapshot.localDate}: completed=${snapshot.body.completedHumanTaskIds.length}` +
-                (snapshot.body.unresolvedItems.length > 0
-                  ? ` unresolved=${snapshot.body.unresolvedItems
-                      .map((item) => `"${compact(item.title, 100)}"(${item.disposition})`)
-                      .join(", ")}`
-                  : " unresolved=none") +
+      recentSnapshots.length > 0
+        ? recentSnapshots
+            .map((snapshot, snapshotIndex) => {
+              const progress = snapshot.body.unresolvedItems
+                .filter((item) => item.disposition === "progress")
+                .map((item) =>
+                  `title=${JSON.stringify(compact(item.title, 100))}` +
+                  (item.progressNote
+                    ? ` progress_note=${JSON.stringify(compact(item.progressNote, 500))}`
+                    : "") +
+                  (item.nextStep
+                    ? ` next_step=${JSON.stringify(compact(item.nextStep, 200))}`
+                    : ""),
+                );
+              const carry = snapshot.body.unresolvedItems
+                .filter((item) => item.disposition === "carry")
+                .map((item) =>
+                  `title=${JSON.stringify(compact(item.title, 100))}` +
+                  ` carried_days_running=${carryStreak(snapshotIndex, item.taskId)}`,
+                );
+              const other = snapshot.body.unresolvedItems
+                .filter((item) => item.disposition === "defer" || item.disposition === "drop")
+                .map((item) => `${JSON.stringify(compact(item.title, 100))}(${item.disposition})`);
+              return `- ${snapshot.localDate}: completed=${snapshot.body.completedHumanTaskIds.length}` +
+                (progress.length > 0 ? ` continuing_work=[${progress.join("; ")}]` : "") +
+                (carry.length > 0 ? ` carried_not_moved=[${carry.join("; ")}]` : "") +
+                (other.length > 0 ? ` deferred_or_dropped=[${other.join(", ")}]` : "") +
+                (snapshot.body.unresolvedItems.length === 0 ? " unresolved=none" : "") +
                 (snapshot.body.nextDayRecommendationSeed
-                  ? ` carry_first="${compact(snapshot.body.nextDayRecommendationSeed.title, 100)}"`
-                  : ""),
-            )
+                  ? ` continue_first=${JSON.stringify(compact(snapshot.body.nextDayRecommendationSeed.title, 100))}`
+                  : "");
+            })
             .join("\n")
         : "No settlement snapshots exist yet.",
-    asOf: snapshots[0]?.createdAt,
-    snapshotIds: snapshots.map((snapshot) => snapshot.id),
+    asOf: recentSnapshots[0]?.createdAt,
+    snapshotIds: recentSnapshots.map((snapshot) => snapshot.id),
   };
 }
 
@@ -776,7 +819,7 @@ export function writeSettlementRelay(options: {
   log?: (message: string) => void;
 }): boolean {
   try {
-    const snapshots = options.store.listRecentSnapshots(3);
+    const snapshots = options.store.listRecentSnapshots(7);
     if (snapshots.length === 0) return false;
     const summary = buildSettlementSummary(snapshots);
     const file: SettlementRelayFile = {

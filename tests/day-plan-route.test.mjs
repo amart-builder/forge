@@ -16,6 +16,7 @@ import {
   parseDayPlanPostBody,
 } from '../src/app/api/day-plan/route.ts';
 import { hasDayPlanRouteAccess } from '../src/lib/request-security.ts';
+import { getQuietCurrentCsrfToken } from '../src/lib/quiet-current/store.ts';
 
 function candidate() {
   return buildDayPlanCandidates({
@@ -177,6 +178,97 @@ test('settlement truncates oversized day dumps without blocking the mutation and
   );
 });
 
+test('settlement decision parses trimmed progress fields and enforces their caps', () => {
+  const parsed = parseDayPlanPostBody({
+    action: 'settlement_decide',
+    planId: 'plan-a',
+    mutationId: 'settlement-progress:1',
+    expectedVersion: 3,
+    itemId: 'item-a',
+    disposition: 'progress',
+    progressNote: '  Drafted the core argument.  ',
+    nextStep: '  Tighten the opening.  ',
+  });
+  assert.equal(parsed.input.disposition, 'progress');
+  assert.equal(parsed.input.progressNote, 'Drafted the core argument.');
+  assert.equal(parsed.input.nextStep, 'Tighten the opening.');
+  assert.throws(
+    () => parseDayPlanPostBody({
+      action: 'settlement_decide',
+      planId: 'plan-a',
+      mutationId: 'settlement-progress:2',
+      expectedVersion: 3,
+      itemId: 'item-a',
+      disposition: 'progress',
+      progressNote: 'x'.repeat(501),
+    }),
+    /progressNote is too long/,
+  );
+  assert.throws(
+    () => parseDayPlanPostBody({
+      action: 'settlement_decide',
+      planId: 'plan-a',
+      mutationId: 'settlement-progress:3',
+      expectedVersion: 3,
+      itemId: 'item-a',
+      disposition: 'progress',
+      nextStep: 'x'.repeat(201),
+    }),
+    /nextStep is too long/,
+  );
+  assert.throws(
+    () => parseDayPlanPostBody({
+      action: 'settlement_decide',
+      planId: 'plan-a',
+      mutationId: 'settlement-progress:4',
+      expectedVersion: 3,
+      itemId: 'item-a',
+      disposition: 'carry',
+      progressNote: 'This field does not belong on Carry.',
+    }),
+    /must belong to a Progress settlement decision/,
+  );
+});
+
+test('POST returns 400 for invalid settlement progress fields', async () => {
+  const post = (body) => POST(new NextRequest('http://localhost:3200/api/day-plan', {
+    method: 'POST',
+    headers: {
+      host: 'localhost:3200',
+      origin: 'http://localhost:3200',
+      'content-type': 'application/json',
+      'x-forge-csrf': getQuietCurrentCsrfToken(),
+    },
+    body: JSON.stringify(body),
+  }));
+  const oversized = await post({
+    action: 'settlement_decide',
+    planId: 'plan-a',
+    mutationId: 'settlement-progress:oversized',
+    expectedVersion: 3,
+    itemId: 'item-a',
+    disposition: 'progress',
+    progressNote: 'x'.repeat(501),
+  });
+  assert.equal(oversized.status, 400);
+  assert.match((await oversized.json()).error, /progressNote is too long/);
+
+  const wrongDisposition = await post({
+    action: 'settlement_decide',
+    planId: 'plan-a',
+    mutationId: 'settlement-progress:wrong-disposition',
+    expectedVersion: 3,
+    itemId: 'item-a',
+    disposition: 'carry',
+    progressNote: 'This field does not belong on Carry.',
+  });
+  assert.equal(wrongDisposition.status, 400);
+  assert.match(
+    (await wrongDisposition.json()).error,
+    /Progress details must belong to a Progress settlement decision/,
+  );
+});
+
 test('parses a complete item_add mutation and requires its bounded payload', () => {
   const parsed = parseDayPlanPostBody({
     action: 'item_add',
@@ -325,7 +417,10 @@ test('GET exposes briefGeneration on loopback and strips it for a remote session
 test('settlement opens with last-known state on a REST hiccup, then reconciles on reopen', async (t) => {
   const dir = path.join(os.tmpdir(), `forge-route-settlement-${process.pid}-${Date.now()}`);
   mkdirSync(dir, { recursive: true });
-  const store = createDayPlanStore({ dbPath: path.join(dir, 'forge.db') });
+  const store = createDayPlanStore({
+    dbPath: path.join(dir, 'forge.db'),
+    now: () => new Date('2026-07-10T18:00:00.000Z'),
+  });
   const globalRef = globalThis;
   const previousStore = globalRef.__forgeDayPlanStore;
   const previousFetch = globalRef.fetch;
@@ -357,6 +452,14 @@ test('settlement opens with last-known state on a REST hiccup, then reconciles o
     mutationId: 'open:settlement',
     expectedVersion: plan.version,
     action: 'arrival_open',
+  }).plan;
+  plan = store.mutateDayPlan({
+    planId: plan.id,
+    mutationId: 'owner:settlement',
+    expectedVersion: plan.version,
+    action: 'item_owner',
+    itemId: plan.items[0].id,
+    owner: 'claude',
   }).plan;
   plan = store.mutateDayPlan({
     planId: plan.id,
@@ -409,6 +512,7 @@ test('settlement opens with last-known state on a REST hiccup, then reconciles o
   const body = await response.json();
   assert.equal(body.plan.state, 'settling');
   assert.equal(body.plan.items[0].decision, 'accepted');
+  assert.equal(body.plan.items[0].workedToday, true);
   assert.equal(internalCalls.some((url) => url.includes('/api/forge-rest/tasks')), true);
   assert.equal(internalCalls.some((url) => url.includes('/api/forge-rest/task_columns')), true);
 

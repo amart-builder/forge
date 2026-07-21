@@ -377,14 +377,59 @@ test('an empty local store with no relay records the settlement source as missin
   assert.equal(settlement.note, 'settlement_summary_unavailable');
 });
 
-test('buildSettlementSummary is the canonical bounded builder', () => {
+test('buildSettlementSummary labels progress, not-moved carry, and carry streaks', () => {
   const summary = buildSettlementSummary([
-    { id: 's1', localDate: '2026-07-13', createdAt: '2026-07-13T09:00:00.000Z', body: { completedHumanTaskIds: ['t1', 't2'], unresolvedItems: [{ title: 'Ship the thing', disposition: 'carry' }], nextDayRecommendationSeed: { title: 'Ship the thing' } } },
+    {
+      id: 's1', localDate: '2026-07-13', createdAt: '2026-07-13T09:00:00.000Z',
+      body: {
+        completedHumanTaskIds: ['t1', 't2'],
+        unresolvedItems: [
+          {
+            taskId: 'task-progress', title: 'Ship the thing', disposition: 'progress',
+            progressNote: 'Draft is complete.', nextStep: 'Review the pricing.',
+          },
+          { taskId: 'task-carry', title: 'Call the client', disposition: 'carry' },
+        ],
+        nextDayRecommendationSeed: { title: 'Ship the thing' },
+      },
+    },
+    {
+      id: 's0', localDate: '2026-07-12', createdAt: '2026-07-12T09:00:00.000Z',
+      body: {
+        completedHumanTaskIds: [],
+        unresolvedItems: [
+          { taskId: 'task-carry', title: 'Call the client', disposition: 'carry' },
+        ],
+      },
+    },
+    {
+      id: 's-gap', localDate: '2026-07-10', createdAt: '2026-07-10T09:00:00.000Z',
+      body: {
+        completedHumanTaskIds: [],
+        unresolvedItems: [
+          { taskId: 'task-carry', title: 'Call the client', disposition: 'carry' },
+        ],
+      },
+    },
+    {
+      id: 's-old', localDate: '2026-07-01', createdAt: '2026-07-01T09:00:00.000Z',
+      body: {
+        completedHumanTaskIds: [],
+        unresolvedItems: [
+          { taskId: 'task-carry', title: 'Call the client', disposition: 'carry' },
+        ],
+      },
+    },
   ]);
-  assert.match(summary.content, /2026-07-13: completed=2/);
-  assert.match(summary.content, /carry_first="Ship the thing"/);
+  const [latestLine, previousLine, gapLine] = summary.content.split('\n');
+  assert.match(latestLine, /2026-07-13: completed=2/);
+  assert.match(latestLine, /continuing_work=\[title="Ship the thing" progress_note="Draft is complete\." next_step="Review the pricing\."\]/);
+  assert.match(latestLine, /carried_not_moved=\[title="Call the client" carried_days_running=2\]/);
+  assert.match(previousLine, /2026-07-12:.*carried_days_running=1/);
+  assert.match(gapLine, /2026-07-10:.*carried_days_running=1/);
+  assert.match(summary.content, /continue_first="Ship the thing"/);
   assert.equal(summary.asOf, '2026-07-13T09:00:00.000Z');
-  assert.deepEqual(summary.snapshotIds, ['s1']);
+  assert.deepEqual(summary.snapshotIds, ['s1', 's0', 's-gap']);
   assert.equal(buildSettlementSummary([]).content, 'No settlement snapshots exist yet.');
 });
 

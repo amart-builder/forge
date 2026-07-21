@@ -673,6 +673,21 @@ function cleanOptional(value?: string): string | undefined {
   return trimmed || undefined;
 }
 
+function localDateInTimezone(value: string, timezone: string): string | undefined {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return values.year && values.month && values.day
+    ? `${values.year}-${values.month}-${values.day}`
+    : undefined;
+}
+
 export type DayPlanStore = ReturnType<typeof createDayPlanStore>;
 
 export function createDayPlanStore(options: {
@@ -1012,7 +1027,37 @@ export function createDayPlanStore(options: {
     return item.title.trim() ? projectDirectoryResolver(item.title) ?? undefined : undefined;
   }
 
-  function executionPromptSnapshot(item: DayPlanItem): DayPlanExecutionRun["promptSnapshot"] {
+  function latestProgressContext(
+    taskId: string,
+    targetLocalDate: string,
+  ): Pick<DayPlanExecutionRun["promptSnapshot"], "progressNote" | "nextStep"> {
+    const cutoffDate = new Date(`${targetLocalDate}T12:00:00.000Z`);
+    cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 14);
+    const cutoff = cutoffDate.toISOString().slice(0, 10);
+    const rows = db.prepare(
+      `SELECT * FROM day_snapshots
+       WHERE local_date >= ? AND local_date < ?
+       ORDER BY local_date DESC, created_at DESC`,
+    ).all(cutoff, targetLocalDate) as SnapshotRow[];
+    for (const row of rows) {
+      const item = snapshotFromRow(row).body.unresolvedItems.find(
+        (candidate) =>
+          candidate.taskId === taskId && candidate.disposition === "progress",
+      );
+      if (item) {
+        return {
+          progressNote: cleanOptional(item.progressNote),
+          nextStep: cleanOptional(item.nextStep),
+        };
+      }
+    }
+    return {};
+  }
+
+  function executionPromptSnapshot(
+    plan: DayPlan,
+    item: DayPlanItem,
+  ): DayPlanExecutionRun["promptSnapshot"] {
     return {
       title: item.title,
       outcome: item.outcome,
@@ -1020,6 +1065,7 @@ export function createDayPlanStore(options: {
       whyToday: item.whyToday,
       project: item.project,
       dueAt: item.dueAt,
+      ...latestProgressContext(item.taskId, plan.localDate),
     };
   }
 
@@ -1090,7 +1136,7 @@ export function createDayPlanStore(options: {
       claudeSessionId: randomUUID(),
       briefHash: input.config.briefHash,
       authorizationHash: input.config.authorizationHash,
-      promptSnapshot: executionPromptSnapshot(input.item),
+      promptSnapshot: executionPromptSnapshot(input.plan, input.item),
       workspaceId: input.config.workspaceId,
       workspacePath: input.config.mode === "plan_review"
         ? resolvePlanReviewWorkspacePath(input.item)
@@ -3002,6 +3048,19 @@ export function createDayPlanStore(options: {
           if (!input.disposition) {
             throw new DayPlanInvalidTransition("Settlement disposition is required.");
           }
+          const progressNote = cleanOptional(input.progressNote);
+          const nextStep = cleanOptional(input.nextStep);
+          if (progressNote && progressNote.length > 500) {
+            throw new DayPlanInvalidTransition("Progress note must be 500 characters or fewer.");
+          }
+          if (nextStep && nextStep.length > 200) {
+            throw new DayPlanInvalidTransition("Next step must be 200 characters or fewer.");
+          }
+          if (input.disposition !== "progress" && (progressNote || nextStep)) {
+            throw new DayPlanInvalidTransition(
+              "Progress details are only valid for a Progress decision.",
+            );
+          }
           let deferUntil: string | undefined;
           if (input.disposition === "defer") {
             const deferDate = input.deferUntil ? new Date(input.deferUntil) : undefined;
@@ -3013,6 +3072,7 @@ export function createDayPlanStore(options: {
           item.settlementDecision = {
             disposition: input.disposition,
             deferUntil,
+            ...(input.disposition === "progress" ? { progressNote, nextStep } : {}),
             decidedAt: changedAt,
           };
           break;
@@ -3037,7 +3097,7 @@ export function createDayPlanStore(options: {
           const unresolved = settlementItems.filter((item) => !completed.includes(item.taskId));
           if (unresolved.some((item) => !item.settlementDecision)) {
             throw new DayPlanInvalidTransition(
-              "Every unfinished accepted item needs Carry, Defer, or Drop.",
+              "Every unfinished accepted item needs Progress, Carry, Defer, or Drop.",
             );
           }
           const eventRows = db
@@ -3045,9 +3105,13 @@ export function createDayPlanStore(options: {
               "SELECT * FROM day_plan_events WHERE day_plan_id = ? ORDER BY created_at, id",
             )
             .all(plan.id) as EventRow[];
+          const firstProgress = unresolved
+            .filter((item) => item.settlementDecision?.disposition === "progress")
+            .sort((left, right) => left.position - right.position)[0];
           const firstCarry = unresolved
             .filter((item) => item.settlementDecision?.disposition === "carry")
             .sort((left, right) => left.position - right.position)[0];
+          const firstContinuing = firstProgress ?? firstCarry;
           const body: DaySnapshotBody = {
             completedHumanTaskIds: completed,
             returnedAgentWork: [],
@@ -3058,6 +3122,8 @@ export function createDayPlanStore(options: {
               owner: item.owner,
               disposition: item.settlementDecision!.disposition,
               deferUntil: item.settlementDecision!.deferUntil,
+              progressNote: item.settlementDecision!.progressNote,
+              nextStep: item.settlementDecision!.nextStep,
             })),
             humanDecisionEventIds: [
               ...eventRows
@@ -3075,11 +3141,11 @@ export function createDayPlanStore(options: {
               input.mutationId,
             ],
             overnightQueue: [],
-            nextDayRecommendationSeed: firstCarry
+            nextDayRecommendationSeed: firstContinuing
               ? {
-                  dayPlanItemId: firstCarry.id,
-                  taskId: firstCarry.taskId,
-                  title: firstCarry.title,
+                  dayPlanItemId: firstContinuing.id,
+                  taskId: firstContinuing.taskId,
+                  title: firstContinuing.title,
                 }
               : undefined,
           };
@@ -3268,6 +3334,28 @@ export function createDayPlanStore(options: {
     };
   }
 
+  function withSettlementEvidence(plan: DayPlan): DayPlan {
+    if (plan.state !== "settling" || plan.settlementState !== "in_progress") return plan;
+    const workedItemIds = new Set<string>();
+    const workedTaskIds = new Set<string>();
+    for (const run of listExecutionRuns(plan.id)) {
+      if (localDateInTimezone(run.createdAt, plan.timezone) !== plan.localDate) continue;
+      workedItemIds.add(run.itemId);
+      workedTaskIds.add(run.taskId);
+    }
+    return {
+      ...plan,
+      items: plan.items.map((item) =>
+        item.decision === "accepted"
+          ? {
+              ...item,
+              workedToday: workedItemIds.has(item.id) || workedTaskIds.has(item.taskId),
+            }
+          : item,
+      ),
+    };
+  }
+
   function listEvents(planId: string): DayPlanEvent[] {
     const rows = db
       .prepare("SELECT * FROM day_plan_events WHERE day_plan_id = ? ORDER BY created_at, id")
@@ -3307,6 +3395,7 @@ export function createDayPlanStore(options: {
     acknowledgeReconciliation,
     acknowledgeTaskMutation,
     getReadModel,
+    withSettlementEvidence,
     getPlan,
     getPlanForDate,
     getSnapshot,
