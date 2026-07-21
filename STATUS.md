@@ -16,10 +16,10 @@
 
 <!-- BEGIN active-session -->
 ## Active Session
-- **system:** none
-- **device:** —
-- **since:** —
-- **task:** —
+- **system:** cowork
+- **device:** Alexanders-MacBook-Pro-2
+- **since:** 2026-07-20T19:20:14-0700
+- **task:** in-progress settlement disposition
 <!-- END active-session -->
 
 ---
@@ -56,6 +56,15 @@ Standing rule (Alex, 2026-07-17): before saying "I can't see that" or asking him
 Explicitly rejected: always-running general agent, autonomous external sends, custom voice stack, constant day resequencing, implicit permission learning, pre-opened idle Claude sessions. Email triage stays OFF until Alex explicitly re-enables. 14-day pilot metrics gate each autonomy expansion (≥60-70% of overnight artifacts genuinely used, else Alex seeds the queue explicitly).
 
 ## Current State
+
+### 2026-07-20 Progress settlement disposition for multi-day work (shipped)
+
+- End-of-day settlement now offers four dispositions: Progress (new), Carry, Defer, Drop. Progress records optional `progressNote` (≤500 chars) and `nextStep` (≤200 chars), counts the commitment as kept, leaves the task/board untouched, and writes no reconciliation rows (like Carry). Snapshot `unresolvedItems` carry both fields; old snapshots without them still parse.
+- Tomorrow's recommendation seed prefers the first Progress item by position, then falls back to first Carry.
+- "Worked on today" evidence: same-local-date `day_plan_execution_runs` rows for the item/task (task `updated_at` was rejected — Forge bookkeeping writes it). Items with evidence get an editable automatic Progress pre-selection (capped at 2 attempts per settlement open) plus a "Claude worked on this today." hint.
+- Morning brief: continuing work (Progress, with note + next step) is separated from not-moved Carry items, with carried-streak counts over consecutive calendar days within the 7-day snapshot window; chief-of-staff prompt is now v8 with the momentum-vs-not-moved paragraph.
+- Execution seeds gain `YESTERDAY_PROGRESS`/`NEXT_STEP` lines (JSON-stringified data, only when present) from the latest Progress snapshot entry for that task within 14 days.
+- Verified: held-out acceptance script (store flow, seed ordering, reconciliation isolation, oversize rejection, seed lines), tsc, 180+ scoped tests, fresh-context Opus review (verdict SHIP; both findings — 500-vs-400 misclass on the progress-details guard, unbounded auto-post retry — fixed and re-verified).
 
 ### 2026-07-20 Task-first Claude seeds and plan-resume mode hint (working tree)
 
